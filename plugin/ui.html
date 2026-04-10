@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Figma Write Bridge</title>
+  <style>
+    body { font-family: sans-serif; font-size: 12px; padding: 12px; color: #333; }
+    #status { padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; }
+    .connected    { background: #d1fae5; color: #065f46; }
+    .disconnected { background: #fee2e2; color: #991b1b; }
+    .connecting   { background: #fef3c7; color: #92400e; }
+    p { margin: 4px 0; color: #666; }
+  </style>
+</head>
+<body>
+  <div id="status" class="connecting">Connecting to bridge…</div>
+  <p>Keep this plugin open while using Claude Code.</p>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    let ws = null;
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls;
+    }
+
+    function connect() {
+      setStatus('Connecting to bridge…', 'connecting');
+
+      ws = new WebSocket('ws://localhost:3055');
+
+      ws.onopen = () => {
+        setStatus('Connected ✓', 'connected');
+        parent.postMessage({ pluginMessage: { type: '__bridge_connected' } }, '*');
+      };
+
+      ws.onclose = () => {
+        setStatus('Bridge not running — start it with: node bridge.js', 'disconnected');
+        parent.postMessage({ pluginMessage: { type: '__bridge_disconnected' } }, '*');
+        setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        // onclose fires after onerror — no need to handle separately
+      };
+
+      // Receive instruction from bridge → forward to plugin worker
+      ws.onmessage = event => {
+        try {
+          const msg = JSON.parse(event.data);
+          parent.postMessage({ pluginMessage: msg }, '*');
+        } catch (e) {
+          console.error('Failed to parse bridge message', e);
+        }
+      };
+    }
+
+    // Receive result from plugin worker → send back to bridge
+    window.onmessage = event => {
+      const msg = event.data?.pluginMessage;
+      if (!msg || msg.type === '__bridge_connected' || msg.type === '__bridge_disconnected') return;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    };
+
+    connect();
+  </script>
+</body>
+</html>
