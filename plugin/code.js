@@ -1324,8 +1324,8 @@ async function handleDonutChart(params) {
   const chartName   = params.name         || 'Donut Chart';
   const noLegend    = params.noLegend     || false;
   // Color variables for text (use discovered library variable paths)
-  const centerColorVar    = params.centerColorVariable    || 'Colors/Text/text-primary (900)';
-  const centerSubColorVar = params.centerSubColorVariable || 'Colors/Text/text-secondary (700)';
+  const centerColorVar    = params.centerColorVariable    || null;
+  const centerSubColorVar = params.centerSubColorVariable || null;
   // Text style IDs — optional, pass via params.centerTextStyleId / params.centerSubTextStyleId
   const centerStyleId    = params.centerTextStyleId    || null;
   const centerSubStyleId = params.centerSubTextStyleId || null;
@@ -1427,7 +1427,7 @@ async function handleDonutChart(params) {
     lbl.fontSize  = 12;
     lbl.characters = (seg.label || '') + '  ' + pct + '%';
     await applyTextStyle(lbl, params.legendTextStyleId || null);
-    await applyFill(lbl, 'Colors/Text/text-primary (900)', '#101828');
+    await applyFill(lbl, null, '#101828');
     outer.appendChild(lbl);
     lbl.x = lx + 12; lbl.y = ly;
     ly += 22;

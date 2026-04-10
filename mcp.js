@@ -135,7 +135,7 @@ const TOOLS = [
       properties: {
         text:         { type: 'string', description: 'Text content.' },
         parentNodeId: { type: 'string' },
-        fillVariable: { type: 'string', description: 'Color token path, e.g. "Colors/Text/text-primary (900)"' },
+        fillVariable: { type: 'string', description: 'Color token path, e.g. "Colors/Text/text-primary"' },
         fillHex:      { type: 'string', description: 'Fallback hex color, e.g. "#101828".' },
         fontSize:     { type: 'number' },
         fontWeight:   { type: 'number', enum: [400, 500, 600, 700] },
@@ -180,7 +180,7 @@ const TOOLS = [
     name: 'figma_set_component_text',
     description:
       'Set a text property on a component instance. ' +
-      'Use after inserting SECTION_TITLE to set its title text.',
+      'Use after inserting a component instance to set a text property on it.',
     inputSchema: {
       type: 'object',
       properties: {
