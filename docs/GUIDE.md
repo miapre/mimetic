@@ -627,12 +627,12 @@ With the bridge running and the plugin connected, you are ready.
 ### 7.1 What to say
 
 Give Claude three things:
-1. **Where to build** — the artboard node ID (visible in the Figma URL when the frame is selected, e.g. `6069:5898`)
+1. **Where to build** — the file name, page name, and artboard name. Claude will use `figma_get_page_nodes` to find the right node ID itself. You never need to look up IDs manually.
 2. **What surface** — which navigation shell to use (e.g. "top navigation header with footer", "sidebar navigation")
 3. **What content** — the sections, data, charts, and tables you want on the page
 
 Example:
-> *"Build an evaluation overview page on artboard 6069:5898. Use the standard top-navigation layout. Page title: GPT-5 · GAIA Benchmark. Include: a metadata strip with run ID / model / date / duration / prompts, an executive summary card, 4 score metric cards (overall score, accuracy, coherence, latency), a horizontal bar chart of performance by category, a 5-model comparison table, a latency scatter chart with 500 data points, and a table of incorrect responses with prompt / expected answer / model answer / error type."*
+> *"Go to the 'Evaluations' page in my design file and build a new screen on the artboard called 'Overview'. Use the standard top-navigation layout. Page title: GPT-5 · GAIA Benchmark. Include: a metadata strip with run ID / model / date / duration / prompts, an executive summary card, 4 score metric cards (overall score, accuracy, coherence, latency), a horizontal bar chart of performance by category, a 5-model comparison table, a latency scatter chart with 500 data points, and a table of incorrect responses with prompt / expected answer / model answer / error type."*
 
 ### 7.2 What happens
 
