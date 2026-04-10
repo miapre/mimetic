@@ -372,7 +372,7 @@ Create a file called `package.json` inside `figma-write-mcp`:
     "ws": "^8.18.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.6"
   }
 }
 ```
