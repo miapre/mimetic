@@ -14,7 +14,7 @@ echo ""
 
 # Check Node.js
 if ! command -v node &>/dev/null; then
-  echo "Error: Node.js is required (v18+). Install it from https://nodejs.org and re-run."
+  echo "Error: Node.js is required (v20.6+). Install it from https://nodejs.org and re-run."
   exit 1
 fi
 
