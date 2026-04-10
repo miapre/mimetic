@@ -18,7 +18,7 @@ You can tell Claude which components to use, which design tokens to apply, and w
 
 Here is an example of what you can build with this system:
 
-> *"Create a full evaluation overview page for a GPT-5 GAIA benchmark run — header, section title, metadata strip, score cards, category chart, model comparison table, latency scatter chart, and error table."*
+> *"Go to the 'Screens' page in my design file and build a new dashboard on the artboard called 'Overview'. Use the standard top-navigation layout. Include: a page header with title and subtitle, 4 KPI metric cards (revenue, active users, conversion rate, avg order value), a line chart of weekly activity over 12 weeks, a data table of top accounts with sortable columns, and a donut chart by category."*
 
 Claude wrote the code, executed it, and the entire page appeared in Figma in under two minutes.
 
@@ -677,7 +677,7 @@ Give Claude three things:
 3. **What content** — the sections, data, charts, and tables you want on the page
 
 Example:
-> *"Go to the 'Evaluations' page in my design file and build a new screen on the artboard called 'Overview'. Use the standard top-navigation layout. Page title: GPT-5 · GAIA Benchmark. Include: a metadata strip with run ID / model / date / duration / prompts, an executive summary card, 4 score metric cards (overall score, accuracy, coherence, latency), a horizontal bar chart of performance by category, a 5-model comparison table, a latency scatter chart with 500 data points, and a table of incorrect responses with prompt / expected answer / model answer / error type."*
+> *"Go to the 'Screens' page in my design file and build a new screen on the artboard called 'Analytics'. Use the standard top-navigation layout. Page title: Sales Overview · Q4 2024. Include: a metadata strip with date range / region / total accounts / last updated, a summary card with headline numbers, 4 KPI metric cards (revenue, active users, conversion rate, avg order value), a line chart of monthly revenue over 12 months, a sortable table of top 10 accounts with columns for name / revenue / growth / status, and a bar chart comparing performance by region."*
 
 ### 7.2 What happens
 
