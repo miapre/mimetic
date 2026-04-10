@@ -5,7 +5,16 @@
 
 ## What this guide covers
 
-By the end of this guide, you will be able to describe a UI to Claude Code and watch it appear — fully built — inside your Figma file, using your real design system components and tokens. Not a mockup. Not a recreation. Your actual library components, your actual variables, wired up correctly.
+By the end of this guide you will be able to do three things with Claude Code and Figma:
+
+**1. Build UI from a description**
+Describe a screen — layout, sections, data, charts — and watch it appear in Figma in real time, using your actual published components and design token variables. Not a mockup. Not a recreation. Your real library components, your real variables, wired up correctly.
+
+**2. Translate HTML into Figma**
+If you have an HTML prototype or coded mockup, Claude can read it and recreate it inside Figma — mapping your HTML structure to your design system components and replacing hardcoded CSS values with the correct tokens.
+
+**3. Target specific library components and variables**
+You can tell Claude which components to use, which design tokens to apply, and which layout patterns to follow. Claude will look up what is available in your library and use the right pieces.
 
 This is what we built with this system:
 
@@ -265,10 +274,24 @@ The official Figma MCP lets Claude read your designs. This is how Claude discove
 
 ### 2.1 Generate a Figma Personal Access Token
 
-1. Open Figma desktop, click your profile picture (top left) → **Settings**
-2. Scroll down to **Personal access tokens**
-3. Click **Generate new token**, name it "Claude Code", and set permissions to read access
-4. Copy the token immediately — you only see it once
+The token lets the bridge call the Figma REST API to look up published component keys. Without it, component insertion from a different file will not work.
+
+1. Open **Figma desktop** (not the browser — only the desktop app has the settings you need)
+2. Click your **profile picture** in the top-left corner → **Settings**
+3. Scroll down to the **Personal access tokens** section
+4. Click **Generate new token**
+5. Give it a descriptive name, e.g. `claude-bridge`
+6. Set an expiration date (or no expiration) and leave permissions at the default — read access is sufficient
+7. Click **Generate token**
+8. **Copy the token immediately.** Figma only shows it once. If you close the dialog without copying, you will need to generate a new one.
+
+Store the token in the `.env` file at the root of this repo:
+
+```
+FIGMA_ACCESS_TOKEN=your_token_here
+```
+
+The bridge reads this automatically when it starts.
 
 ### 2.2 Configure the MCP in Claude Code
 
@@ -643,6 +666,48 @@ Example:
 5. The plugin creates the element, binds the variables, and returns the new node ID
 6. Claude uses that ID as the parent for the next element
 7. You watch the page build in real time in Figma
+
+---
+
+### 7.3 More ways to prompt
+
+**Translate an HTML prototype into Figma**
+
+If you have an existing HTML file, attach it or paste its contents and ask Claude to translate it:
+
+> *"Here's an HTML prototype I built for the onboarding flow. Go to the 'Onboarding' page in my design file and recreate it on the artboard called 'Onboarding v2'. Use my design system components wherever there's a match — replace any hardcoded colors and spacing with the correct design tokens."*
+
+Claude will read the HTML structure, identify elements (nav, cards, buttons, forms, tables), map them to the closest component in your library, and build the Figma version using the bridge tools. The result will use your real variables rather than the CSS values in the HTML.
+
+---
+
+**Target specific library components**
+
+If you know which components you want, name them directly:
+
+> *"Build a settings screen on the 'Settings' page, artboard 'Account Settings'. Use the Sidebar component for navigation, Modal/Large for the confirmation dialog, and FormInput for each field. Apply `surface-secondary` as the page background and `spacing-xl` for section gaps."*
+
+Claude will use `figma_get_page_nodes` to find the artboard, then look up the component keys from your library and insert the real instances.
+
+---
+
+**Iterate on something that already exists**
+
+You can point Claude at an existing frame and ask it to add to or modify it:
+
+> *"Go to the 'Dashboard' artboard on the 'Screens' page. A metrics section already exists at the top. Add a new section below it with a bar chart comparing performance across the last 6 months. Use the same card style and spacing as the existing sections."*
+
+Claude will read the current state of the artboard using `figma_get_page_nodes` and `figma_get_selection`, then build only what is missing.
+
+---
+
+**Ask what is available before building**
+
+If you're not sure what components or tokens your library has, ask Claude first:
+
+> *"Look at my design system library file and list all the available components and color token names."*
+
+Claude will use the Figma MCP to read your library and return a structured list you can reference in follow-up prompts.
 
 ---
 
