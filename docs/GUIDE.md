@@ -16,7 +16,7 @@ If you have an HTML prototype or coded mockup, Claude can read it and recreate i
 **3. Target specific library components and variables**
 You can tell Claude which components to use, which design tokens to apply, and which layout patterns to follow. Claude will look up what is available in your library and use the right pieces.
 
-This is what we built with this system:
+Here is an example of what you can build with this system:
 
 > *"Create a full evaluation overview page for a GPT-5 GAIA benchmark run — header, section title, metadata strip, score cards, category chart, model comparison table, latency scatter chart, and error table."*
 
@@ -28,8 +28,7 @@ Claude wrote the code, executed it, and the entire page appeared in Figma in und
 
 | Tool | Purpose | Cost |
 |---|---|---|
-| [VS Code](https://code.visualstudio.com/) | Code editor where Claude lives | Free |
-| [Claude Code](https://claude.ai/claude-code) | The AI that does the work | Anthropic account required |
+| [Claude Code](https://claude.ai/claude-code) (CLI, VS Code, or desktop) | The AI that does the work — install options in Part 1 | Anthropic account required |
 | [Node.js](https://nodejs.org/) v20.6 or later | Runs the local bridge server (v20.6+ required for `--env-file` support) | Free |
 | Python 3 | Runs build scripts | Free |
 | [Figma desktop app](https://www.figma.com/downloads/) | Required — browser Figma won't work | Free plan works |
@@ -79,7 +78,7 @@ There are two separate channels between Claude and Figma. Understanding them upf
 
 **Channel 1 — Read (Figma MCP):** Claude uses Figma's official MCP server to read your designs. It can inspect any frame, see what components exist, read property values, and understand the design context. This is read-only — it cannot create or modify anything.
 
-**Channel 2 — Write (figma-write-mcp):** To create things in Figma, we use a custom local system: a small Node.js bridge server that runs on your computer, plus a Figma plugin that runs inside the Figma desktop app. Claude sends instructions to the bridge over HTTP; the bridge forwards them to the plugin over WebSocket; the plugin executes them using Figma's Plugin API.
+**Channel 2 — Write (figma-write-mcp):** To create things in Figma, this repo provides a custom local system: a small Node.js bridge server that runs on your computer, plus a Figma plugin that runs inside the Figma desktop app. Claude sends instructions to the bridge over HTTP; the bridge forwards them to the plugin over WebSocket; the plugin executes them using Figma's Plugin API.
 
 ---
 
@@ -307,10 +306,17 @@ The bridge reads this automatically when it starts.
 
 ### 2.2 Configure the MCP in Claude Code
 
-Claude Code is configured via a file at `~/.claude/settings.json`. On a Mac, the `~` means your home folder (e.g. `/Users/yourname`). Open a terminal and run:
+Claude Code is configured via a file at `~/.claude/settings.json`. The `~` means your home folder (`/Users/yourname` on Mac, `C:\Users\yourname` on Windows). Open it in any text editor:
 
 ```bash
+# macOS
 open -e ~/.claude/settings.json
+
+# Windows (PowerShell)
+notepad $env:USERPROFILE\.claude\settings.json
+
+# Any platform — VS Code
+code ~/.claude/settings.json
 ```
 
 If the file does not exist yet, create it. Add this content:
@@ -329,7 +335,7 @@ If the file does not exist yet, create it. Add this content:
 }
 ```
 
-Save the file, then restart VS Code.
+Save the file, then restart Claude Code (quit and reopen the app, or restart the terminal session).
 
 ### 2.3 Verify the read MCP works
 
@@ -344,6 +350,8 @@ This custom system lets Claude create things in Figma. It has three components:
 - **mcp.js** — the tool server that Claude Code calls
 - **bridge.js** — a local HTTP and WebSocket server
 - **plugin/** — the Figma plugin that runs inside the Figma app
+
+> **Used the installer or cloned the repo?** All files in Parts 3.1–3.6 already exist. Skip directly to **[Part 3.7 — Register with Claude Code](#37-register-figma-write-mcp-with-claude-code)**.
 
 ### 3.1 Create the project folder
 
@@ -609,7 +617,7 @@ Your variable names will be different — they depend entirely on how your desig
 
 Every published component in your Figma library has a unique key. You need this key to insert components from a different file. You only need to find it once — then save it to Claude's memory.
 
-**Method 1:** Right-click the master component in your library file → **Copy link**. The URL contains the key.
+**Method 1:** Right-click the master component in your library file → **Copy link**. The URL contains the node ID (e.g. `?node-id=1234-5678`), not the key. Pass that URL to Claude and ask it to resolve the component key using the Figma MCP.
 
 **Method 2:** Ask Claude — paste the component's Figma URL and say "get me the component key for this node." Claude will use the Figma MCP to look it up.
 
@@ -901,8 +909,7 @@ The component documentation has value for design decisions, code handoff, and de
 
 Work through this list in order:
 
-- [ ] VS Code installed
-- [ ] Claude Code extension installed and signed in
+- [ ] Claude Code installed and signed in
 - [ ] Figma Personal Access Token generated
 - [ ] Figma Read MCP added to `~/.claude/settings.json`
 - [ ] `figma-write-mcp/` folder created with `package.json`
@@ -910,7 +917,7 @@ Work through this list in order:
 - [ ] `.env` file created with Figma token and bridge port
 - [ ] `bridge.js`, `mcp.js`, and `plugin/` folder created
 - [ ] figma-write-mcp registered in `~/.claude/settings.json`
-- [ ] VS Code restarted so Claude picks up both MCPs
+- [ ] Claude Code restarted so it picks up both MCPs
 - [ ] Plugin imported into Figma from `plugin/manifest.json`
 - [ ] Team library enabled in your target Figma file
 - [ ] Variables exported from Figma and organised into foundation files
