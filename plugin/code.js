@@ -189,7 +189,7 @@ async function handleInsertComponent(params) {
   if (!component) {
     throw new Error(
       `Component ${params.nodeId} not found locally and no component key was resolved. ` +
-      'Ensure the LayerLens Theme library is enabled in this file and FIGMA_ACCESS_TOKEN is set in bridge .env.'
+      'Ensure your design system library is enabled in this file (Assets > Team library) and FIGMA_ACCESS_TOKEN is set in bridge .env.'
     );
   }
 
@@ -1326,9 +1326,9 @@ async function handleDonutChart(params) {
   // Color variables for text (use discovered library variable paths)
   const centerColorVar    = params.centerColorVariable    || 'Colors/Text/text-primary (900)';
   const centerSubColorVar = params.centerSubColorVariable || 'Colors/Text/text-secondary (700)';
-  // Text style IDs (from LayerLens Theme library — discovered via get_text_info)
-  const centerStyleId    = params.centerTextStyleId    || 'S:bef09bd3cccbebcaeb2bd1cf01c7d84165b5bd1d,7649:603';
-  const centerSubStyleId = params.centerSubTextStyleId || 'S:b54a5986b3e02247814b3fab24b6aeb93c918080,7649:608';
+  // Text style IDs — optional, pass via params.centerTextStyleId / params.centerSubTextStyleId
+  const centerStyleId    = params.centerTextStyleId    || null;
+  const centerSubStyleId = params.centerSubTextStyleId || null;
 
   await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
   if (centerLabel) await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
@@ -1426,7 +1426,7 @@ async function handleDonutChart(params) {
     lbl.fontName  = { family: 'Inter', style: 'Regular' };
     lbl.fontSize  = 12;
     lbl.characters = (seg.label || '') + '  ' + pct + '%';
-    await applyTextStyle(lbl, 'S:b54a5986b3e02247814b3fab24b6aeb93c918080,7649:608');
+    await applyTextStyle(lbl, params.legendTextStyleId || null);
     await applyFill(lbl, 'Colors/Text/text-primary (900)', '#101828');
     outer.appendChild(lbl);
     lbl.x = lx + 12; lbl.y = ly;
