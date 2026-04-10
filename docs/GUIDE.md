@@ -30,7 +30,7 @@ Claude wrote the code, executed it, and the entire page appeared in Figma in und
 |---|---|---|
 | [VS Code](https://code.visualstudio.com/) | Code editor where Claude lives | Free |
 | [Claude Code](https://claude.ai/claude-code) | The AI that does the work | Anthropic account required |
-| [Node.js](https://nodejs.org/) v18 or later | Runs the local bridge server | Free |
+| [Node.js](https://nodejs.org/) v20.6 or later | Runs the local bridge server (v20.6+ required for `--env-file` support) | Free |
 | Python 3 | Runs build scripts | Free |
 | [Figma desktop app](https://www.figma.com/downloads/) | Required — browser Figma won't work | Free plan works |
 | A Figma account with a published component library | Your design system | Figma plan required for libraries |
@@ -104,7 +104,7 @@ Variables are the backbone of the token system. The plugin reads variable values
 3. Click **+** to create a new collection
 4. Name it meaningfully — for example: `1. Color modes`, `3. Spacing`, `2. Radius`
 
-The collection name becomes part of the variable path. In our system, color variables live in `1. Color modes` and are named like `Colors/Background/bg-primary`. The path Claude passes to the plugin is `Colors/Background/bg-primary` — the collection name is NOT included.
+The collection name becomes part of the variable path. For example, if color variables live in a collection called `1. Color modes` and are named like `Colors/Background/bg-primary`, the path Claude passes to the plugin is `Colors/Background/bg-primary` — the collection name is NOT included.
 
 **Creating variables in a collection:**
 
@@ -244,27 +244,39 @@ This will show you all variables whose name contains "bg-primary" along with the
 
 ## Part 1 — Install Claude Code
 
-### 1.1 Install the VS Code extension
+Claude Code is available as a CLI, a VS Code extension, a JetBrains extension, and a desktop app. Pick whichever fits your workflow — they all give Claude access to the same tools.
+
+### 1.1 Install options
+
+**Option A — CLI (recommended for most developers)**
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Then run `claude` in any terminal to start a session.
+
+**Option B — VS Code extension**
 
 1. Open VS Code
-2. Click the Extensions icon in the left sidebar (or press `Cmd+Shift+X` on Mac, `Ctrl+Shift+X` on Windows)
-3. Search for **Claude Code**
-4. Click **Install**
+2. Click the Extensions icon in the left sidebar (`Cmd+Shift+X` on Mac, `Ctrl+Shift+X` on Windows)
+3. Search for **Claude Code** and click **Install**
+
+**Option C — Desktop app**
+
+Download from [claude.ai/download](https://claude.ai/download). Includes the full Claude Code experience without needing VS Code.
 
 ### 1.2 Sign in
 
-1. After installation, a Claude icon appears in the left sidebar — click it
-2. Click **Sign in** and authenticate with your Anthropic account
-3. You will be prompted for your API key — find this at [console.anthropic.com](https://console.anthropic.com) under **API Keys → Create key**
-4. Copy the key and paste it into Claude Code
+**If you have a Claude subscription (Pro, Team, or Enterprise):**
+Run `claude` (or click Sign in inside the extension/app) and authenticate with your Anthropic account via browser. No API key needed.
+
+**If you want to use an API key directly:**
+Get a key at [console.anthropic.com](https://console.anthropic.com) under **API Keys → Create key**, then paste it when prompted.
 
 ### 1.3 Open your project folder
 
-Claude Code works within a folder on your computer. Create a dedicated folder for this project.
-
-1. In VS Code: **File → Open Folder**
-2. Create a new folder (e.g. `ai-design-system`) and open it
-3. Open the Claude Code panel — you should see a chat interface at the bottom
+Claude Code works within a folder on your computer. Create a dedicated folder for this project and open it — either in VS Code (`File → Open Folder`) or navigate to it in the terminal before running `claude`.
 
 ---
 
@@ -582,16 +594,16 @@ design_system/foundations/
   shadows.json       ← shadow effect styles
 ```
 
-What matters is extracting the **variable name as it appears in Figma**. These are the exact strings you pass to the bridge. For example, from our design system:
+What matters is extracting the **variable name as it appears in Figma**. These are the exact strings you pass to the bridge. For example, a typical design system might have:
 
 - `"Colors/Background/bg-primary"` — white background
-- `"Colors/Text/text-primary (900)"` — primary text
-- `"Colors/Border/border-primary"` — default border
-- `"spacing-3xl"` — 24px spacing
-- `"spacing-4xl"` — 32px spacing
+- `"Colors/Text/text-primary"` — primary text color
+- `"Colors/Border/border-default"` — default border color
+- `"spacing-sm"` — small spacing (e.g. 8px)
+- `"spacing-lg"` — large spacing (e.g. 24px)
 - `"radius-md"` — medium corner radius
 
-The variable name format depends on your collection and variable structure in Figma. The safest way to confirm the exact name is to open the Variables panel and read the path directly.
+Your variable names will be different — they depend entirely on how your design system file is structured. The safest way to confirm the exact name is to open the Variables panel and read the path directly.
 
 ### 5.3 Find your component keys
 
@@ -620,25 +632,25 @@ Create a `MEMORY.md` file there — this is an index that Claude reads at the st
 # Project Memory
 
 ## Figma
-File key: YOUR_FILE_KEY
-Library file key: YOUR_LIBRARY_FILE_KEY
+File key: YOUR_PRODUCT_FILE_KEY
+Library file key: YOUR_DESIGN_SYSTEM_FILE_KEY
 
 ## Design token variable names
 See memory/figma_variable_names.md
 
 ## Structural component keys
-HEADER:         [key]
-FOOTER:         [key]
-SECTION_TITLE:  [key]
-SIDEBAR:        [key]
+HEADER:   [published component key]
+FOOTER:   [published component key]
+SIDEBAR:  [published component key]
+CARD:     [published component key]
 
 ## Layout rules
-- Content max-width: 1280px, centered in 1440px viewport
-- SECTION_TITLE is always the first child of the Content frame
+- Artboard width: [e.g. 1440px]
+- Content max-width: [e.g. 1280px, centered]
 - Spacing tokens must be used everywhere — never raw pixel numbers
 - Full-width containers: layoutAlign="STRETCH" + counterAxisSizingMode="AUTO"
 - Horizontal rows with grow children: primaryAxisSizingMode="FIXED" + layoutAlign="STRETCH"
-- Background color: Colors/Background/bg-primary (white)
+- Page background token: [e.g. Colors/Background/bg-primary]
 ```
 
 Create a separate `figma_variable_names.md` file with the complete list of your token paths. The more accurate this file is, the more reliably Claude applies your design system.
@@ -846,11 +858,11 @@ F("Card", content, fillVariable="Colors/Background/bg-primary")
 
 ## What you do NOT need
 
-One important finding: we spent significant time documenting every component into detailed JSON and Markdown specification files (buttons, cards, inputs, etc.) describing token mappings for every state and variant.
+It is tempting to document every component into detailed JSON and Markdown specification files — buttons, cards, inputs, describing token mappings for every state and variant.
 
-**None of this was needed for AI-generated UI.**
+**None of this is needed for AI-generated UI.**
 
-Claude did not read a single component spec file during any of the builds. What was actually used:
+Claude does not need component spec files to build screens. What is actually used:
 
 | Used | Not needed |
 |---|---|

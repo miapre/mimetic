@@ -18,9 +18,13 @@ if ! command -v node &>/dev/null; then
   exit 1
 fi
 
-NODE_VER=$(node -e "process.exit(parseInt(process.versions.node) < 18 ? 1 : 0)" 2>/dev/null && echo "ok" || echo "old")
+NODE_VER=$(node -e "
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  process.exit((major > 20 || (major === 20 && minor >= 6)) ? 0 : 1);
+" 2>/dev/null && echo "ok" || echo "old")
 if [ "$NODE_VER" = "old" ]; then
-  echo "Error: Node.js v18 or later is required. You have $(node -v)."
+  echo "Error: Node.js v20.6 or later is required (needed for --env-file support)."
+  echo "You have $(node -v). Download the latest LTS from https://nodejs.org"
   exit 1
 fi
 
