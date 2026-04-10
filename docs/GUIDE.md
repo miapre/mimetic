@@ -59,7 +59,7 @@ There are two separate channels between Claude and Figma. Understanding them upf
           figma.com                    ┌───────────────┐
                                        │   bridge.js   │
                                        │  (runs on     │
-                                       │  your Mac)    │
+                                       │  your machine)│
                                        └───────┬───────┘
                                                │ WebSocket
                                                ▼
