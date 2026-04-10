@@ -1,0 +1,13 @@
+{
+  "name": "Figma Write Bridge",
+  "id": "figma-write-bridge",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "permissions": ["teamlibrary"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Connects to the local Figma Write Bridge server to receive design instructions from Claude Code."
+  }
+}

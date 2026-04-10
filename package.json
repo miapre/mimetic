@@ -1,0 +1,17 @@
+{
+  "name": "figma-write-mcp",
+  "version": "1.0.0",
+  "description": "MCP server + local bridge for writing designs directly into Figma via the Plugin API",
+  "type": "module",
+  "scripts": {
+    "bridge": "node --env-file=.env bridge.js",
+    "mcp": "node mcp.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.15.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
