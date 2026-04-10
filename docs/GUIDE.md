@@ -434,7 +434,7 @@ It must handle one instruction at a time, queuing them if needed. Each instructi
 | `figma_select_node` | Select a node by its ID |
 | `figma_get_page_nodes` | List all top-level nodes on the current Figma page |
 | `figma_delete_node` | Delete a node |
-| `figma_create_chart` | Render a complete chart (scatter, line, donut) in a single call |
+| `figma_create_chart` | Render a complete chart (scatter, line, donut, bar) in a single call |
 
 Each tool call in Claude triggers an HTTP POST to the bridge, which forwards it to the plugin.
 
