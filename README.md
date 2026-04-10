@@ -3,7 +3,7 @@
 Let Claude Code write designs directly into Figma — creating frames, inserting real library components, and applying design tokens — without Figma Make.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
-![Node.js: v18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
 ![Platform: macOS / Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 
 ---
