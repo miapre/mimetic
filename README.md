@@ -11,7 +11,7 @@ Claude Code  →  MCP server (mcp.js)  →  Bridge server (bridge.js)  →  Figm
 You describe a UI to Claude. Claude writes a Python build script, executes it, and the design appears in Figma in real time — using your actual published components and design token variables.
 
 **Example prompt:**
-> "Build an analytics dashboard on frame 6069:5898. Use the top-nav shell. Include: 4 KPI cards, a line chart of weekly activity, a data table with 20 rows, and a donut chart by category."
+> "Open my Product Analytics file, go to the Overview page, and build an analytics dashboard on the artboard called 'Dashboard'. Use the top-nav shell. Include: 4 KPI cards, a line chart of weekly activity, a data table with 20 rows, and a donut chart by category."
 
 Claude handles the rest.
 
