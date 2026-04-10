@@ -382,6 +382,8 @@ BRIDGE_PORT=3055
 
 This token is the same one from Part 2. The bridge uses it to call the Figma REST API to resolve published component keys.
 
+> **Important — do not change `BRIDGE_PORT`** unless you also edit `plugin/ui.html` to match. The plugin connects to the bridge via WebSocket at `ws://localhost:3055`, and this value is hardcoded in the plugin's HTML file. If the ports don't match, the plugin will show "Bridge not running" even when the bridge is up.
+
 ### 3.4 Create bridge.js
 
 `bridge.js` is a small HTTP and WebSocket server that runs on your computer. It is the middleman between Claude Code and the Figma plugin.
@@ -427,7 +429,7 @@ This tells Figma how to load your plugin:
 ```json
 {
   "name": "Figma Write Bridge",
-  "id": "figma-write-bridge-layerlens",
+  "id": "figma-write-bridge",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
@@ -820,10 +822,10 @@ T("Body text", card, layoutAlign="STRETCH")
 
 ```python
 # Without key — the bridge makes an extra REST API call (slower)
-INS("1208:104342", page, width=1440)
+INS("1234:56789", page, width=1440)
 
 # With key — direct import, no extra API call
-INS("1208:104342", page, key="4382cd7472c6f07a2939161a43682e3494a05a9d", width=1440)
+INS("1234:56789", page, key="your_component_published_key_here", width=1440)
 ```
 
 Hardcode your frequently used component keys in Claude's memory to avoid looking them up every time.

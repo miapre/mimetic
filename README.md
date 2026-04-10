@@ -169,7 +169,7 @@ Once the MCP is registered, Claude has access to:
 
 **1. Start the bridge** (keep this terminal open):
 ```bash
-cd ~/figma-write-mcp
+cd ~/figma-write-mcp   # or wherever you installed it
 npm run bridge
 ```
 
