@@ -56,7 +56,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        nodeId:       { type: 'string', description: 'Component node ID, e.g. "17085:40390"' },
+        nodeId:       { type: 'string', description: 'Component node ID, e.g. "1234:56789"' },
         fileKey:      { type: 'string', description: 'Figma file key from the URL of your design system file.' },
         parentNodeId: { type: 'string', description: 'Node ID of the parent frame. Omit to place on current page.' },
         x:            { type: 'number' },
