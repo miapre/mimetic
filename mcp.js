@@ -1,5 +1,5 @@
 /**
- * figma-write-mcp / mcp.js
+ * html-to-figma-design-system / mcp.js
  *
  * MCP server (stdio transport). Exposes Figma write tools to Claude.
  * Communicates with the local bridge server which forwards instructions
@@ -690,7 +690,7 @@ function bridgeType(toolName) {
 // ---------------------------------------------------------------------------
 
 const server = new Server(
-  { name: 'figma-write-mcp', version: '1.1.0' },
+  { name: 'html-to-figma-design-system', version: '1.1.0' },
   { capabilities: { tools: {} } }
 );
 

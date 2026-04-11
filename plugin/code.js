@@ -1,5 +1,5 @@
 /**
- * Figma Write Bridge — plugin worker (code.js)
+ * HTML to Figma — Design System — plugin worker (code.js)
  *
  * Runs in the Figma plugin sandbox. Receives instructions from the bridge
  * via the UI iframe (WebSocket → postMessage) and executes them against
@@ -1835,7 +1835,7 @@ const HANDLERS = {
 figma.ui.onmessage = async msg => {
   // Internal bridge connection events — no response needed
   if (msg.type === '__bridge_connected') {
-    figma.notify('Figma Write Bridge connected ✓', { timeout: 2000 });
+    figma.notify('HTML to Figma — Design System connected ✓', { timeout: 2000 });
     return;
   }
   if (msg.type === '__bridge_disconnected') return;

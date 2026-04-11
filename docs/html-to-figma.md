@@ -111,6 +111,13 @@ Output structure:
 }
 ```
 
+Section inventory (mandatory):
+- After parsing, enumerate ALL top-level sections visible in the HTML — any structural block with its own heading, distinct content area, or semantic purpose (e.g. `<section>`, `<div class="section">`, `<article>`, named card groups)
+- List every section by name and approximate document order
+- This inventory is the authoritative checklist for Phase 4 completeness
+- Do not begin Phase 4 construction until the inventory is explicitly written out
+- A Phase 4 build that omits any inventoried section is a failure regardless of how many sections were successfully built
+
 ---
 
 ## Phase 2 — Semantic classification
@@ -130,6 +137,24 @@ Assign for each node:
 ```
 
 Use visual features, position, repetition, and context to classify. A repeated structure with consistent styling is stronger signal than a one-off element.
+
+Chart detection rule:
+- Identify charts in the HTML via:
+  - `<svg>` elements with repeated polygons, paths, or circles (radar, pie, area)
+  - `<canvas>` elements with chart library initialization (Chart.js, D3, Recharts, Vega)
+  - Repeated bar or column shapes of proportional width/height on a shared baseline
+  - Radial structures: evenly spaced angular axes, concentric rings
+  - Axis-label clusters: sequential numeric or categorical labels at regular intervals
+  - Known chart library class names (`.chartjs-*`, `.recharts-*`, `.vega-*`) or script-level calls to chart render functions
+- Classify chart type:
+  - `radar` — radial polygon with category axes
+  - `bar` — proportional rectangles on a shared baseline
+  - `line` — connected data points on a shared axis
+  - `pie` / `donut` — circular sector segments
+  - `other` — unclassified data visualization
+- If a chart is detected: mark it as a required element — it must be reconstructed in Phase 4
+- Record: chart type, data source type (static SVG path data, JS runtime render function, canvas)
+- A detected chart left as a placeholder without a documented blocker is a Phase 4 failure
 
 ---
 
@@ -162,6 +187,33 @@ Resolution order per node:
 2. **Approximate match** — closest component with noted deviation
 3. **Primitive fallback** — no component match; use DS variables for spacing, color, and type
 4. **Component candidate** — pattern with no DS match; flag for future addition
+
+Layout archetype rule:
+- Before selecting any navigation or shell component, detect the page layout type from the HTML source:
+  - `top-nav` — horizontal navigation bar spanning the full viewport width (`<nav>`, `.navbar`, fixed/sticky top bar with horizontal links)
+  - `side-nav` — fixed or sticky sidebar with vertical link list (`.sidebar`, `position: fixed; left: 0`, drawer-style layout)
+  - `hybrid` — both a top nav and a sidebar present simultaneously
+- Layout archetype determines which DS shell component is required:
+  - `top-nav` → DS header / top-navigation component
+  - `side-nav` → DS sidenav component
+  - `hybrid` → DS header + DS sidenav; both are required
+- A horizontal nav in HTML must never resolve to a sidenav component — this is a structural mismatch, not an approximate match
+- Layout archetype must be detected from the HTML source intent, not from DS component availability or convenience
+- Record the detected archetype in Phase 3 output; a mismatch between detected archetype and component used is a Phase 4 failure
+
+Semantic mapping rule:
+- Before falling back to primitives, identify semantic UI patterns in the HTML:
+  - **Badges / status labels**: small inline elements with a background fill and a one- to four-word label — `<span>` with colored background, `.badge`, `.tag`, `.label`, `.chip`, `.status`
+  - **Chips**: interactive or decorative inline elements, often in a "best for", filter, or tag row
+  - **Tags**: categorization labels applied to cards, rows, or items
+- For each detected semantic pattern, search the DS for a matching component before constructing primitives
+- If a DS badge, chip, or tag component exists and the HTML element fits the role → use the DS component
+- Primitive text is not an acceptable substitute when a DS component exists for the pattern
+- Example mappings (illustrative, not exhaustive):
+  - A "Private" label with colored background → DS badge
+  - Category labels ("Text", "Vision") on a model or item card → DS badge or tag
+  - Items in a "Best for" chip row → DS chip
+- Semantic pattern detection is mandatory — omitting DS components that exist for these patterns is a construction failure, not a style preference
 
 Style resolution rules:
 - Use real DS variables whenever they exist — `figma_apply_variable` not hardcoded values
@@ -196,12 +248,20 @@ Optional affordance rule:
 - If it does not support it, keep the component and report the missing affordance
 - Only add an adjacent primitive affordance if it can be done cleanly without compromising layout or component semantics
 
-Spacing fidelity rule:
-- Spacing decisions must preserve the relational layout of the HTML, not just map to the nearest token
-- Derive spacing from HTML relationships: parent/child nesting, sibling groupings, and repetition patterns
-- Evaluate: parent padding, child spacing, sibling gaps, outer margins, and whether inserted components introduce hidden internal spacing
+Spacing and radius variable rule (non-negotiable, same level as color):
+- Every padding, gap (itemSpacing), and corner radius value must be bound to a DS spacing or radius variable — never a raw pixel number
+- Use `node.setBoundVariable('paddingTop', var)` / `'paddingBottom'` / `'paddingLeft'` / `'paddingRight'` / `'itemSpacing'` / `'cornerRadius'` — the same mechanism as color and text style binding
+- Spacing variables live in the semantic collection (e.g. `spacing-lg`, `spacing-2xl`) — never use raw Spacing/N primitives; those are internal aliases not exported by the library
+- Radius variables follow the same pattern (`radius-sm`, `radius-xl`, etc.)
+- A frame with raw padding or raw cornerRadius is a construction failure — same as a text node with a raw hex color
+
+Spacing nearest-match rule:
+- When the HTML value has no exact DS token, pick the closest token by pixel distance
+- If two tokens are equidistant, prefer the one that produces consistent spacing across sibling elements — avoid mixing two different scales in the same section
+- Record the deviation in the Phase 6 report under Design system gaps
+- The goal is layout fidelity within the DS scale — preserve the visual rhythm, not the exact pixel value
+- Spacing decisions must preserve the relational layout of the HTML: derive from parent/child nesting, sibling groupings, and repetition patterns
 - Prefer consistency across similar elements over exact pixel matching — choose the closest consistent spacing scale across a section; avoid mixing multiple spacing scales unnecessarily
-- If DS spacing tokens do not match exactly, pick the closest token that keeps the section internally consistent
 - If a DS component is inserted, reconcile its surrounding frame spacing against the HTML source
 - Do not accept a correctly resolved component with incorrect surrounding spacing as a successful result
 
@@ -211,6 +271,15 @@ Out-of-DS color fallback:
 - If the element is required for structural or informational fidelity, a local temporary value may be used only as a documented exception
 - Any such exception must be explicitly listed in the report under Design system gaps and unresolved style exceptions
 - Never treat unresolved raw values as if they were valid DS token mappings
+
+Color fidelity rule:
+- Visual elements that carry semantic meaning through color — status dots, category indicators, accent marks, trendlines, brand accents — must resolve to DS color variables that match the HTML intent
+- Matching criteria: hue proximity, semantic role (success / warning / error / brand / neutral), and usage context within the screen
+- Do not select an arbitrary nearby token — evaluate the element's role and choose the token whose semantic role matches that role
+- If no semantically correct DS token exists:
+  - select the closest available token and document the deviation
+  - record as a DS color gap in the Phase 6 report
+- Raw hex is never acceptable for these elements; if the DS has no adequate token, follow the out-of-DS color fallback rule above
 
 Output per node:
 ```json
@@ -270,6 +339,24 @@ Rules:
 - Apply DS variables via `figma_apply_variable` — never pass raw hex or pixel values as hardcoded strings
 - Mirror the source hierarchy — nesting in Figma matches nesting in HTML
 
+Nested component rule:
+- When a DS component is inserted and contains nested interactive or meaningful sub-elements, all nested elements must be fully populated — do not leave nested slots at library defaults
+- Nested element resolution applies to:
+  - **Buttons with icons**: if the HTML button has an icon, the DS button component's icon slot must be populated with a DS icon instance that matches the HTML icon intent — not a placeholder or omission
+  - **Badges inside cards or cells**: badge label and variant/color must be set from the HTML source
+  - **Navigation items with icons**: the icon node inside the nav link component must be set
+  - **Any component with `icon`, `leading-icon`, `trailing-icon`, or similar slot properties**: populate if the HTML source has a corresponding icon element
+- Partial component usage is not acceptable: inserting the shell of a DS component while leaving nested sub-elements at library defaults is a hydration failure
+- Nested element population follows the same procedure as the Component hydration rule — check `componentProperties` first, then `findAll` traversal with no depth limit
+
+Full build requirement (non-negotiable):
+- Before starting any construction, read back the Phase 1 section inventory — not the HTML as held in working memory — and confirm the build plan includes every inventoried section
+- Every section present in the HTML must exist in the Figma output — no omissions
+- Partial builds are not acceptable: if only a subset of sections is constructed or major sections are missing, Phase 4 is a failure
+- Do not mark Phase 4 complete until all sections from the HTML source are present in Figma
+- Exception: sections that are explicitly conditional on runtime state that cannot be inferred from the static source (e.g. empty states visible only after user action) may be deferred — this must be documented in the report
+- Tab content in multi-tab screens: the default active tab must be fully built; other tabs may be deferred only if explicitly noted — a multi-tab screen with only one tab built is still a partial build
+
 Text style enforcement rule (non-negotiable):
 - Typography compliance is achieved through DS text styles — pass `textStyleId` bound to a named DS text style
 - Color compliance is achieved through DS color variables — pass `fillVariable` bound to a DS color variable path
@@ -293,6 +380,12 @@ Auto layout sizing rule:
 - If primaryAxisSizingMode is not set, the frame may collapse to HUG and break layout fidelity
 - For frames that should fill remaining space in their parent, pass `layoutGrow=1` inline at creation time — this eliminates a separate `set_layout_sizing` call
 - Name nodes using a consistent pattern:
+
+layoutGrow safety rule:
+- Never apply `layoutGrow=1` to children of a VERTICAL `primaryAxisSizingMode='AUTO'` parent — this creates a circular dependency that Figma resolves by collapsing the parent to near-zero height
+- Only apply `layoutGrow=1` when the parent has a FIXED primary-axis dimension, or when horizontal fill is explicitly required inside a FIXED-height HORIZONTAL parent
+- Default to `layoutGrow=0` when uncertain
+- This applies to all frame and component children — not only direct children; check the full subtree if nesting multiple AUTO parents
   - section/*
   - row/*
   - card/*
@@ -316,11 +409,75 @@ Post insertion fit rule:
 - Do not count a component insertion as successful if the inserted component is visually clipped or structurally misfit
 - Large structural components that require this check: sidenavs, page headers, tables, paginations, large cards or panels
 
+Component hydration rule (non-negotiable):
+- After inserting any DS component instance, all user-facing content must be populated with the correct values from the HTML source
+- Default placeholder or library content must not remain in any inserted instance
+- A component that is inserted but not populated is a construction failure — do not mark it complete
+
+Content population procedure (apply in this order):
+1. Check whether the component exposes named properties via `componentProperties` — if it does, use `instance.setProperties({ ... })` to set values
+2. If the required text node is not exposed as a named property, locate it via `instance.findAll(n => n.type === 'TEXT')` and write `textNode.characters = correctValue` directly
+3. Nested instances: if child instances themselves contain text, traverse them with `findAll` — there is no depth limit on this requirement
+4. Never skip a text node because it is nested deep — all user-visible text must be correct
+
+State handling:
+- For components with states (tabs active/inactive, buttons primary/secondary, toggles on/off, badges with/without count): set the correct state that matches the HTML intent
+- For tab components: the tab corresponding to the currently displayed content must be set to the active state; all other tabs must be inactive
+- For button components: set the variant (primary, secondary, ghost) to match the HTML source button style
+- Setting an instance to the correct state is part of hydration — inserting with the wrong state is a failure
+
+Hydration verification:
+- After populating a component, read back at least one text node to confirm the write succeeded
+- If a text node's `characters` cannot be changed (locked, or read-only in the component architecture), document it as a DS architecture gap — not a pass
+- Do not proceed to the next component until the current one is verified
+
+Chart reconstruction rule (non-negotiable):
+- A chart detected in Phase 2 must not be left as a placeholder in Figma
+- If reconstruction is not possible, it is a Phase 4 failure — not an acceptable omission
+
+Reconstruction procedure:
+1. Extract chart data from the source:
+   - Static SVG: parse polygon/path coordinates and attribute values directly from the markup
+   - JS-rendered: locate and read the data array in `<script>` blocks before the render call
+2. Reconstruct geometry using `figma.createNodeFromSvg()` with a precomputed SVG string for the structural layer:
+   - grid rings, axis lines, data polygon, data dots
+3. Add category labels as separate Figma text nodes after SVG insertion — do not embed `<text>` in the SVG; text nodes must carry DS text styles and DS color variables
+
+Radar-specific construction:
+- Grid rings: polygon per concentric ring at 25/50/75/100% of maxRadius
+- Axis lines: one line per category from `(cx, cy)` to the outer ring vertex
+- Data polygon: closed polygon with vertices at `(cx + r·value·cos θ, cy + r·value·sin θ)` per category
+- Data dots: circle at each data vertex
+- Labels: positioned at `outerRadius + labelOffset` from center along each axis angle
+
+DS variable binding for charts:
+- Grid ring stroke → DS border/separator color variable (gray scale)
+- Axis line stroke → DS border/separator color variable (gray scale)
+- Data polygon fill → DS brand color variable (opacity reduction applied inline on the fill if needed)
+- Data polygon stroke → DS brand color variable
+- Data dots fill → DS brand color variable
+- Label text → DS text style + DS text color variable (e.g. `text-tertiary` or `text-secondary`)
+- Exception: polygon point coordinates and line endpoints are computed geometry — raw numeric values are permitted only for SVG geometry attributes (`cx`, `cy`, `r`, `points`, `x1/y1/x2/y2`), not for color, typography, or spacing
+
+Fallback rule:
+- If chart data cannot be extracted (canvas-only with no accessible data source, obfuscated JS, unsupported chart type):
+  - do NOT insert a placeholder frame silently
+  - mark the chart as a Phase 4 failure
+  - document the exact blocker and the required implementation path to unblock it
+- A placeholder frame is only acceptable when the failure is explicitly documented in the Phase 6 report
+
 Post-build reconciliation rule:
 - After all elements are constructed, perform a single reconciliation pass across the full layout
 - Adjust: spacing between components, padding inside containers, alignment across sections
 - Goal: the final Figma layout must visually match the HTML structure as closely as the DS allows
 - This pass must not: change component choices, alter content, or break hierarchy
+
+Page layout consistency rule:
+- Apply consistent vertical spacing across all top-level sections
+- The last section on the page must have adequate bottom padding — a page that ends flush at the last content element without spacing is a layout failure
+- Vertical rhythm: spacing between sections must be consistent throughout the page; do not alternate between two different gap values within the same content column
+- If the HTML source specifies an explicit `padding-bottom` or `margin-bottom` on the content container, replicate it as `paddingBottom` on the Figma content frame
+- Enforce at the artboard level — verify after Phase 4 construction and before Phase 5 validation
 
 When no suitable component exists:
 - construct a local editable structure inside the generated Figma file
@@ -328,6 +485,21 @@ When no suitable component exists:
 - ensure the structure is clean and reusable
 - treat this as a component candidate, not a design system component
 - surface it in the report under component candidates
+
+Phase 4 success criteria:
+- All sections from the HTML source are present in Figma
+- All frames are visible — no collapsed frames (height or width < 20px on any container that should have content)
+- Content is rendered inside containers — text nodes exist and are not empty
+- No major sections missing
+- All inserted DS component instances are hydrated — no default DS library text remains in any instance
+- Chart fidelity: every chart detected in Phase 2 is either reconstructed in Figma with visible geometry matching the HTML source, or explicitly documented as a failure with an exact blocker — a silent placeholder is never acceptable
+- Layout archetype fidelity: the page shell component matches the HTML layout type — a horizontal nav resolved to a sidenav, or vice versa, is a failure regardless of visual similarity
+- Semantic component fidelity: DS badge, chip, and tag components are used wherever the HTML has semantic label patterns and DS equivalents exist — primitive substitution when a DS component is available is a failure
+- Nested component completeness: all nested sub-elements of inserted DS components (icons, badge labels, nav icons) are populated from the HTML source — library defaults remaining in nested slots are a failure
+- Token color fidelity: visual elements carrying semantic meaning through color (status dots, category indicators, accents) are bound to semantically appropriate DS color variables — arbitrary token selection that misrepresents the HTML color intent is a failure
+- **Spacing and radius compliance**: zero frames in the artboard have raw padding, gap, or cornerRadius values — every non-zero spacing/radius property is bound to a DS variable via `setBoundVariable`; any raw px value remaining is a failure
+
+If any of the above conditions are not met, Phase 4 is FAIL — not PARTIAL. A PARTIAL result is only valid when explicitly documented deferred items (conditional runtime sections, non-default tabs) are the only missing pieces. Structural omissions or collapsed frames always constitute a failure.
 
 ---
 
@@ -342,10 +514,49 @@ Run before producing any output. Fix failures before continuing.
 | Auto layout | `figma_get_node_children` | No frame uses absolute positioning where a stack was intended |
 | Text style compliance | `figma_get_text_info` | Every TEXT node has a `textStyleId` (DS text style) applied |
 | Color variable compliance | `figma_get_text_info` | Every TEXT node has a `fillVariable` (DS color variable) applied |
+| Spacing variable compliance | `figma_get_node_props` | Every frame with padding/gap/radius has those properties bound to DS variables via `setBoundVariable` — no raw px values |
 | Variables | `figma_get_text_info` | No hardcoded hex, font size, or spacing value in any node |
 | Consistency | — | Identical source elements resolved identically |
+| Chart fidelity | `figma_get_node_children` | Every detected chart has vector children matching chart geometry, or is explicitly documented as a failure with a blocker |
 
 For text node compliance: call `figma_get_text_info` on a representative sample of created text nodes. Any node missing `textStyleId` or `fillVariable` is a construction failure — fix before moving to Phase 6.
+
+Spacing and radius compliance sweep (mandatory — run once after all construction is complete):
+Run the following traversal against the root artboard frame before marking Phase 5 complete:
+```javascript
+// Scan all FRAME nodes; skip DS component internals (IDs starting with 'I')
+artboard.findAll(n => n.type === 'FRAME' && !n.id.startsWith('I')).forEach(node => {
+  ['paddingTop','paddingBottom','paddingLeft','paddingRight'].forEach(prop => {
+    if (node[prop] !== 0 && !node.boundVariables?.[prop]) {
+      node.setBoundVariable(prop, nearestSpacingVar(node[prop]));
+    }
+  });
+  if (node.itemSpacing !== 0 && node.primaryAxisAlignItems !== 'SPACE_BETWEEN'
+      && !node.boundVariables?.itemSpacing) {
+    node.setBoundVariable('itemSpacing', nearestSpacingVar(node.itemSpacing));
+  }
+  ['topLeftRadius','topRightRadius','bottomLeftRadius','bottomRightRadius'].forEach(prop => {
+    if (node.cornerRadius && node.cornerRadius !== 0 && !node.boundVariables?.[prop]) {
+      node.setBoundVariable(prop, nearestRadiusVar(node.cornerRadius));
+    }
+  });
+});
+```
+- `nearestSpacingVar(px)` and `nearestRadiusVar(px)` resolve to the closest DS variable from the semantic `3. Spacing` and `2. Radius` collections (see DS boilerplate memory for keys)
+- This sweep catches every frame built in Phase 4 in one pass — it is not a substitute for binding at construction time, but it is the enforcement backstop
+- After the sweep, re-run the scan to confirm zero remaining unbound values
+- A non-zero result after the sweep is a Phase 5 failure — investigate and fix before proceeding
+
+Visual validity check:
+- After construction, query all top-level section frames and verify:
+  - No frame has height < 20px unless it is semantically a divider or decorative rule
+  - No frame has width < 20px unless it is semantically a narrow element (icon, bullet, indicator)
+  - At least one text node exists inside each content container
+- If collapsed frames are found (height or width near 0 unexpectedly):
+  - diagnose the root cause before applying any fix (resize() trap, layoutGrow circular dependency, or missing content)
+  - apply the fix and re-verify
+  - do not proceed to Phase 6 until all containers pass the visibility check
+- This check is mandatory — skipping it to save time is an anti-pattern
 
 ---
 
@@ -357,6 +568,7 @@ Output as HTML file (not terminal text). Include:
 - Clearly state which phases completed, which were partial, and which were blocked
 - If Phase 4 is blocked, distinguish protocol success in earlier phases from bridge execution failure
 - Missing runtime-rendered content must be called out separately from parse failures
+- Verdict constraint: if Phase 4 is FAIL, the overall report verdict must be FAIL or PARTIAL with blocking issues listed — it cannot be PASS. A run with missing sections or collapsed frames is not a successful run regardless of DS binding quality.
 
 **1. Summary**
 - Nodes processed
@@ -395,6 +607,24 @@ Output as HTML file (not terminal text). Include:
 - For every DS component that was inserted successfully, report whether it was also fully populated
 - Distinguish: insertion success vs property population success
 - If a component was inserted but required content could not be set (e.g. badge label not exposed as an editable property), report this explicitly as a DS architecture gap — not a bridge failure
+
+**5d. Component content validation**
+- Report the percentage of inserted DS components that were correctly hydrated (no default library content remaining)
+- For each component that passed hydration: state how the text was set (via `setProperties()` or direct `characters` write) and confirm the read-back verified
+- For each component that failed hydration or has default content leakage: name the exact instance, the text node that was not updated, and the default value that is still showing
+- Verdict constraint: if any component still shows default DS library content, the overall verdict cannot be PASS — it must be PARTIAL or FAIL with the leaking component listed as a blocking issue
+
+**5e. Chart validation**
+- Chart detected: yes/no — if yes, chart type (`radar`, `bar`, `line`, `pie`, `donut`, `other`)
+- Chart reconstructed: yes/no
+- If reconstructed:
+  - Construction method: SVG precomputed via `createNodeFromSvg`, Figma vector primitives, or hybrid
+  - DS variable binding: which DS variables were applied to strokes, fills, and label text
+  - Fidelity: proportions preserved / category labels preserved / data values visually accurate
+- If not reconstructed:
+  - Exact blocker: data not extractable, canvas-only rendering, obfuscated JS, unsupported chart type
+  - Required implementation: what toolchain addition would unblock reconstruction
+- Verdict constraint: a chart detected in Phase 2 that is silently replaced by a placeholder without a documented failure record is a blocking issue — the overall verdict cannot be PASS
 
 **6. Forward insights**
 - Possible reusable templates detected

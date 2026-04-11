@@ -1,7 +1,7 @@
 {
-  "name": "figma-write-mcp",
+  "name": "html-to-figma-design-system",
   "version": "1.1.0",
-  "description": "MCP server + local bridge for writing designs directly into Figma via the Plugin API",
+  "description": "Convert HTML to Figma using your design system — MCP server + local bridge for DS-aware design generation via the Plugin API",
   "type": "module",
   "scripts": {
     "bridge": "node --env-file=.env bridge.js",
