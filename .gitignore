@@ -1,2 +1,7 @@
 node_modules/
 .env
+package-lock.json
+
+# LayerLens-specific build scripts — local only, never push
+build_*.py
+patch_*.py
