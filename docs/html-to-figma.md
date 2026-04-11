@@ -102,6 +102,21 @@ Use visual features, position, repetition, and context to classify. A repeated s
 
 ---
 
+## Phase 2.5 — Design system inspection
+
+**Objective:** Discover actual variable paths and naming conventions before mapping.
+
+Rules:
+- Inspect available design system variables before resolution
+- Do not assume naming formats
+- Use discovered variable paths in Phase 3 mappings
+- If variable structure cannot be determined:
+  - flag as DS ambiguity
+  - proceed with best-effort mapping
+  - report uncertainty
+
+---
+
 ## Phase 3 — Design system resolution
 
 **Objective:** Map every node to the design system without breaking structure.
@@ -116,6 +131,15 @@ Style resolution rules:
 - Use real DS variables whenever they exist — `figma_apply_variable` not hardcoded values
 - For spacing: evaluate proximity to token, role of the spacing, layout impact, local consistency — pick the closest token
 - For color: resolve to the nearest semantic color variable (e.g., `text-primary`, `bg-surface`) not to the raw hex
+
+Primitive fallback depth rule:
+- When a component cannot be used, reconstruct its internal structure using primitives
+- Do not stop at a container shell if the original component contains meaningful structure
+- Preserve:
+  - layout
+  - text
+  - hierarchy
+- Only simplify if the internal structure cannot be inferred
 
 Out-of-DS color fallback:
 - If no suitable DS color token exists, do not silently hardcode the source color as a normal resolved token
@@ -155,6 +179,19 @@ Rules:
 
 ---
 
+## Phase 3.6 — Design system availability check
+
+**Objective:** Ensure DS components can actually be inserted during Phase 4.
+
+Rules:
+- Verify that required design system libraries are enabled in the target Figma file
+- If DS components are not accessible:
+  - do not attempt repeated insert failures
+  - fall back to primitive construction immediately
+  - record this as a DS environment limitation in the report
+
+---
+
 ## Phase 4 — Figma construction
 
 **Objective:** Build the Figma structure cleanly using the bridge tools.
@@ -164,6 +201,12 @@ Rules:
 - Insert real library components via `figma_insert_component` when Phase 3 resolved to exact or approximate
 - Apply DS variables via `figma_apply_variable` — never pass raw hex or pixel values as hardcoded strings
 - Mirror the source hierarchy — nesting in Figma matches nesting in HTML
+
+Auto layout sizing rule:
+- When creating any auto-layout frame with explicit dimensions (especially root frames), you must set sizing mode at creation time
+- Always pass `primaryAxisSizingMode="FIXED"` (and `counterAxisSizingMode="FIXED"` where needed) at frame creation — not in a follow-up call
+- If primaryAxisSizingMode is not set, the frame may collapse to HUG and break layout fidelity
+- For frames that should fill remaining space in their parent, pass `layoutGrow=1` inline at creation time — this eliminates a separate `set_layout_sizing` call
 - Name nodes using a consistent pattern:
   - section/*
   - row/*
@@ -225,7 +268,13 @@ Output as HTML file (not terminal text). Include:
 **4. Design system gaps**
 - Values or patterns in the source that had no token or component equivalent
 
-**5. Forward insights**
+**5. Performance insights**
+- Report total bridge calls
+- Highlight repeated call patterns
+- Identify inefficiencies (e.g., required multi-call operations)
+- Estimate scaling impact for full screens
+
+**6. Forward insights**
 - Possible reusable templates detected
 - Patterns that appear across multiple screens (defer to v2)
 
