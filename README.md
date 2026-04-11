@@ -1,39 +1,41 @@
-# html-to-figma-design-system
+# HTML to Figma — Design System
 
-Let Claude Code write designs directly into Figma — creating frames, inserting real library components, and applying design tokens — without Figma Make.
+**The only MCP that translates HTML into Figma using your own design system.**
+
+Give Claude an HTML file. It reads your design system — published components and design token variables — and builds the layout inside Figma using real DS instances. Not hardcoded shapes. Not a visual approximation. Real component instances with real token bindings.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
 ![Platform: macOS / Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
+[![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers/html-to-figma-design-system)
+
+> **Not a Figma product.** This is an independent, open-source MCP server built for Claude Code.
 
 ---
 
-## Table of contents
+## Why this is different
 
-- [What you can do](#what-you-can-do)
-- [Quick start](#quick-start)
-- [Before you start: Figma requirements](#before-you-start-figma-requirements)
-- [Manual setup](#manual-setup)
-- [Available tools](#available-tools)
-- [Every session](#every-session)
-- [How it works](#how-it-works)
-- [Troubleshooting](#troubleshooting)
+Most HTML-to-Figma tools do a visual copy — they dump raw frames with hardcoded hex values. When you get the file, nothing connects to your design system. You have to re-apply tokens, swap in real components, and fix every layer by hand.
+
+This tool does the opposite. Claude reads your HTML *and* your published component library at the same time, maps HTML elements to DS components, applies your token variables to every fill and text style, and builds a Figma file that's already part of your system.
+
+**If you update a token in your library and re-publish, the Figma nodes update automatically.**
 
 ---
 
 ## What you can do
-
-### Build UI from a description
-
-Describe a screen and Claude builds it in Figma — section by section, using your actual published components and design token variables.
-
-> *"Go to the 'Screens' page in my design file and build a new dashboard on the artboard called 'Overview'. Use the top-nav shell. Include: 4 KPI metric cards, a line chart of weekly activity, a data table with sortable columns, and a donut chart by category."*
 
 ### Translate an HTML prototype into Figma
 
 Have an existing HTML file — a prototype, a coded mockup, a landing page? Claude reads it and recreates it inside Figma using your design system instead of hardcoded values.
 
 > *"Here's an HTML file I built as a prototype. Translate it into Figma on the 'Prototypes' page, artboard 'Onboarding v2'. Use my design system components wherever possible — match the layout, hierarchy, and content."*
+
+### Build UI from a description
+
+Describe a screen and Claude builds it in Figma — section by section, using your actual published components and design token variables.
+
+> *"Go to the 'Screens' page in my design file and build a new dashboard on the artboard called 'Overview'. Use the top-nav shell. Include: 4 KPI metric cards, a line chart of weekly activity, a data table with sortable columns, and a donut chart by category."*
 
 ### Target specific library components and variables
 
@@ -225,6 +227,12 @@ Claude uses Figma's official MCP server to inspect designs, discover node IDs, a
 Claude calls tools in `mcp.js`. Each call is an HTTP POST to `bridge.js` running locally on your machine. The bridge forwards the instruction to the Figma plugin over WebSocket. The plugin executes it using Figma's Plugin API and returns the new node ID. Claude uses that ID as the parent for the next element.
 
 All variable bindings are real — nodes created this way use your actual design token variables, not hardcoded values. If you update a token in your library and re-publish, the nodes update automatically.
+
+---
+
+## Privacy
+
+This tool runs entirely on your machine. No design data, component names, token values, or HTML content is sent to any external server. The only outbound network call is to the Figma REST API to resolve published component keys using your Personal Access Token — the same call Figma's own plugins make.
 
 ---
 

@@ -1,0 +1,117 @@
+{
+  "$schema": "https://glama.ai/mcp/schema.json",
+  "name": "html-to-figma-design-system",
+  "displayName": "HTML to Figma Design System",
+  "description": "MCP server that translates HTML prototypes into Figma using your design system's published components and design token variables. The only tool that produces DS-native Figma output — real component instances and token bindings, not hardcoded shapes.",
+  "homepage": "https://github.com/miapre/html-to-figma-design-system",
+  "license": "MIT",
+  "categories": ["design", "figma", "productivity"],
+  "tags": ["figma", "design-system", "html-to-figma", "mcp", "design-tokens", "model-context-protocol", "claude"],
+  "runtime": "node",
+  "tools": [
+    {
+      "name": "figma_insert_component",
+      "description": "Insert a published library component instance into a Figma frame"
+    },
+    {
+      "name": "figma_create_frame",
+      "description": "Create an auto-layout frame with design token variable bindings"
+    },
+    {
+      "name": "figma_create_text",
+      "description": "Create a text node bound to a DS text style and color variable"
+    },
+    {
+      "name": "figma_create_rectangle",
+      "description": "Create a rectangle bound to a DS color variable"
+    },
+    {
+      "name": "figma_create_chart",
+      "description": "Render a chart (scatter, line, donut, bar) in a single call"
+    },
+    {
+      "name": "figma_batch",
+      "description": "Execute multiple Figma operations in a single round trip"
+    },
+    {
+      "name": "figma_set_component_text",
+      "description": "Set a text property on a component instance"
+    },
+    {
+      "name": "figma_set_node_fill",
+      "description": "Apply a DS color variable to any node"
+    },
+    {
+      "name": "figma_set_layout_sizing",
+      "description": "Adjust sizing, alignment, padding, or dimensions on a node"
+    },
+    {
+      "name": "figma_set_variant",
+      "description": "Set a variant or boolean property on a component instance"
+    },
+    {
+      "name": "figma_set_visibility",
+      "description": "Show or hide a Figma node"
+    },
+    {
+      "name": "figma_swap_main_component",
+      "description": "Swap a component instance to a different variant"
+    },
+    {
+      "name": "figma_replace_component",
+      "description": "Replace a node with a new component at the same position"
+    },
+    {
+      "name": "figma_move_node",
+      "description": "Reorder a node within its parent"
+    },
+    {
+      "name": "figma_delete_node",
+      "description": "Delete a node from the Figma document"
+    },
+    {
+      "name": "figma_get_node_props",
+      "description": "Get component properties and text layers for a node"
+    },
+    {
+      "name": "figma_get_node_children",
+      "description": "List direct children of a node"
+    },
+    {
+      "name": "figma_get_node_parent",
+      "description": "Get parent and siblings of a node"
+    },
+    {
+      "name": "figma_get_text_info",
+      "description": "Get DS text style and color variable of a text node"
+    },
+    {
+      "name": "figma_list_text_styles",
+      "description": "List all DS text styles with their IDs"
+    },
+    {
+      "name": "figma_get_component_variants",
+      "description": "List all variant options in a component set"
+    },
+    {
+      "name": "figma_get_selection",
+      "description": "Get currently selected node IDs and dimensions"
+    },
+    {
+      "name": "figma_select_node",
+      "description": "Select and zoom to a node by ID"
+    },
+    {
+      "name": "figma_get_page_nodes",
+      "description": "List all top-level nodes on the current page"
+    },
+    {
+      "name": "figma_get_pages",
+      "description": "List all pages in the document"
+    },
+    {
+      "name": "figma_change_page",
+      "description": "Switch to a different page in the Figma document"
+    }
+  ]
+}

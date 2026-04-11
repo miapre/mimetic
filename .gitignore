@@ -7,3 +7,5 @@ build_*.py
 patch_*.py
 builds/
 research/
+docs/html-to-figma-run*.html
+docs/html-to-figma-perf-audit.html
