@@ -46,6 +46,37 @@ Do not copy implementations. Use findings to inform decisions in later phases.
 
 ---
 
+## Phase 0.5 — DOM rendering (optional, non-blocking)
+
+**Objective:** Capture the fully rendered DOM state before static parsing when the HTML is JavaScript-rendered.
+
+**When to activate:**
+- HTML contains `<script>` tags, React/Vue/Svelte output, dynamic class names, or references external JS bundles
+- Phase 1 static parse returns runtime-rendered content warnings for significant sections
+- A headless browser environment (Playwright or Puppeteer) is available
+
+**When to skip:**
+- HTML is fully static (no JS, no framework)
+- Playwright is not installed — do not block execution on its absence
+
+**Procedure:**
+1. Load the HTML file in a headless browser (Playwright preferred)
+2. Wait for `networkidle` or `DOMContentLoaded` — do not proceed on a bare load event
+3. Capture for each visible node:
+   - Computed styles via `getComputedStyle` — resolved values, not raw CSS
+   - Bounding box via `getBoundingClientRect`
+   - Final text content (post-JS)
+   - Actual class names (post-JS, not source attributes)
+4. Serialize to JSON and pass to Phase 1 as the primary input
+
+**Rules:**
+- If Playwright is unavailable, skip silently — Phase 1 runs on static HTML as normal
+- Do not invent content for nodes not present in the rendered output
+- Record in the Phase 6 report whether rendered DOM or static HTML was used as the Phase 1 input
+- If the rendered capture fails partway through, fall back to static HTML for the affected sections — do not abort
+
+---
+
 ## Phase 1 — Parsing and layout
 
 **Objective:** Build a reliable structural representation of the HTML. Do not use AI for this phase — parse deterministically.
@@ -104,12 +135,17 @@ Use visual features, position, repetition, and context to classify. A repeated s
 
 ## Phase 2.5 — Design system inspection
 
-**Objective:** Discover actual variable paths and naming conventions before mapping.
+**Objective:** Discover actual variable paths, naming conventions, component keys, and text style IDs before mapping.
 
 Rules:
 - Inspect available design system variables before resolution
 - Do not assume naming formats
 - Use discovered variable paths in Phase 3 mappings
+- Use `search_design_system` to discover available components and retrieve their `componentKey` hashes
+- Record componentKey for every component that will be inserted in Phase 4
+- Do not rely on REST lookup to resolve componentKey at runtime — it requires a token that may not be loaded
+- Use `figma_list_text_styles` to discover available DS text style IDs — record the full ID (e.g. "S:abc123,7649:603") for every style that will be used in Phase 4 text node construction
+- Use `figma_get_node_props` on any existing instance to inspect what component properties it exposes before attempting to set them
 - If variable structure cannot be determined:
   - flag as DS ambiguity
   - proceed with best-effort mapping
@@ -140,6 +176,34 @@ Primitive fallback depth rule:
   - text
   - hierarchy
 - Only simplify if the internal structure cannot be inferred
+
+Approximate component matching rule:
+- If no exact DS component exists, evaluate whether a structurally similar component can represent the HTML element correctly
+- Similarity criteria: role, layout, interaction type, visual structure, optional affordances
+- When a DS component matches on role and structure, prefer using it even if minor visual differences exist or optional affordances are absent
+- Only fall back to primitives when the component structure cannot represent the element, or when the interaction type is fundamentally different
+- Do not reject a component solely because a non-critical affordance is missing
+- Example: a dropdown trigger in HTML may map to a DS dropdown trigger even if icon treatment differs
+
+Optional affordance rule:
+- Secondary affordances — icons, chevrons, decorative indicators, and similar non-core details — must not block component reuse when the component still matches the intended role and structure
+- Prioritize:
+  1. correct component role
+  2. correct structure
+  3. required content
+  4. optional affordances
+- If the chosen DS component supports the optional affordance, populate it
+- If it does not support it, keep the component and report the missing affordance
+- Only add an adjacent primitive affordance if it can be done cleanly without compromising layout or component semantics
+
+Spacing fidelity rule:
+- Spacing decisions must preserve the relational layout of the HTML, not just map to the nearest token
+- Derive spacing from HTML relationships: parent/child nesting, sibling groupings, and repetition patterns
+- Evaluate: parent padding, child spacing, sibling gaps, outer margins, and whether inserted components introduce hidden internal spacing
+- Prefer consistency across similar elements over exact pixel matching — choose the closest consistent spacing scale across a section; avoid mixing multiple spacing scales unnecessarily
+- If DS spacing tokens do not match exactly, pick the closest token that keeps the section internally consistent
+- If a DS component is inserted, reconcile its surrounding frame spacing against the HTML source
+- Do not accept a correctly resolved component with incorrect surrounding spacing as a successful result
 
 Out-of-DS color fallback:
 - If no suitable DS color token exists, do not silently hardcode the source color as a normal resolved token
@@ -199,8 +263,29 @@ Rules:
 Rules:
 - Every container is an auto layout frame — use `figma_create_frame` with `layoutMode: HORIZONTAL` or `VERTICAL`
 - Insert real library components via `figma_insert_component` when Phase 3 resolved to exact or approximate
+  - Use the `componentKey` hash from the Phase 2.5 DS search as the primary insertion mechanism
+  - Insertion path: `search_design_system` → `componentKey` → `figma_insert_component` → `importComponentByKeyAsync`
+  - Pass `componentKey` directly — do not require `nodeId` when `componentKey` is already known
+  - `componentKey` is the library-global identifier; `nodeId` is file-local and requires REST resolution (unreliable without a token)
 - Apply DS variables via `figma_apply_variable` — never pass raw hex or pixel values as hardcoded strings
 - Mirror the source hierarchy — nesting in Figma matches nesting in HTML
+
+Text style enforcement rule (non-negotiable):
+- Typography compliance is achieved through DS text styles — pass `textStyleId` bound to a named DS text style
+- Color compliance is achieved through DS color variables — pass `fillVariable` bound to a DS color variable path
+- Every text node must have both applied
+- Do not use: raw font properties (`fontSize`, `fontWeight`, `lineHeight`) or hardcoded color values
+- Raw font properties and hardcoded text colors remain forbidden regardless of context
+
+Text style validation rule:
+- After creating or updating any text node, verify that a DS text style (`textStyleId`) is applied and a DS color variable (`fillVariable`) is applied
+- If either is missing, treat the node as a construction failure — do not mark it complete
+- Fix before moving to the next node
+
+Text style fallback rule:
+- If a matching DS text style cannot be found for the intended style, do not silently fall back to raw font properties
+- Select the closest available DS text style instead
+- Record the mismatch explicitly — it must appear in the Phase 6 report under style compliance
 
 Auto layout sizing rule:
 - When creating any auto-layout frame with explicit dimensions (especially root frames), you must set sizing mode at creation time
@@ -222,6 +307,21 @@ Never:
 - Do not create or publish formal components to the design system library
 - Flatten structure for visual convenience
 
+Post insertion fit rule:
+- After inserting any large structural component, verify that it fits within the intended parent frame and artboard
+- Check for clipping, unintended cropping, or size mismatch between the component and its slot
+- If a component is larger or smaller than the intended slot:
+  - first attempt to adjust the surrounding layout to accommodate the component — do not discard a correct DS component due to minor size or spacing differences
+  - only fall back to a structurally correct primitive reconstruction if the component breaks screen structure or meaning and layout adjustment cannot resolve it
+- Do not count a component insertion as successful if the inserted component is visually clipped or structurally misfit
+- Large structural components that require this check: sidenavs, page headers, tables, paginations, large cards or panels
+
+Post-build reconciliation rule:
+- After all elements are constructed, perform a single reconciliation pass across the full layout
+- Adjust: spacing between components, padding inside containers, alignment across sections
+- Goal: the final Figma layout must visually match the HTML structure as closely as the DS allows
+- This pass must not: change component choices, alter content, or break hierarchy
+
 When no suitable component exists:
 - construct a local editable structure inside the generated Figma file
 - use only primitives, auto layout, and real design system variables
@@ -235,13 +335,17 @@ When no suitable component exists:
 
 Run before producing any output. Fix failures before continuing.
 
-| Check | Pass condition |
-|---|---|
-| Content | Every text node in the HTML exists in Figma with exact wording |
-| Structure | Figma hierarchy matches HTML hierarchy |
-| Auto layout | No frame uses absolute positioning where a stack was intended |
-| Variables | No hardcoded hex, font size, or spacing value in any node |
-| Consistency | Identical source elements resolved identically |
+| Check | Tool | Pass condition |
+|---|---|---|
+| Content | `figma_get_node_children` | Every text node in the HTML exists in Figma with exact wording |
+| Structure | `figma_get_node_parent` | Figma hierarchy matches HTML hierarchy |
+| Auto layout | `figma_get_node_children` | No frame uses absolute positioning where a stack was intended |
+| Text style compliance | `figma_get_text_info` | Every TEXT node has a `textStyleId` (DS text style) applied |
+| Color variable compliance | `figma_get_text_info` | Every TEXT node has a `fillVariable` (DS color variable) applied |
+| Variables | `figma_get_text_info` | No hardcoded hex, font size, or spacing value in any node |
+| Consistency | — | Identical source elements resolved identically |
+
+For text node compliance: call `figma_get_text_info` on a representative sample of created text nodes. Any node missing `textStyleId` or `fillVariable` is a construction failure — fix before moving to Phase 6.
 
 ---
 
@@ -273,6 +377,24 @@ Output as HTML file (not terminal text). Include:
 - Highlight repeated call patterns
 - Identify inefficiencies (e.g., required multi-call operations)
 - Estimate scaling impact for full screens
+
+**5a. Layout quality**
+- Explicitly report:
+  - spacing quality: sections with consistent spacing, sections with mismatched spacing, sections with poor layout coherence
+  - cropping or clipping on any inserted component
+  - fit issues after component insertion (component too large/small for its slot)
+  - approximate component matches accepted despite missing optional affordances (list the missing affordance and why the match was still accepted)
+- Distinguish these from bridge failures and DS architecture failures
+
+**5c. Style compliance**
+- Report the percentage of text nodes using a DS text style (`textStyleId`) and a DS color variable (`fillVariable`)
+- List any nodes using raw font properties (`fontSize`, `fontWeight`, `lineHeight`) or missing a color variable — these are construction failures, not style preferences
+- Note: typography compliance uses DS text styles; color compliance uses DS color variables — these are distinct mechanisms
+
+**5b. Component editability**
+- For every DS component that was inserted successfully, report whether it was also fully populated
+- Distinguish: insertion success vs property population success
+- If a component was inserted but required content could not be set (e.g. badge label not exposed as an editable property), report this explicitly as a DS architecture gap — not a bridge failure
 
 **6. Forward insights**
 - Possible reusable templates detected
@@ -372,10 +494,19 @@ Output: a "Design system knowledge" section in the Phase 6 report listing what w
 
 ## Bridge backlog (not part of v1 protocol)
 
-Bridge capability gaps discovered during real execution. These are future enhancements. They must not be treated as mandatory for protocol correctness unless a specific execution requires them.
+Bridge capability gaps discovered during real execution. These are future enhancements to the bridge or plugin layer. They must not be treated as mandatory for protocol correctness unless a specific execution requires them.
 
 - **SVG vector path support** — no primitive for arbitrary bezier curves, SVG path elements, or arrowhead markers; required for graph edges and flow diagrams
 - **CSS grid support** — bridge only supports HORIZONTAL/VERTICAL auto-layout; fixed-width multi-column grid layouts (e.g., gantt ruler rows, event rows) cannot be represented
 - **Form element support** — no primitive for `<input>`, `<select>`, `<checkbox>`; these must be approximated as text + frame constructs
 - **Mixed absolute/flex layout support** — no mechanism for placing absolutely positioned children inside an auto-layout parent; required for canvas-type panels where nodes have spatial coordinates
-- **Batched node creation** — each call is a round trip; large tables or waterfall rows with 50+ items are impractical without a batch create operation
+- **Batched node creation** ✓ resolved — use `figma_batch` with an `operations` array; all operations execute in a single bridge round trip
+
+---
+
+## Design system backlog (not part of v1 protocol)
+
+Design system architecture limitations discovered during real execution. These are gaps in the DS component library itself — not in the bridge. They must not be mislabeled as bridge failures.
+
+- **Badge cell content not exposed as editable property** — DS table cell components that visually include a badge (`Table cell/Badge`, `Table cell/Badges multiple`) do not expose the badge label as a top-level component property. `set_component_text` cannot inject status or category values when the text is nested inside an internal instance without an exposed property. Until the DS exposes a `label` property at the top level, these cells cannot be automatically populated with dynamic content. Workaround: manual edit post-build, or primitive replacement if content fidelity is required.
+- **Component property discoverability** ✓ resolved — use `figma_get_node_props` to inspect which named properties a component instance exposes; returns `componentProperties` and all nested `textLayers`.
