@@ -154,10 +154,12 @@ const server = http.createServer(async (req, res) => {
       // before the instruction is sent to the plugin.
       if (type === 'insert_component') {
         const { nodeId, fileKey } = params;
-        if (!nodeId) throw new Error('"params.nodeId" is required for insert_component');
+        // componentKey may be supplied directly (e.g. from a DS search result).
+        // nodeId is only required when componentKey is not already known.
+        if (!params.componentKey && !nodeId) throw new Error('"params.nodeId" or "params.componentKey" is required for insert_component');
         if (!fileKey) throw new Error('"params.fileKey" is required for insert_component');
 
-        if (!params.componentKey) {
+        if (nodeId && !params.componentKey) {
           try {
             params.componentKey = await fetchComponentKey(fileKey, nodeId);
           } catch (e) {

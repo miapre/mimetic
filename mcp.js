@@ -49,22 +49,24 @@ const TOOLS = [
   {
     name: 'figma_insert_component',
     description:
-      'Insert a library component instance into a Figma frame by node ID. ' +
+      'Insert a library component instance into a Figma frame. ' +
       'Use this to insert any published component from your design system library — ' +
-      'navigation bars, headers, footers, section titles, cards, and so on. ' +
-      'This inserts the real library instance — not a recreation.',
+      'navigation bars, headers, footers, section titles, cards, buttons, badges, and so on. ' +
+      'This inserts the real library instance — not a recreation. ' +
+      'Provide componentKey (preferred, from a DS search result) OR nodeId (component node ID in the library file).',
     inputSchema: {
       type: 'object',
       properties: {
-        nodeId:       { type: 'string', description: 'Component node ID, e.g. "1234:56789"' },
-        fileKey:      { type: 'string', description: 'Figma file key from the URL of your design system file.' },
+        componentKey: { type: 'string', description: 'Component key hash from a design system search result, e.g. "aa5d03848a71259677d1aaff85d84383fde7b485". Preferred over nodeId.' },
+        nodeId:       { type: 'string', description: 'Component node ID in the library file, e.g. "1234:56789". Only needed when componentKey is unknown.' },
+        fileKey:      { type: 'string', description: 'Figma file key of the design system library file.' },
         parentNodeId: { type: 'string', description: 'Node ID of the parent frame. Omit to place on current page.' },
         x:            { type: 'number' },
         y:            { type: 'number' },
         width:        { type: 'number', description: 'Resize instance to this width after insertion.' },
         height:       { type: 'number', description: 'Resize instance to this height after insertion.' },
       },
-      required: ['nodeId', 'fileKey'],
+      required: ['fileKey'],
     },
   },
 
