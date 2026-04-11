@@ -14,6 +14,7 @@ How Claude should convert an HTML file into a Figma design using a real design s
 - Auditable decisions — every mapping choice must be traceable
 - Systemic consistency — identical elements resolve identically
 - Deterministic by default — same input produces same output
+- Never break structural layout to improve visual fidelity
 
 ---
 
@@ -133,13 +134,27 @@ Rules:
 - Insert real library components via `figma_insert_component` when Phase 3 resolved to exact or approximate
 - Apply DS variables via `figma_apply_variable` — never pass raw hex or pixel values as hardcoded strings
 - Mirror the source hierarchy — nesting in Figma matches nesting in HTML
-- Name nodes clearly: `section/metrics`, `row/header`, `card/item-1`, etc.
+- Name nodes using a consistent pattern:
+  - section/*
+  - row/*
+  - card/*
+  - item/*
+  - label/*
+  - value/*
+- Avoid arbitrary or inconsistent naming
 
 Never:
 - Use absolute positioning as a substitute for missing layout reasoning
 - Hardcode colors, font sizes, or spacing values
-- Create components — use existing library components only
+- Do not create or publish formal components to the design system library
 - Flatten structure for visual convenience
+
+When no suitable component exists:
+- construct a local editable structure inside the generated Figma file
+- use only primitives, auto layout, and real design system variables
+- ensure the structure is clean and reusable
+- treat this as a component candidate, not a design system component
+- surface it in the report under component candidates
 
 ---
 
@@ -211,6 +226,8 @@ Rules:
 - Do not overwrite base rules
 - Do not mix design systems
 - Flag all captures for user review — do not apply automatically
+- Captured knowledge must not modify behavior during the current execution
+- It may only be used in future runs if explicitly loaded
 
 Output: a "Design system knowledge" section in the Phase 6 report listing what was learned, why, and at what confidence level.
 
@@ -229,8 +246,12 @@ Output: a "Design system knowledge" section in the Phase 6 report listing what w
 - Chart title and subtitle
 
 **Construction rules:**
-- Use `figma_create_chart` if the chart type is supported
-- If not supported: build from primitives, editable and not rasterized
+- Do not assume chart-specific tools exist
+- If no chart-specific tool is available:
+  - construct charts using primitives
+  - ensure full editability
+  - preserve axes, series, labels, and legends
+  - never rasterize charts
 - Use DS color variables for all series colors — never hardcode hex
 - Preserve all text (axis labels, tick values, legend, title) as real text nodes
 
