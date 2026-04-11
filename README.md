@@ -149,19 +149,47 @@ Prefer to set things up manually, or want to understand each step? See **[docs/G
 
 Once the MCP is registered, Claude has access to:
 
+**Build**
+
 | Tool | What it does |
 |---|---|
 | `figma_create_frame` | Create an auto-layout frame (shells, cards, rows, columns) |
-| `figma_create_text` | Create a text node with font and color tokens |
+| `figma_create_text` | Create a text node bound to DS text style and color variable |
 | `figma_create_rectangle` | Create a rectangle (dividers, placeholders, blocks) |
-| `figma_insert_component` | Insert a published library component by node ID |
-| `figma_set_component_text` | Set text on a component instance |
-| `figma_set_layout_sizing` | Adjust layout grow/align on an existing node |
 | `figma_create_chart` | Render a chart (scatter, line, donut, bar) in a single call |
+| `figma_insert_component` | Insert a published library component by key or node ID |
+| `figma_batch` | Execute multiple operations in a single round trip (tables, lists, grids) |
+
+**Edit**
+
+| Tool | What it does |
+|---|---|
+| `figma_set_component_text` | Set a text property on a component instance |
+| `figma_set_text` | Set text on a specific nested TEXT node by direct ID |
+| `figma_set_node_fill` | Apply a DS color variable to any node or its vector descendant |
+| `figma_set_layout_sizing` | Adjust sizing, alignment, padding, or dimensions on a node |
+| `figma_set_variant` | Set a VARIANT or BOOLEAN component property directly |
+| `figma_set_visibility` | Show or hide a node |
+| `figma_swap_main_component` | Swap an instance to a different variant by component key |
+| `figma_replace_component` | Replace a node with a new component at the same parent position |
+| `figma_move_node` | Reorder a node within its parent |
+| `figma_delete_node` | Delete a node |
+
+**Inspect**
+
+| Tool | What it does |
+|---|---|
+| `figma_get_node_props` | Get component properties and text layers for a node |
+| `figma_get_node_children` | List direct children of a node |
+| `figma_get_node_parent` | Get parent and siblings of a node |
+| `figma_get_text_info` | Get DS text style ID and color variable of a TEXT node |
+| `figma_get_component_variants` | List all variant options in a component set |
+| `figma_list_text_styles` | List all DS text styles with their IDs |
 | `figma_get_selection` | Get currently selected node IDs and dimensions |
 | `figma_select_node` | Select and zoom to a node by ID |
 | `figma_get_page_nodes` | List all top-level nodes on the current page |
-| `figma_delete_node` | Delete a node |
+| `figma_get_pages` | List all pages in the document |
+| `figma_change_page` | Switch to a different page |
 
 ---
 

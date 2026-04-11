@@ -42,10 +42,96 @@ async function callBridge(type, params = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Pre-execution validator
+//
+// Catches common payload errors before they hit the plugin, where they would
+// produce cryptic "object is not extensible" errors or silently broken layouts.
+// ---------------------------------------------------------------------------
+
+// Properties that only exist on FrameNode / auto-layout containers.
+// Passing these to text or rectangle nodes crashes the Plugin API.
+const FRAME_ONLY_PROPS = new Set([
+  'direction', 'gap', 'itemSpacing', 'clipsContent',
+  'primaryAxisSizingMode', 'counterAxisSizingMode',
+  'primaryAxisAlignItems', 'counterAxisAlignItems',
+  'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+]);
+
+function validate(toolName, args) {
+  const errors = [];
+
+  // Text nodes cannot receive auto-layout or frame-only properties.
+  if (toolName === 'figma_create_text') {
+    for (const prop of FRAME_ONLY_PROPS) {
+      if (args[prop] !== undefined) {
+        errors.push(`"${prop}" is not valid on figma_create_text (frame-only property — use figma_create_frame instead)`);
+      }
+    }
+  }
+
+  // Rectangle nodes: layout and axis properties are also invalid.
+  if (toolName === 'figma_create_rectangle') {
+    const rectInvalid = [
+      'direction', 'gap', 'itemSpacing', 'clipsContent',
+      'primaryAxisSizingMode', 'counterAxisSizingMode',
+      'primaryAxisAlignItems', 'counterAxisAlignItems',
+    ];
+    for (const prop of rectInvalid) {
+      if (args[prop] !== undefined) {
+        errors.push(`"${prop}" is not valid on figma_create_rectangle`);
+      }
+    }
+  }
+
+  // Component insertion requires componentKey or nodeId.
+  if (toolName === 'figma_insert_component') {
+    if (!args.componentKey && !args.nodeId) {
+      errors.push('"componentKey" (preferred) or "nodeId" is required for figma_insert_component');
+    }
+  }
+
+  // set_component_text requires nodeId, propertyName, value.
+  if (toolName === 'figma_set_component_text') {
+    if (!args.nodeId)       errors.push('"nodeId" is required for figma_set_component_text');
+    if (!args.propertyName) errors.push('"propertyName" is required for figma_set_component_text');
+    if (args.value === undefined) errors.push('"value" is required for figma_set_component_text');
+  }
+
+  // batch requires a non-empty operations array.
+  if (toolName === 'figma_batch') {
+    if (!Array.isArray(args.operations) || args.operations.length === 0) {
+      errors.push('"operations" must be a non-empty array for figma_batch');
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Validation error in ${toolName}:\n${errors.map(e => `  • ${e}`).join('\n')}`);
+  }
+}
+
+// Auto-fix: when an auto-layout frame has explicit width + height but no
+// primaryAxisSizingMode, default to FIXED so the frame does not collapse to HUG.
+function autofix(toolName, args) {
+  if (toolName === 'figma_create_frame') {
+    if (
+      args.width !== undefined &&
+      args.height !== undefined &&
+      args.direction && args.direction !== 'NONE' &&
+      !args.primaryAxisSizingMode
+    ) {
+      args.primaryAxisSizingMode = 'FIXED';
+    }
+  }
+  return args;
+}
+
+// ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
 const TOOLS = [
+  // ── Write tools ──────────────────────────────────────────────────────────
+
   {
     name: 'figma_insert_component',
     description:
@@ -57,8 +143,8 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        componentKey: { type: 'string', description: 'Component key hash from a design system search result, e.g. "aa5d03848a71259677d1aaff85d84383fde7b485". Preferred over nodeId.' },
-        nodeId:       { type: 'string', description: 'Component node ID in the library file, e.g. "1234:56789". Only needed when componentKey is unknown.' },
+        componentKey: { type: 'string', description: 'Component key hash from a design system search result. Preferred over nodeId.' },
+        nodeId:       { type: 'string', description: 'Component node ID in the library file. Only needed when componentKey is unknown.' },
         fileKey:      { type: 'string', description: 'Figma file key of the design system library file.' },
         parentNodeId: { type: 'string', description: 'Node ID of the parent frame. Omit to place on current page.' },
         x:            { type: 'number' },
@@ -94,7 +180,7 @@ const TOOLS = [
         paddingLeft:   { type: 'number' },
         primaryAxisSizingMode: {
           type: 'string', enum: ['FIXED', 'AUTO'],
-          description: 'AUTO = hug contents along primary axis.',
+          description: 'AUTO = hug contents along primary axis. Defaults to FIXED when width+height are set.',
         },
         counterAxisSizingMode: {
           type: 'string', enum: ['FIXED', 'AUTO'],
@@ -108,12 +194,9 @@ const TOOLS = [
         },
         fillVariable: {
           type: 'string',
-          description: 'Design token variable path for background fill, e.g. "Colors/Background/bg-primary". The plugin resolves this to the actual Figma variable.',
+          description: 'Design token variable path for background fill, e.g. "Colors/Background/bg-primary".',
         },
-        fillHex: {
-          type: 'string',
-          description: 'Fallback hex color if fillVariable is not available, e.g. "#F9FAFB".',
-        },
+        fillHex:      { type: 'string', description: 'Fallback hex color if fillVariable is not available.' },
         fillNone:     { type: 'boolean', description: 'Set true for no fill (transparent).' },
         strokeVariable: { type: 'string', description: 'Variable path for border color.' },
         strokeHex:    { type: 'string', description: 'Fallback hex for border color.' },
@@ -131,17 +214,22 @@ const TOOLS = [
 
   {
     name: 'figma_create_text',
-    description: 'Create a text node with font and color tokens.',
+    description:
+      'Create a text node. ' +
+      'For DS compliance, always pass textStyleId (a DS text style ID from figma_list_text_styles) ' +
+      'AND fillVariable (a DS color variable path). ' +
+      'Raw fontSize/fontWeight/lineHeight are accepted as fallbacks but DS styles are preferred.',
     inputSchema: {
       type: 'object',
       properties: {
         text:         { type: 'string', description: 'Text content.' },
         parentNodeId: { type: 'string' },
-        fillVariable: { type: 'string', description: 'Color token path, e.g. "Colors/Text/text-primary"' },
-        fillHex:      { type: 'string', description: 'Fallback hex color, e.g. "#101828".' },
-        fontSize:     { type: 'number' },
-        fontWeight:   { type: 'number', enum: [400, 500, 600, 700] },
-        lineHeight:   { type: 'number', description: 'Line height in px.' },
+        textStyleId:  { type: 'string', description: 'DS text style ID (e.g. "S:abc123,7649:603"). Use figma_list_text_styles to discover IDs.' },
+        fillVariable: { type: 'string', description: 'Color token path, e.g. "Colors/Text/text-primary".' },
+        fillHex:      { type: 'string', description: 'Fallback hex color.' },
+        fontSize:     { type: 'number', description: 'Fallback — prefer textStyleId.' },
+        fontWeight:   { type: 'number', enum: [400, 500, 600, 700], description: 'Fallback — prefer textStyleId.' },
+        lineHeight:   { type: 'number', description: 'Line height in px. Fallback — prefer textStyleId.' },
         textAlignHorizontal: { type: 'string', enum: ['LEFT', 'CENTER', 'RIGHT'] },
         width:        { type: 'number', description: 'Fixed width — text wraps at this width.' },
         layoutGrow:   { type: 'number' },
@@ -182,7 +270,8 @@ const TOOLS = [
     name: 'figma_set_component_text',
     description:
       'Set a text property on a component instance. ' +
-      'Use after inserting a component instance to set a text property on it.',
+      'Tries component properties first, then falls back to text layer name search. ' +
+      'Use figma_get_node_props to discover available property names before calling this.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -196,7 +285,7 @@ const TOOLS = [
 
   {
     name: 'figma_set_layout_sizing',
-    description: 'Adjust layout sizing and alignment of a node within its auto-layout parent.',
+    description: 'Adjust layout sizing, alignment, padding, or explicit dimensions of a node within its auto-layout parent.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -205,6 +294,307 @@ const TOOLS = [
         layoutAlign:           { type: 'string', enum: ['MIN', 'CENTER', 'MAX', 'STRETCH', 'INHERIT'] },
         primaryAxisSizingMode: { type: 'string', enum: ['FIXED', 'AUTO'] },
         counterAxisSizingMode: { type: 'string', enum: ['FIXED', 'AUTO'] },
+        layoutSizingHorizontal: { type: 'string', enum: ['FILL', 'HUG', 'FIXED'] },
+        layoutSizingVertical:   { type: 'string', enum: ['FILL', 'HUG', 'FIXED'] },
+        paddingTop:    { type: 'number' },
+        paddingRight:  { type: 'number' },
+        paddingBottom: { type: 'number' },
+        paddingLeft:   { type: 'number' },
+        width:         { type: 'number' },
+        height:        { type: 'number' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_set_text',
+    description:
+      'Set text content on a TEXT node directly by its node ID. ' +
+      'Use this to target a specific nested text node inside a component instance ' +
+      'when figma_set_component_text cannot reach it by property name. ' +
+      'Get nested text node IDs from figma_get_node_props.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Node ID of the TEXT node (can be a nested "I..." ID).' },
+        value:  { type: 'string', description: 'New text content.' },
+      },
+      required: ['nodeId', 'value'],
+    },
+  },
+
+  {
+    name: 'figma_set_node_fill',
+    description:
+      'Set a fill or stroke color variable on any node. ' +
+      'For component instances, walks to the first vector-type descendant (the actual colored shape inside an icon). ' +
+      'Use this to apply DS color variables to nodes after insertion.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId:       { type: 'string' },
+        variablePath: { type: 'string', description: 'DS color variable path, e.g. "Colors/Icon/icon-primary".' },
+        hexFallback:  { type: 'string', description: 'Hex color fallback if variable cannot be resolved.' },
+        target:       { type: 'string', enum: ['fill', 'stroke'], description: 'Default: "fill".' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_set_visibility',
+    description: 'Show or hide any node.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId:  { type: 'string' },
+        visible: { type: 'boolean' },
+      },
+      required: ['nodeId', 'visible'],
+    },
+  },
+
+  {
+    name: 'figma_set_variant',
+    description:
+      'Directly set a VARIANT or BOOLEAN component property on an instance. ' +
+      'Use this when figma_set_component_text fails due to "existing errors" on a nested instance. ' +
+      'Use figma_get_component_variants to discover available variant values first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId:       { type: 'string' },
+        propertyName: { type: 'string', description: 'Component property name, e.g. "State" or "size".' },
+        value:        { description: 'String for VARIANT, boolean for BOOLEAN.' },
+      },
+      required: ['nodeId', 'propertyName', 'value'],
+    },
+  },
+
+  {
+    name: 'figma_swap_main_component',
+    description:
+      'Swap the main component of an INSTANCE node to a different component (by key). ' +
+      'Changes which variant the instance is based on — bypasses setProperties entirely. ' +
+      'Use figma_get_component_variants to find available variant keys.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId:       { type: 'string', description: 'Node ID of the INSTANCE to swap.' },
+        componentKey: { type: 'string', description: 'Key of the new component to swap to.' },
+      },
+      required: ['nodeId', 'componentKey'],
+    },
+  },
+
+  {
+    name: 'figma_replace_component',
+    description:
+      'Replace an existing node with a new component instance at the same position in its parent. ' +
+      'Deletes the target node, inserts the new component at the same parent index. ' +
+      'Use this to fix a wrong component insertion without rebuilding the parent frame.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId:       { type: 'string', description: 'Node ID of the node to replace.' },
+        componentKey: { type: 'string', description: 'Key of the replacement component.' },
+        fileKey:      { type: 'string' },
+        layoutSizingHorizontal: { type: 'string', enum: ['FILL', 'HUG', 'FIXED'] },
+        layoutSizingVertical:   { type: 'string', enum: ['FILL', 'HUG', 'FIXED'] },
+        height:       { type: 'number' },
+      },
+      required: ['nodeId', 'componentKey'],
+    },
+  },
+
+  {
+    name: 'figma_move_node',
+    description:
+      'Reorder a node within its current parent by moving it to a specific child index. ' +
+      'Index 0 = front of stack (bottom in layer panel). ' +
+      'Use figma_get_node_parent to see current sibling order before moving.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+        index:  { type: 'number', description: 'Target index within the parent children array.' },
+      },
+      required: ['nodeId', 'index'],
+    },
+  },
+
+  {
+    name: 'figma_delete_node',
+    description: 'Delete a node from the Figma document.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_create_chart',
+    description:
+      'Render a chart directly in Figma. All data is sent in one call — no per-element round trips. ' +
+      'Supported chart types:\n' +
+      '  • scatter / jitter — scatter plot with categorical Y bands\n' +
+      '  • line — line chart with optional area fill, smooth curves, multi-series\n' +
+      '  • donut / pie — donut or pie chart with legend and optional center label\n' +
+      '  • bar / histogram — vertical bar chart with optional stacked segments; supports annotation vlines',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chartType: {
+          type: 'string',
+          enum: ['scatter', 'jitter', 'line', 'area', 'donut', 'pie', 'bar', 'histogram'],
+        },
+        parentNodeId: { type: 'string' },
+        name:         { type: 'string' },
+        width:        { type: 'number' },
+        height:       { type: 'number' },
+        bars:         { type: 'array' },
+        annotations:  { type: 'array' },
+        data:         { type: 'array' },
+        xDomain:      { type: 'array', items: { type: 'number' } },
+        categories:   { type: 'object' },
+        categoryOrder: { type: 'array', items: { type: 'string' } },
+        dotSize:      { type: 'number' },
+        jitter:       { type: 'boolean' },
+        xTicks:       { type: 'array' },
+        tickSuffix:   { type: 'string' },
+        xLabel:       { type: 'string' },
+        series:       { type: 'array' },
+        yDomain:      { type: 'array', items: { type: 'number' } },
+        yTicks:       { type: 'array' },
+        xTickSuffix:  { type: 'string' },
+        yTickSuffix:  { type: 'string' },
+        yLabel:       { type: 'string' },
+        size:         { type: 'number' },
+        innerRadius:  { type: 'number' },
+        centerLabel:  { type: 'string' },
+        centerSubLabel: { type: 'string' },
+      },
+      required: ['chartType'],
+    },
+  },
+
+  {
+    name: 'figma_batch',
+    description:
+      'Execute multiple Figma operations in a single bridge round trip. ' +
+      'Use this for repetitive structures — table rows, list items, grid cells, repeated cards — ' +
+      'where individual calls would be impractical. ' +
+      'Each operation in the array is a { tool, params } object using the same tool names as the individual tools ' +
+      '(without the figma_ prefix internally). ' +
+      'Returns an array of results in the same order as the operations. ' +
+      'A failed operation is reported with { ok: false, error } and does not stop subsequent operations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        operations: {
+          type: 'array',
+          description:
+            'Array of operations to execute. Each: { tool: string, params: object }. ' +
+            'tool values: "create_frame", "create_text", "create_rectangle", "set_component_text", ' +
+            '"set_layout_sizing", "set_text", "set_node_fill", "set_visibility", "insert_component".',
+          items: {
+            type: 'object',
+            properties: {
+              tool:   { type: 'string' },
+              params: { type: 'object' },
+            },
+            required: ['tool', 'params'],
+          },
+        },
+      },
+      required: ['operations'],
+    },
+  },
+
+  // ── Read / inspect tools ─────────────────────────────────────────────────
+
+  {
+    name: 'figma_get_node_props',
+    description:
+      'Get the component properties and all text layers of a node. ' +
+      'Call this before figma_set_component_text to discover valid property names. ' +
+      'Also useful for Phase 5 validation — verify DS text styles are applied. ' +
+      'Returns: { type, name, componentProperties: [{key, type, value}], textLayers: [{id, name, chars}] }',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_get_node_children',
+    description:
+      'List all direct children of a node with their IDs, names, types, and dimensions. ' +
+      'Use after construction to verify hierarchy or find a specific child node ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_get_node_parent',
+    description:
+      'Get the parent of a node, including all sibling children with their IDs and positions. ' +
+      'Use to understand the current layout context or verify sibling order.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_get_text_info',
+    description:
+      'Get the text style ID, font properties, and fill variable of a TEXT node. ' +
+      'Use during Phase 5 validation to verify DS text style and color variable compliance. ' +
+      'Returns: { textStyleId, fontName, fontSize, characters, fillVariable }',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_list_text_styles',
+    description:
+      'List all local text styles in the document with their IDs and names. ' +
+      'Call this during Phase 2.5 (DS inspection) to discover available text style IDs ' +
+      'before constructing text nodes. Use the returned IDs as textStyleId in figma_create_text.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+
+  {
+    name: 'figma_get_component_variants',
+    description:
+      'Get all variant siblings of an instance\'s main component (all options in the component set). ' +
+      'Use this to discover available variant values before calling figma_set_variant or figma_swap_main_component. ' +
+      'Returns: { variants: [{id, key, name}] }',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Node ID of an INSTANCE node.' },
       },
       required: ['nodeId'],
     },
@@ -235,93 +625,22 @@ const TOOLS = [
   },
 
   {
-    name: 'figma_delete_node',
-    description: 'Delete a node from the Figma document.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        nodeId: { type: 'string' },
-      },
-      required: ['nodeId'],
-    },
+    name: 'figma_get_pages',
+    description:
+      'List all pages in the Figma document with their IDs and names. ' +
+      'Use before figma_change_page to find the correct pageId.',
+    inputSchema: { type: 'object', properties: {} },
   },
 
   {
-    name: 'figma_create_chart',
-    description:
-      'Render a chart directly in Figma. All data is sent in one call — no per-element round trips. ' +
-      'Supported chart types:\n' +
-      '  • scatter / jitter — scatter plot with categorical Y bands (e.g. Correct vs Failed vs latency)\n' +
-      '  • line — line chart with optional area fill, smooth curves, multi-series\n' +
-      '  • donut / pie — donut or pie chart with legend and optional center label\n' +
-      '  • bar / histogram — vertical bar chart with optional stacked segments per bucket; supports annotation vlines',
+    name: 'figma_change_page',
+    description: 'Switch the active Figma page. Subsequent operations will target the new page.',
     inputSchema: {
       type: 'object',
       properties: {
-        chartType: {
-          type: 'string',
-          enum: ['scatter', 'jitter', 'line', 'area', 'donut', 'pie', 'bar', 'histogram'],
-          description: 'Type of chart to render.',
-        },
-        parentNodeId: { type: 'string', description: 'Parent frame to insert the chart into.' },
-        name:         { type: 'string', description: 'Layer name for the chart frame.' },
-        width:        { type: 'number', description: 'Total chart width in px.' },
-        height:       { type: 'number', description: 'Total chart height in px (scatter/line).' },
-
-        // ── bar / histogram ──
-        bars: {
-          type: 'array',
-          description:
-            'bar: [{label: string, segments: [{category: string, value: number}, ...]}, ...] — one entry per bucket.',
-        },
-        annotations: {
-          type: 'array',
-          description:
-            'bar: [{type: "vline", barIndex: number, label: string, color: hex}] — vertical annotation lines.',
-        },
-
-        // ── scatter / jitter ──
-        data: {
-          type: 'array',
-          description:
-            'scatter: [{x: number, category: string}, ...] — one entry per data point.\n' +
-            'donut/pie: [{label: string, value: number, color: hex}, ...]',
-        },
-        xDomain:       { type: 'array', items: { type: 'number' }, description: '[min, max] for x-axis.' },
-        categories: {
-          type: 'object',
-          description: 'scatter: category name → hex fill color. E.g. {"Correct":"#17B26A","Failed":"#F97066"}.',
-        },
-        categoryOrder: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'scatter: top-to-bottom order of category bands.',
-        },
-        dotSize:     { type: 'number', description: 'Dot diameter in px. Default 7.' },
-        jitter:      { type: 'boolean', description: 'Add deterministic jitter to scatter dots. Default true.' },
-        xTicks:      { type: 'array', description: 'Values to draw grid lines and labels at on X axis.' },
-        tickSuffix:  { type: 'string', description: 'scatter: suffix for x tick labels, e.g. "s".' },
-        xLabel:      { type: 'string', description: 'X-axis title.' },
-
-        // ── line ──
-        series: {
-          type: 'array',
-          description:
-            'line: [{name, color, data: [{x, y}, ...], area: boolean, strokeWidth: number}, ...]',
-        },
-        yDomain:       { type: 'array', items: { type: 'number' }, description: '[min, max] for y-axis (line).' },
-        yTicks:        { type: 'array', description: 'Y-axis tick values (line).' },
-        xTickSuffix:   { type: 'string', description: 'line: suffix for x tick labels.' },
-        yTickSuffix:   { type: 'string', description: 'line: suffix for y tick labels.' },
-        yLabel:        { type: 'string', description: 'Y-axis title (line).' },
-
-        // ── donut / pie ──
-        size:           { type: 'number', description: 'donut: outer diameter in px. Default 240.' },
-        innerRadius:    { type: 'number', description: 'donut: 0 = pie, 0.6 = donut. Default 0.6.' },
-        centerLabel:    { type: 'string', description: 'donut: large text in the center hole.' },
-        centerSubLabel: { type: 'string', description: 'donut: small subtitle below center label.' },
+        pageId:   { type: 'string', description: 'Page node ID from figma_get_pages.' },
+        pageName: { type: 'string', description: 'Page name — used if pageId is not provided.' },
       },
-      required: ['chartType'],
     },
   },
 ];
@@ -330,20 +649,38 @@ const TOOLS = [
 // Tool → bridge instruction mapping
 // ---------------------------------------------------------------------------
 
+// All tools in this set pass params directly to the bridge.
+// The bridge type is derived by stripping the "figma_" prefix.
 const DIRECT_PASS = new Set([
   'figma_create_frame',
   'figma_create_text',
   'figma_create_rectangle',
   'figma_set_component_text',
   'figma_set_layout_sizing',
+  'figma_set_text',
+  'figma_set_node_fill',
+  'figma_set_visibility',
+  'figma_set_variant',
+  'figma_swap_main_component',
+  'figma_replace_component',
+  'figma_move_node',
+  'figma_delete_node',
+  'figma_create_chart',
+  'figma_batch',
+  'figma_get_node_props',
+  'figma_get_node_children',
+  'figma_get_node_parent',
+  'figma_get_text_info',
+  'figma_list_text_styles',
+  'figma_get_component_variants',
   'figma_get_selection',
   'figma_select_node',
   'figma_get_page_nodes',
-  'figma_delete_node',
-  'figma_create_chart',
+  'figma_get_pages',
+  'figma_change_page',
 ]);
 
-// Strip "figma_" prefix to get the bridge instruction type
+// Strip "figma_" prefix to get the bridge instruction type.
 function bridgeType(toolName) {
   return toolName.replace(/^figma_/, '');
 }
@@ -353,7 +690,7 @@ function bridgeType(toolName) {
 // ---------------------------------------------------------------------------
 
 const server = new Server(
-  { name: 'figma-write-mcp', version: '1.0.0' },
+  { name: 'figma-write-mcp', version: '1.1.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -363,12 +700,18 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   const { name, arguments: args = {} } = request.params;
 
   try {
+    // Run pre-execution validation — throws on invalid payloads.
+    validate(name, args);
+
+    // Auto-fix known silent failure patterns before sending to bridge.
+    const fixedArgs = autofix(name, { ...args });
+
     let result;
 
     if (name === 'figma_insert_component') {
-      result = await callBridge('insert_component', args);
+      result = await callBridge('insert_component', fixedArgs);
     } else if (DIRECT_PASS.has(name)) {
-      result = await callBridge(bridgeType(name), args);
+      result = await callBridge(bridgeType(name), fixedArgs);
     } else {
       throw new Error(`Unknown tool: ${name}`);
     }

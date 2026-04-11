@@ -697,6 +697,37 @@ async function handleApplyEffectStyle(params) {
 }
 
 // ---------------------------------------------------------------------------
+// Batch execution
+// ---------------------------------------------------------------------------
+
+// Execute multiple operations in a single bridge round trip.
+// Each operation: { type: string, params: object }
+// Returns an array of results in the same order — failures are { ok: false, error }
+// and do not stop subsequent operations.
+async function handleBatch(params) {
+  const operations = params.operations || [];
+  const results = [];
+  for (const op of operations) {
+    if (!op.type) {
+      results.push({ ok: false, error: 'Missing "type" in batch operation' });
+      continue;
+    }
+    const handler = HANDLERS[op.type];
+    if (!handler) {
+      results.push({ ok: false, error: `Unknown instruction type: "${op.type}"` });
+      continue;
+    }
+    try {
+      const result = await handler(op.params || {});
+      results.push({ ok: true, result });
+    } catch (e) {
+      results.push({ ok: false, error: e.message, type: op.type });
+    }
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Message dispatch
 // ---------------------------------------------------------------------------
 
@@ -1798,6 +1829,7 @@ const HANDLERS = {
   set_prototype_start:    handleSetPrototypeStart,
   get_pages:              handleGetPages,
   change_page:            handleChangePage,
+  batch:                  handleBatch,
 };
 
 figma.ui.onmessage = async msg => {
