@@ -1,4 +1,4 @@
-# figma-write-mcp
+# html-to-figma-design-system
 
 Let Claude Code write designs directly into Figma — creating frames, inserting real library components, and applying design tokens — without Figma Make.
 
@@ -49,13 +49,13 @@ Name the components you want, and Claude will find and insert the real library i
 
 **Step 2 — Run the installer:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/miapre/figma-write-mcp/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/miapre/html-to-figma-design-system/main/install.sh)
 ```
 The script clones this repo, runs `npm install`, asks for your Figma token, and prints the exact block to add to `~/.claude/settings.json`.
 
 **Step 3 — Restart Claude Code**, then each session:
-1. `cd ~/figma-write-mcp && npm run bridge` — keep this terminal open
-2. In Figma desktop: **Plugins → Development → Figma Write Bridge → Run**
+1. `cd ~/html-to-figma-design-system && npm run bridge` — keep this terminal open
+2. In Figma desktop: **Plugins → Development → HTML to Figma — Design System → Run**
 3. The plugin panel shows **"Connected ✓"** — you're ready
 
 ---
@@ -197,12 +197,12 @@ Once the MCP is registered, Claude has access to:
 
 **1. Start the bridge** (keep this terminal open):
 ```bash
-cd ~/figma-write-mcp   # or wherever you installed it
+cd ~/html-to-figma-design-system   # or wherever you installed it
 npm run bridge
 ```
 
 **2. Run the plugin in Figma desktop:**
-Plugins → Development → Figma Write Bridge → Run
+Plugins → Development → HTML to Figma — Design System → Run
 
 The plugin panel shows **"Connected ✓"** when ready.
 
@@ -231,7 +231,7 @@ All variable bindings are real — nodes created this way use your actual design
 ## Troubleshooting
 
 **"Figma plugin is not connected"**
-→ The bridge is running but the plugin is not. Go to Figma desktop → Plugins → Development → Figma Write Bridge → Run.
+→ The bridge is running but the plugin is not. Go to Figma desktop → Plugins → Development → HTML to Figma — Design System → Run.
 
 **"Library import failed"**
 → Your design system library is not enabled in the target file. Open the Assets panel → Team library → toggle it on.

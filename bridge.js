@@ -1,5 +1,5 @@
 /**
- * figma-write-mcp / bridge.js
+ * html-to-figma-design-system / bridge.js
  *
  * Local HTTP + WebSocket bridge between the MCP server and the Figma plugin.
  *
@@ -82,7 +82,7 @@ async function sendToPlugin(type, params) {
   if (!pluginSocket || pluginSocket.readyState !== 1 /* OPEN */) {
     throw new Error(
       'Figma plugin is not connected. ' +
-      'Open Figma desktop, go to Plugins > Development, and run "Figma Write Bridge".'
+      'Open Figma desktop, go to Plugins > Development, and run "HTML to Figma — Design System".'
     );
   }
 
