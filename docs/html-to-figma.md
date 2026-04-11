@@ -8,7 +8,8 @@ How Claude should convert an HTML file into a Figma design using a real design s
 
 - Exact content always — no paraphrasing, no omissions
 - Structure preserved — hierarchy mirrors the source
-- Auto layout on every frame — no absolute positioning unless unavoidable
+- Auto layout on every frame by default — no absolute positioning unless structurally required
+- Spatial, canvas, graph, gantt, timeline, and other coordinate-based layouts are explicit exceptions when absolute positioning is part of the layout semantics
 - Real design system variables always — never hardcode values
 - Autonomous execution — do not ask the user for decisions already resolvable from the source or DS
 - Auditable decisions — every mapping choice must be traceable
@@ -62,6 +63,13 @@ Reconstruct layout:
 - Detect groupings (cards, rows, sections)
 - Map parent-child relationships
 
+Runtime-rendered content rule:
+- If critical content is missing from the static DOM but is clearly produced at runtime, flag the affected region as runtime-rendered
+- Do not invent missing content
+- Continue parsing the available static structure
+- Mark the missing runtime content explicitly in the report
+- If an execution environment capable of rendering the DOM is available in the future, this may be used as an optional fallback, but it is not required for v1
+
 Output structure:
 ```json
 {
@@ -109,6 +117,13 @@ Style resolution rules:
 - For spacing: evaluate proximity to token, role of the spacing, layout impact, local consistency — pick the closest token
 - For color: resolve to the nearest semantic color variable (e.g., `text-primary`, `bg-surface`) not to the raw hex
 
+Out-of-DS color fallback:
+- If no suitable DS color token exists, do not silently hardcode the source color as a normal resolved token
+- Mark the color as an unresolved DS gap
+- If the element is required for structural or informational fidelity, a local temporary value may be used only as a documented exception
+- Any such exception must be explicitly listed in the report under Design system gaps and unresolved style exceptions
+- Never treat unresolved raw values as if they were valid DS token mappings
+
 Output per node:
 ```json
 {
@@ -122,6 +137,21 @@ Output per node:
   }
 }
 ```
+
+---
+
+## Phase 3.5 — Bridge pre-flight
+
+**Objective:** Verify that the Figma bridge is available before any construction attempt.
+
+Rules:
+- Check that the local bridge is reachable and responsive before starting Phase 4
+- If the bridge is unavailable:
+  - do not attempt Figma construction
+  - mark Phase 4 as blocked
+  - continue with all non-bridge phases where possible
+  - record the failure in the report
+- Do not treat bridge unavailability as a parsing or DS resolution failure
 
 ---
 
@@ -175,6 +205,11 @@ Run before producing any output. Fix failures before continuing.
 ## Phase 6 — Report
 
 Output as HTML file (not terminal text). Include:
+
+**0. Phase status**
+- Clearly state which phases completed, which were partial, and which were blocked
+- If Phase 4 is blocked, distinguish protocol success in earlier phases from bridge execution failure
+- Missing runtime-rendered content must be called out separately from parse failures
 
 **1. Summary**
 - Nodes processed
@@ -282,3 +317,16 @@ Output: a "Design system knowledge" section in the Phase 6 report listing what w
 - Rely entirely on AI for structural decisions
 - Produce inconsistent outputs for identical inputs
 - Skip Phase 5 validation to save time
+- Do not force auto layout onto layouts whose meaning depends on spatial positioning
+
+---
+
+## Bridge backlog (not part of v1 protocol)
+
+Bridge capability gaps discovered during real execution. These are future enhancements. They must not be treated as mandatory for protocol correctness unless a specific execution requires them.
+
+- **SVG vector path support** — no primitive for arbitrary bezier curves, SVG path elements, or arrowhead markers; required for graph edges and flow diagrams
+- **CSS grid support** — bridge only supports HORIZONTAL/VERTICAL auto-layout; fixed-width multi-column grid layouts (e.g., gantt ruler rows, event rows) cannot be represented
+- **Form element support** — no primitive for `<input>`, `<select>`, `<checkbox>`; these must be approximated as text + frame constructs
+- **Mixed absolute/flex layout support** — no mechanism for placing absolutely positioned children inside an auto-layout parent; required for canvas-type panels where nodes have spatial coordinates
+- **Batched node creation** — each call is a round trip; large tables or waterfall rows with 50+ items are impractical without a batch create operation
