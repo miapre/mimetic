@@ -1,5 +1,5 @@
 {
-  "$schema": "https://glama.ai/mcp/schema.json",
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
   "name": "html-to-figma-design-system",
   "displayName": "HTML to Figma Design System",
   "description": "MCP server that translates HTML prototypes into Figma using your design system's published components and design token variables. The only tool that produces DS-native Figma output — real component instances and token bindings, not hardcoded shapes.",
