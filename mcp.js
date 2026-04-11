@@ -134,6 +134,7 @@ const TOOLS = [
 
   {
     name: 'figma_insert_component',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       'Insert a library component instance into a Figma frame. ' +
       'Use this to insert any published component from your design system library — ' +
@@ -158,6 +159,7 @@ const TOOLS = [
 
   {
     name: 'figma_create_frame',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       'Create an auto-layout frame. Use for application shells, content containers, cards, rows, columns.',
     inputSchema: {
@@ -214,6 +216,7 @@ const TOOLS = [
 
   {
     name: 'figma_create_text',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       'Create a text node. ' +
       'For DS compliance, always pass textStyleId (a DS text style ID from figma_list_text_styles) ' +
@@ -243,6 +246,7 @@ const TOOLS = [
 
   {
     name: 'figma_create_rectangle',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: 'Create a rectangle. Useful for dividers (e.g. 1px tall), image placeholders, colored blocks.',
     inputSchema: {
       type: 'object',
@@ -268,6 +272,7 @@ const TOOLS = [
 
   {
     name: 'figma_set_component_text',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Set a text property on a component instance. ' +
       'Tries component properties first, then falls back to text layer name search. ' +
@@ -285,6 +290,7 @@ const TOOLS = [
 
   {
     name: 'figma_set_layout_sizing',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: 'Adjust layout sizing, alignment, padding, or explicit dimensions of a node within its auto-layout parent.',
     inputSchema: {
       type: 'object',
@@ -309,6 +315,7 @@ const TOOLS = [
 
   {
     name: 'figma_set_text',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Set text content on a TEXT node directly by its node ID. ' +
       'Use this to target a specific nested text node inside a component instance ' +
@@ -326,6 +333,7 @@ const TOOLS = [
 
   {
     name: 'figma_set_node_fill',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Set a fill or stroke color variable on any node. ' +
       'For component instances, walks to the first vector-type descendant (the actual colored shape inside an icon). ' +
@@ -344,6 +352,7 @@ const TOOLS = [
 
   {
     name: 'figma_set_visibility',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: 'Show or hide any node.',
     inputSchema: {
       type: 'object',
@@ -357,6 +366,7 @@ const TOOLS = [
 
   {
     name: 'figma_set_variant',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Directly set a VARIANT or BOOLEAN component property on an instance. ' +
       'Use this when figma_set_component_text fails due to "existing errors" on a nested instance. ' +
@@ -374,6 +384,7 @@ const TOOLS = [
 
   {
     name: 'figma_swap_main_component',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Swap the main component of an INSTANCE node to a different component (by key). ' +
       'Changes which variant the instance is based on — bypasses setProperties entirely. ' +
@@ -390,6 +401,7 @@ const TOOLS = [
 
   {
     name: 'figma_replace_component',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     description:
       'Replace an existing node with a new component instance at the same position in its parent. ' +
       'Deletes the target node, inserts the new component at the same parent index. ' +
@@ -410,6 +422,7 @@ const TOOLS = [
 
   {
     name: 'figma_move_node',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Reorder a node within its current parent by moving it to a specific child index. ' +
       'Index 0 = front of stack (bottom in layer panel). ' +
@@ -426,6 +439,7 @@ const TOOLS = [
 
   {
     name: 'figma_delete_node',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     description: 'Delete a node from the Figma document.',
     inputSchema: {
       type: 'object',
@@ -438,6 +452,7 @@ const TOOLS = [
 
   {
     name: 'figma_create_chart',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       'Render a chart directly in Figma. All data is sent in one call — no per-element round trips. ' +
       'Supported chart types:\n' +
@@ -484,6 +499,7 @@ const TOOLS = [
 
   {
     name: 'figma_batch',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       'Execute multiple Figma operations in a single bridge round trip. ' +
       'Use this for repetitive structures — table rows, list items, grid cells, repeated cards — ' +
@@ -519,6 +535,7 @@ const TOOLS = [
 
   {
     name: 'figma_get_node_props',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Get the component properties and all text layers of a node. ' +
       'Call this before figma_set_component_text to discover valid property names. ' +
@@ -535,6 +552,7 @@ const TOOLS = [
 
   {
     name: 'figma_get_node_children',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'List all direct children of a node with their IDs, names, types, and dimensions. ' +
       'Use after construction to verify hierarchy or find a specific child node ID.',
@@ -549,6 +567,7 @@ const TOOLS = [
 
   {
     name: 'figma_get_node_parent',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Get the parent of a node, including all sibling children with their IDs and positions. ' +
       'Use to understand the current layout context or verify sibling order.',
@@ -563,6 +582,7 @@ const TOOLS = [
 
   {
     name: 'figma_get_text_info',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Get the text style ID, font properties, and fill variable of a TEXT node. ' +
       'Use during Phase 5 validation to verify DS text style and color variable compliance. ' +
@@ -578,6 +598,7 @@ const TOOLS = [
 
   {
     name: 'figma_list_text_styles',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'List all local text styles in the document with their IDs and names. ' +
       'Call this during Phase 2.5 (DS inspection) to discover available text style IDs ' +
@@ -587,6 +608,7 @@ const TOOLS = [
 
   {
     name: 'figma_get_component_variants',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Get all variant siblings of an instance\'s main component (all options in the component set). ' +
       'Use this to discover available variant values before calling figma_set_variant or figma_swap_main_component. ' +
@@ -602,12 +624,14 @@ const TOOLS = [
 
   {
     name: 'figma_get_selection',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: 'Get the currently selected nodes in Figma. Returns node IDs, names, and dimensions.',
     inputSchema: { type: 'object', properties: {} },
   },
 
   {
     name: 'figma_select_node',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: 'Select a node in Figma and scroll it into view.',
     inputSchema: {
       type: 'object',
@@ -620,12 +644,14 @@ const TOOLS = [
 
   {
     name: 'figma_get_page_nodes',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: 'List all top-level nodes on the current Figma page (names, IDs, positions, dimensions).',
     inputSchema: { type: 'object', properties: {} },
   },
 
   {
     name: 'figma_get_pages',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'List all pages in the Figma document with their IDs and names. ' +
       'Use before figma_change_page to find the correct pageId.',
@@ -634,6 +660,7 @@ const TOOLS = [
 
   {
     name: 'figma_change_page',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: 'Switch the active Figma page. Subsequent operations will target the new page.',
     inputSchema: {
       type: 'object',
