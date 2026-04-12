@@ -2,61 +2,77 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>HTML to Figma — Design System</title>
   <style>
-    body { font-family: sans-serif; font-size: 12px; padding: 12px; color: #333; }
-    #status { padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; }
-    .connected    { background: #d1fae5; color: #065f46; }
-    .disconnected { background: #fee2e2; color: #991b1b; }
-    .connecting   { background: #fef3c7; color: #92400e; }
-    p { margin: 4px 0; color: #666; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 72px; height: 28px; overflow: hidden; background: transparent; }
+    .badge {
+      width: 72px;
+      height: 28px;
+      background: rgba(15, 17, 23, 0.82);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    .dot.connected    { background: #22c55e; }
+    .dot.connecting   { background: #f59e0b; }
+    .dot.disconnected { background: #ef4444; }
+    .label {
+      font-family: 'JetBrains Mono', 'Fira Code', 'Menlo', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      color: #e5e5e5;
+      letter-spacing: 0.02em;
+    }
   </style>
 </head>
 <body>
-  <div id="status" class="connecting">Connecting to bridge…</div>
-  <p>Keep this plugin open while using Claude Code.</p>
+  <div class="badge">
+    <div class="dot connecting" id="dot"></div>
+    <span class="label">h2f</span>
+  </div>
 
   <script>
-    const statusEl = document.getElementById('status');
+    const dot = document.getElementById('dot');
     let ws = null;
 
-    function setStatus(text, cls) {
-      statusEl.textContent = text;
-      statusEl.className = cls;
+    function setState(state) {
+      dot.className = 'dot ' + state;
     }
 
     function connect() {
-      setStatus('Connecting to bridge…', 'connecting');
-
+      setState('connecting');
       ws = new WebSocket('ws://localhost:3055');
 
       ws.onopen = () => {
-        setStatus('Connected ✓', 'connected');
+        setState('connected');
         parent.postMessage({ pluginMessage: { type: '__bridge_connected' } }, '*');
       };
 
       ws.onclose = () => {
-        setStatus('Bridge not running — start it with: node bridge.js', 'disconnected');
+        setState('disconnected');
         parent.postMessage({ pluginMessage: { type: '__bridge_disconnected' } }, '*');
         setTimeout(connect, 3000);
       };
 
-      ws.onerror = () => {
-        // onclose fires after onerror — no need to handle separately
-      };
+      ws.onerror = () => {};
 
-      // Receive instruction from bridge → forward to plugin worker
       ws.onmessage = event => {
         try {
           const msg = JSON.parse(event.data);
           parent.postMessage({ pluginMessage: msg }, '*');
-        } catch (e) {
-          console.error('Failed to parse bridge message', e);
-        }
+        } catch (e) {}
       };
     }
 
-    // Receive result from plugin worker → send back to bridge
     window.onmessage = event => {
       const msg = event.data?.pluginMessage;
       if (!msg || msg.type === '__bridge_connected' || msg.type === '__bridge_disconnected') return;

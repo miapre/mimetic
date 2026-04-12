@@ -7,7 +7,7 @@
  */
 
 // Show the UI panel (hidden by default — only needed for the WebSocket connection).
-figma.showUI(__html__, { visible: true, width: 320, height: 120 });
+figma.showUI(__html__, { visible: true, width: 72, height: 28 });
 
 // ---------------------------------------------------------------------------
 // Variable resolution cache
