@@ -58,7 +58,7 @@ The script clones this repo, runs `npm install`, asks for your Figma token, and 
 **Step 3 — Restart Claude Code**, then each session:
 1. `cd ~/html-to-figma-design-system && npm run bridge` — keep this terminal open
 2. In Figma desktop: **Plugins → Development → HTML to Figma — Design System → Run**
-3. The plugin panel shows **"Connected ✓"** — you're ready
+3. The plugin badge shows **● ready** — you're ready
 
 ---
 
@@ -206,7 +206,7 @@ npm run bridge
 **2. Run the plugin in Figma desktop:**
 Plugins → Development → HTML to Figma — Design System → Run
 
-The plugin panel shows **"Connected ✓"** when ready.
+The plugin badge shows **● ready** when connected.
 
 **3. Ask Claude to build something.**
 

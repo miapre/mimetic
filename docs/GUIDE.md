@@ -474,7 +474,7 @@ Figma plugins have two layers: a sandboxed JavaScript worker (`code.js`) and an 
 2. When a message arrives from the bridge, it forwards it to `code.js` via `postMessage`
 3. When `code.js` finishes an action and posts a result, `ui.html` sends it back to the bridge
 
-The panel displays a simple status: "Connected ✓" in green when the bridge is reachable, or a red error message when it is not.
+The badge displays a colored dot and a status label: **● ready** (green) when the bridge is reachable, **● offline** (red) when it is not.
 
 ---
 
@@ -571,8 +571,8 @@ You will see:
 **Step 2 — Run the plugin in Figma:**
 
 1. In Figma desktop, go to **Plugins → Development → HTML to Figma — Design System → Run**
-2. A small floating panel appears showing "Connecting to bridge…"
-3. Within a second it should turn green: **"Connected ✓"**
+2. A small badge appears showing **● ...** (amber, connecting)
+3. Within a second it turns green: **● ready**
 
 The terminal will print `[bridge] Figma plugin connected`. You are ready.
 
@@ -923,5 +923,5 @@ Work through this list in order:
 - [ ] Variables exported from Figma and organised into foundation files
 - [ ] Variable names and component keys saved to Claude's memory (`MEMORY.md`)
 - [ ] Bridge running: `npm run bridge` in `html-to-figma-design-system/`
-- [ ] Plugin running and showing **"Connected ✓"** in Figma
+- [ ] Plugin running and showing **● ready** in Figma
 - [ ] Ask Claude to build a UI
