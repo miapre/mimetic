@@ -37,15 +37,18 @@
 <body>
   <div class="badge">
     <div class="dot connecting" id="dot"></div>
-    <span class="label">h2f</span>
+    <span class="label" id="label">...</span>
   </div>
 
   <script>
     const dot = document.getElementById('dot');
     let ws = null;
 
+    const labels = { connected: 'ready', connecting: '...', disconnected: 'offline' };
+
     function setState(state) {
       dot.className = 'dot ' + state;
+      document.getElementById('label').textContent = labels[state];
     }
 
     function connect() {
