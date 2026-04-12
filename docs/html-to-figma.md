@@ -381,6 +381,14 @@ Auto layout sizing rule:
 - For frames that should fill remaining space in their parent, pass `layoutGrow=1` inline at creation time — this eliminates a separate `set_layout_sizing` call
 - Name nodes using a consistent pattern:
 
+FILL sizing alias trap:
+- `layoutSizingHorizontal` and `primaryAxisSizingMode` (on a HORIZONTAL frame) control the same axis — the last assignment wins
+- Setting `layoutSizingHorizontal = 'FILL'` then `primaryAxisSizingMode = 'AUTO'` silently reverts to hug — FILL is lost with no error
+- Rule: set FILL last; never write a sizing mode after `layoutSizingHorizontal = 'FILL'`
+- For height hugging on a HORIZONTAL frame, use `counterAxisSizingMode = 'AUTO'` — that controls the perpendicular axis and is safe
+- The same axis-alias applies symmetrically: on a VERTICAL frame, `layoutSizingVertical` and `primaryAxisSizingMode` are aliases; `layoutSizingHorizontal` and `counterAxisSizingMode` are aliases
+- Symptom: SPACE_BETWEEN has no effect (container has no spare width to distribute) — first suspect is a silent FILL revert
+
 layoutGrow safety rule:
 - Never apply `layoutGrow=1` to children of a VERTICAL `primaryAxisSizingMode='AUTO'` parent — this creates a circular dependency that Figma resolves by collapsing the parent to near-zero height
 - Only apply `layoutGrow=1` when the parent has a FIXED primary-axis dimension, or when horizontal fill is explicitly required inside a FIXED-height HORIZONTAL parent
