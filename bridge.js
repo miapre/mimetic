@@ -1,5 +1,5 @@
 /**
- * html-to-figma-design-system / bridge.js
+ * Mimic AI / bridge.js
  *
  * Local HTTP + WebSocket bridge between the MCP server and the Figma plugin.
  *

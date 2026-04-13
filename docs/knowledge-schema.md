@@ -143,7 +143,7 @@ The knowledge file is safe to edit manually. Common reasons:
 
 ## Pattern key taxonomy
 
-Pattern keys follow the format `category/name`. Keys must come from the canonical taxonomy defined in `docs/html-to-figma.md` (Pattern key taxonomy section). Common examples:
+Pattern keys follow the format `category/name`. Keys must come from the canonical taxonomy defined in `docs/mimic-ai.md` (Pattern key taxonomy section). Common examples:
 
 | Key | Meaning |
 |---|---|

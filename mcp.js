@@ -1,5 +1,5 @@
 /**
- * html-to-figma-design-system / mcp.js
+ * Mimic AI / mcp.js
  *
  * MCP server (stdio transport). Exposes Figma write tools to Claude.
  * Communicates with the local bridge server which forwards instructions
