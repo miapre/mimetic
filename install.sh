@@ -4,8 +4,8 @@
 
 set -e
 
-REPO="https://github.com/miapre/mimetic.git"
-DEFAULT_DIR="$HOME/mimetic"
+REPO="https://github.com/miapre/mimic-ai.git"
+DEFAULT_DIR="$HOME/mimic-ai"
 
 echo ""
 echo "Mimic AI installer"
@@ -91,10 +91,10 @@ if [[ "$AUTO_WRITE" =~ ^[Yy]$ ]]; then
       catch(e) { console.error('Warning: could not parse ' + path + ' — adding mcpServers key.'); }
     }
     if (!config.mcpServers) config.mcpServers = {};
-    if (config.mcpServers.mimetic) {
-      console.log('mimetic entry already present — updating path.');
+    if (config.mcpServers['mimic-ai']) {
+      console.log('mimic-ai entry already present — updating path.');
     }
-    config.mcpServers.mimetic = { command: 'node', args: ['$INSTALL_DIR/mcp.js'] };
+    config.mcpServers['mimic-ai'] = { command: 'node', args: ['$INSTALL_DIR/mcp.js'] };
     fs.mkdirSync(require('path').dirname(path), { recursive: true });
     fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
     console.log('Written to $SETTINGS_FILE');
@@ -103,7 +103,7 @@ if [[ "$AUTO_WRITE" =~ ^[Yy]$ ]]; then
     echo ""
     echo "Auto-write failed. Add this manually to $SETTINGS_FILE under \"mcpServers\":"
     echo ""
-    echo "    \"mimetic\": {"
+    echo "    \"mimic-ai\": {"
     echo "      \"command\": \"node\","
     echo "      \"args\": [\"$INSTALL_DIR/mcp.js\"]"
     echo "    }"
@@ -112,7 +112,7 @@ else
   echo ""
   echo "Add this manually to $SETTINGS_FILE under \"mcpServers\":"
   echo ""
-  echo "    \"mimetic\": {"
+  echo "    \"mimic-ai\": {"
   echo "      \"command\": \"node\","
   echo "      \"args\": [\"$INSTALL_DIR/mcp.js\"]"
   echo "    }"

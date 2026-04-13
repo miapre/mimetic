@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.miapre/mimetic",
+  "name": "io.github.miapre/mimic-ai",
   "title": "Mimic AI",
   "description": "An MCP that learns your design system. Translates HTML into Figma using your published DS components and tokens — and gets smarter every run.",
   "version": "1.1.0",
-  "websiteUrl": "https://github.com/miapre/mimetic",
+  "websiteUrl": "https://github.com/miapre/mimic-ai",
   "repository": {
-    "url": "https://github.com/miapre/mimetic",
+    "url": "https://github.com/miapre/mimic-ai",
     "source": "github"
   },
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "mimetic",
+      "identifier": "mimic-ai",
       "version": "1.1.0",
       "runtimeHint": "npx",
       "transport": {

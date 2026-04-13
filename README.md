@@ -7,7 +7,7 @@ Mimic AI translates HTML into Figma using your published components and design t
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
 ![Platform: macOS / Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
-[![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers/mimetic)
+[![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers/mimic-ai)
 
 > **Not a Figma product.** This is an independent, open-source MCP server built for Claude Code.
 
@@ -69,12 +69,12 @@ Name the components you want, and Claude will find and insert the real library i
 
 **Step 2 — Run the installer:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/miapre/mimetic/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/miapre/mimic-ai/main/install.sh)
 ```
 The script clones this repo, runs `npm install`, asks for your Figma token, and writes the MCP entry to `~/.claude/settings.json`.
 
 **Step 3 — Restart Claude Code**, then each session:
-1. `cd ~/mimetic && npm run bridge` — keep this terminal open
+1. `cd ~/mimic-ai && npm run bridge` — keep this terminal open
 2. In Figma desktop: **Plugins → Development → Mimic AI → Run**
 3. The plugin badge shows **● ready** — you're ready
 
@@ -173,8 +173,8 @@ Once the MCP is registered, Claude has access to:
 
 | Tool | What it does |
 |---|---|
-| `mimetic_knowledge_read` | Load known pattern→component mappings before a run. VERIFIED entries skip DS lookup entirely. |
-| `mimetic_knowledge_write` | Persist mappings after a run. Auto-promotes CANDIDATE→VERIFIED at 3 consistent uses. |
+| `mimic_ai_knowledge_read` | Load known pattern→component mappings before a run. VERIFIED entries skip DS lookup entirely. |
+| `mimic_ai_knowledge_write` | Persist mappings after a run. Auto-promotes CANDIDATE→VERIFIED at 3 consistent uses. |
 
 **Build**
 
@@ -224,7 +224,7 @@ Once the MCP is registered, Claude has access to:
 
 **1. Start the bridge** (keep this terminal open):
 ```bash
-cd ~/mimetic   # or wherever you installed it
+cd ~/mimic-ai   # or wherever you installed it
 npm run bridge
 ```
 

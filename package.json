@@ -1,6 +1,6 @@
 {
-  "name": "mimetic",
-  "mcpName": "io.github.miapre/mimetic",
+  "name": "mimic-ai",
+  "mcpName": "io.github.miapre/mimic-ai",
   "version": "1.1.0",
   "description": "Mimic AI — MCP server that translates HTML into Figma using your design system's real components and tokens",
   "type": "module",

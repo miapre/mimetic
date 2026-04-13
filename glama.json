@@ -1,20 +1,20 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
-  "name": "mimetic",
+  "name": "mimic-ai",
   "displayName": "Mimic AI",
   "description": "An MCP that learns your design system. Translates HTML into Figma using your published components and design tokens — and compounds over time. Every run teaches Mimic AI your DS vocabulary: by run 10, familiar patterns resolve instantly with near-zero library lookups. Your corrections teach it too.",
-  "homepage": "https://github.com/miapre/mimetic",
+  "homepage": "https://github.com/miapre/mimic-ai",
   "license": "MIT",
   "categories": ["design", "figma", "productivity"],
   "tags": ["figma", "design-system", "html-to-figma", "mcp", "design-tokens", "model-context-protocol", "claude"],
   "runtime": "node",
   "tools": [
     {
-      "name": "mimetic_knowledge_read",
+      "name": "mimic_ai_knowledge_read",
       "description": "Load known pattern→component mappings before a run. VERIFIED entries skip DS lookup entirely."
     },
     {
-      "name": "mimetic_knowledge_write",
+      "name": "mimic_ai_knowledge_write",
       "description": "Persist pattern mappings after a run. Auto-promotes CANDIDATE→VERIFIED at 3 consistent uses."
     },
     {

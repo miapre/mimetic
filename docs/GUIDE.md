@@ -46,7 +46,7 @@ There are two separate channels between Claude and Figma. Understanding them upf
 │                          Claude Code                            │
 │                                                                 │
 │   ┌─────────────────────┐       ┌─────────────────────────┐    │
-│   │   Figma MCP         │       │   mimetic       │    │
+│   │   Figma MCP         │       │   mimic-ai     │    │
 │   │   (official,        │       │   (custom, write-only)  │    │
 │   │    read-only)       │       │                         │    │
 │   └──────────┬──────────┘       └────────────┬────────────┘    │
@@ -78,7 +78,7 @@ There are two separate channels between Claude and Figma. Understanding them upf
 
 **Channel 1 — Read (Figma MCP):** Claude uses Figma's official MCP server to read your designs. It can inspect any frame, see what components exist, read property values, and understand the design context. This is read-only — it cannot create or modify anything.
 
-**Channel 2 — Write (mimetic):** To create things in Figma, this repo provides a custom local system: a small Node.js bridge server that runs on your computer, plus a Figma plugin that runs inside the Figma desktop app. Claude sends instructions to the bridge over HTTP; the bridge forwards them to the plugin over WebSocket; the plugin executes them using Figma's Plugin API.
+**Channel 2 — Write (Mimic AI):** To create things in Figma, this repo provides a custom local system: a small Node.js bridge server that runs on your computer, plus a Figma plugin that runs inside the Figma desktop app. Claude sends instructions to the bridge over HTTP; the bridge forwards them to the plugin over WebSocket; the plugin executes them using Figma's Plugin API.
 
 ---
 
@@ -351,24 +351,24 @@ This custom system lets Claude create things in Figma. It has three components:
 - **bridge.js** — a local HTTP and WebSocket server
 - **plugin/** — the Figma plugin that runs inside the Figma app
 
-> **Used the installer or cloned the repo?** All files in Parts 3.1–3.6 already exist. Skip directly to **[Part 3.7 — Register with Claude Code](#37-register-mimetic-with-claude-code)**.
+> **Used the installer or cloned the repo?** All files in Parts 3.1–3.6 already exist. Skip directly to **[Part 3.7 — Register with Claude Code](#37-register-mimic-ai-with-claude-code)**.
 
 ### 3.1 Create the project folder
 
-Inside your main project folder, create a subfolder called `mimetic`. In a terminal:
+Inside your main project folder, create a subfolder called `mimic-ai`. In a terminal:
 
 ```bash
-mkdir mimetic
-cd mimetic
+mkdir mimic-ai
+cd mimic-ai
 ```
 
 ### 3.2 Create package.json
 
-Create a file called `package.json` inside `mimetic`:
+Create a file called `package.json` inside `mimic-ai`:
 
 ```json
 {
-  "name": "mimetic",
+  "name": "mimic-ai",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
@@ -393,7 +393,7 @@ npm install
 
 ### 3.3 Create the .env file
 
-Create a file called `.env` (the dot at the start is intentional) in the `mimetic` folder:
+Create a file called `.env` (the dot at the start is intentional) in the `mimic-ai` folder:
 
 ```
 FIGMA_ACCESS_TOKEN=paste_your_figma_token_here
@@ -449,7 +449,7 @@ This tells Figma how to load your plugin:
 ```json
 {
   "name": "Mimic AI",
-  "id": "mimetic",
+  "id": "mimic-ai",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
@@ -521,9 +521,9 @@ Update `~/.claude/settings.json` to include both MCPs:
         "FIGMA_ACCESS_TOKEN": "your_token_here"
       }
     },
-    "mimetic": {
+    "mimic-ai": {
       "command": "node",
-      "args": ["/absolute/path/to/your/mimetic/mcp.js"]
+      "args": ["/absolute/path/to/your/mimic-ai/mcp.js"]
     }
   }
 }
@@ -539,7 +539,7 @@ Use the full absolute path to `mcp.js` — relative paths do not work here.
 
 1. Open Figma desktop
 2. From the menu bar: **Plugins → Development → Import plugin from manifest…**
-3. Navigate to your `mimetic/plugin/` folder and select `manifest.json`
+3. Navigate to your `mimic-ai/plugin/` folder and select `manifest.json`
 4. The plugin now appears under **Plugins → Development → Mimic AI**
 
 ### 4.2 Enable your team library in the target file
@@ -558,7 +558,7 @@ You need both running every time you want to build with Claude.
 **Step 1 — Start the bridge** (in a terminal, keep this running):
 
 ```bash
-cd mimetic
+cd mimic-ai
 npm run bridge
 ```
 
@@ -912,16 +912,16 @@ Work through this list in order:
 - [ ] Claude Code installed and signed in
 - [ ] Figma Personal Access Token generated
 - [ ] Figma Read MCP added to `~/.claude/settings.json`
-- [ ] `mimetic/` folder created with `package.json`
-- [ ] `npm install` run inside `mimetic/`
+- [ ] `mimic-ai/` folder created with `package.json`
+- [ ] `npm install` run inside `mimic-ai/`
 - [ ] `.env` file created with Figma token and bridge port
 - [ ] `bridge.js`, `mcp.js`, and `plugin/` folder created
-- [ ] mimetic registered in `~/.claude/settings.json`
+- [ ] mimic-ai registered in `~/.claude/settings.json`
 - [ ] Claude Code restarted so it picks up both MCPs
 - [ ] Plugin imported into Figma from `plugin/manifest.json`
 - [ ] Team library enabled in your target Figma file
 - [ ] Variables exported from Figma and organised into foundation files
 - [ ] Variable names and component keys saved to Claude's memory (`MEMORY.md`)
-- [ ] Bridge running: `npm run bridge` in `mimetic/`
+- [ ] Bridge running: `npm run bridge` in `mimic-ai/`
 - [ ] Plugin running and showing **● ready** in Figma
 - [ ] Ask Claude to build a UI

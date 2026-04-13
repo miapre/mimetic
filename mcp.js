@@ -827,7 +827,7 @@ const TOOLS = [
   // ── Mimic AI learning loop ────────────────────────────────────────────────
 
   {
-    name: 'mimetic_knowledge_read',
+    name: 'mimic_ai_knowledge_read',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       'Read the Mimic AI knowledge file (ds-knowledge.json). ' +
@@ -847,7 +847,7 @@ const TOOLS = [
   },
 
   {
-    name: 'mimetic_knowledge_write',
+    name: 'mimic_ai_knowledge_write',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     description:
       'Write pattern→component mappings and explicit DS rules to the Mimic AI knowledge file (ds-knowledge.json). ' +
@@ -956,7 +956,7 @@ function bridgeType(toolName) {
 // ---------------------------------------------------------------------------
 
 const server = new Server(
-  { name: 'mimetic', version: '1.1.0' },
+  { name: 'mimic-ai', version: '1.1.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -974,7 +974,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
 
     let result;
 
-    if (name === 'mimetic_knowledge_read') {
+    if (name === 'mimic_ai_knowledge_read') {
       const knowledge = loadKnowledge();
       if (fixedArgs.pattern_key) {
         const entry = knowledge.patterns.find(p => p.pattern_key === fixedArgs.pattern_key) ?? null;
@@ -983,7 +983,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         result = { ...knowledge, path: KNOWLEDGE_PATH };
       }
 
-    } else if (name === 'mimetic_knowledge_write') {
+    } else if (name === 'mimic_ai_knowledge_write') {
       const knowledge = loadKnowledge();
 
       // DS update signal: reset gap AND substitution rules so newly added DS components can be discovered.

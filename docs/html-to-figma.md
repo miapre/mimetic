@@ -118,7 +118,7 @@ Every pattern resolved in Phase 3 and recorded in Phase 7 must use a key from th
 
 **Objective:** Load accumulated DS knowledge before any parsing or DS inspection begins.
 
-Call `mimetic_knowledge_read` with no arguments. Record the full result in working memory — both `patterns` and `explicit_rules`.
+Call `mimic_ai_knowledge_read` with no arguments. Record the full result in working memory — both `patterns` and `explicit_rules`.
 
 **How to use the returned patterns:**
 
@@ -784,7 +784,7 @@ Output as HTML file (not terminal text). Include:
 
 **Objective:** Persist pattern→component mappings from this run so future runs benefit immediately.
 
-Call `mimetic_knowledge_write` with the updates array. This is not optional — skipping Phase 7 means the run produced no learning value.
+Call `mimic_ai_knowledge_write` with the updates array. This is not optional — skipping Phase 7 means the run produced no learning value.
 
 **What to write:**
 
