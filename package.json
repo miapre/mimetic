@@ -1,8 +1,8 @@
 {
-  "name": "html-to-figma-design-system",
-  "mcpName": "io.github.miapre/html-to-figma-design-system",
+  "name": "mimetic",
+  "mcpName": "io.github.miapre/mimetic",
   "version": "1.1.0",
-  "description": "Convert HTML to Figma using your design system — MCP server + local bridge for DS-aware design generation via the Plugin API",
+  "description": "Mimetic — MCP server that translates HTML into Figma using your design system's real components and tokens",
   "type": "module",
   "scripts": {
     "bridge": "node --env-file=.env bridge.js",

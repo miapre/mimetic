@@ -1,5 +1,5 @@
 {
-  "name": "HTML to Figma — Design System",
+  "name": "Mimetic",
   "id": "html-to-figma-design-system",
   "api": "1.0.0",
   "main": "code.js",
@@ -8,6 +8,6 @@
   "permissions": ["teamlibrary"],
   "networkAccess": {
     "allowedDomains": ["*"],
-    "reasoning": "Connects to the local HTML to Figma Design System bridge server to receive design instructions from Claude Code."
+    "reasoning": "Connects to the local Mimetic bridge server to receive design instructions from Claude Code."
   }
 }

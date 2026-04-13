@@ -46,7 +46,7 @@ There are two separate channels between Claude and Figma. Understanding them upf
 │                          Claude Code                            │
 │                                                                 │
 │   ┌─────────────────────┐       ┌─────────────────────────┐    │
-│   │   Figma MCP         │       │   html-to-figma-design-system       │    │
+│   │   Figma MCP         │       │   mimetic       │    │
 │   │   (official,        │       │   (custom, write-only)  │    │
 │   │    read-only)       │       │                         │    │
 │   └──────────┬──────────┘       └────────────┬────────────┘    │
@@ -78,7 +78,7 @@ There are two separate channels between Claude and Figma. Understanding them upf
 
 **Channel 1 — Read (Figma MCP):** Claude uses Figma's official MCP server to read your designs. It can inspect any frame, see what components exist, read property values, and understand the design context. This is read-only — it cannot create or modify anything.
 
-**Channel 2 — Write (html-to-figma-design-system):** To create things in Figma, this repo provides a custom local system: a small Node.js bridge server that runs on your computer, plus a Figma plugin that runs inside the Figma desktop app. Claude sends instructions to the bridge over HTTP; the bridge forwards them to the plugin over WebSocket; the plugin executes them using Figma's Plugin API.
+**Channel 2 — Write (mimetic):** To create things in Figma, this repo provides a custom local system: a small Node.js bridge server that runs on your computer, plus a Figma plugin that runs inside the Figma desktop app. Claude sends instructions to the bridge over HTTP; the bridge forwards them to the plugin over WebSocket; the plugin executes them using Figma's Plugin API.
 
 ---
 
@@ -343,7 +343,7 @@ In the Claude Code chat panel, paste a Figma design URL and ask Claude to descri
 
 ---
 
-## Part 3 — Set up the Write Bridge (html-to-figma-design-system)
+## Part 3 — Set up the Write Bridge (mimetic)
 
 This custom system lets Claude create things in Figma. It has three components:
 
@@ -351,24 +351,24 @@ This custom system lets Claude create things in Figma. It has three components:
 - **bridge.js** — a local HTTP and WebSocket server
 - **plugin/** — the Figma plugin that runs inside the Figma app
 
-> **Used the installer or cloned the repo?** All files in Parts 3.1–3.6 already exist. Skip directly to **[Part 3.7 — Register with Claude Code](#37-register-html-to-figma-design-system-with-claude-code)**.
+> **Used the installer or cloned the repo?** All files in Parts 3.1–3.6 already exist. Skip directly to **[Part 3.7 — Register with Claude Code](#37-register-mimetic-with-claude-code)**.
 
 ### 3.1 Create the project folder
 
-Inside your main project folder, create a subfolder called `html-to-figma-design-system`. In a terminal:
+Inside your main project folder, create a subfolder called `mimetic`. In a terminal:
 
 ```bash
-mkdir html-to-figma-design-system
-cd html-to-figma-design-system
+mkdir mimetic
+cd mimetic
 ```
 
 ### 3.2 Create package.json
 
-Create a file called `package.json` inside `html-to-figma-design-system`:
+Create a file called `package.json` inside `mimetic`:
 
 ```json
 {
-  "name": "html-to-figma-design-system",
+  "name": "mimetic",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
@@ -393,7 +393,7 @@ npm install
 
 ### 3.3 Create the .env file
 
-Create a file called `.env` (the dot at the start is intentional) in the `html-to-figma-design-system` folder:
+Create a file called `.env` (the dot at the start is intentional) in the `mimetic` folder:
 
 ```
 FIGMA_ACCESS_TOKEN=paste_your_figma_token_here
@@ -448,8 +448,8 @@ This tells Figma how to load your plugin:
 
 ```json
 {
-  "name": "HTML to Figma — Design System",
-  "id": "html-to-figma-design-system",
+  "name": "Mimetic",
+  "id": "mimetic",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
@@ -507,7 +507,7 @@ Charts are rendered entirely within one plugin call. Instead of creating each do
 
 ---
 
-### 3.7 Register html-to-figma-design-system with Claude Code
+### 3.7 Register mimetic with Claude Code
 
 Update `~/.claude/settings.json` to include both MCPs:
 
@@ -521,9 +521,9 @@ Update `~/.claude/settings.json` to include both MCPs:
         "FIGMA_ACCESS_TOKEN": "your_token_here"
       }
     },
-    "html-to-figma-design-system": {
+    "mimetic": {
       "command": "node",
-      "args": ["/absolute/path/to/your/html-to-figma-design-system/mcp.js"]
+      "args": ["/absolute/path/to/your/mimetic/mcp.js"]
     }
   }
 }
@@ -539,8 +539,8 @@ Use the full absolute path to `mcp.js` — relative paths do not work here.
 
 1. Open Figma desktop
 2. From the menu bar: **Plugins → Development → Import plugin from manifest…**
-3. Navigate to your `html-to-figma-design-system/plugin/` folder and select `manifest.json`
-4. The plugin now appears under **Plugins → Development → HTML to Figma — Design System**
+3. Navigate to your `mimetic/plugin/` folder and select `manifest.json`
+4. The plugin now appears under **Plugins → Development → Mimetic**
 
 ### 4.2 Enable your team library in the target file
 
@@ -558,7 +558,7 @@ You need both running every time you want to build with Claude.
 **Step 1 — Start the bridge** (in a terminal, keep this running):
 
 ```bash
-cd html-to-figma-design-system
+cd mimetic
 npm run bridge
 ```
 
@@ -570,7 +570,7 @@ You will see:
 
 **Step 2 — Run the plugin in Figma:**
 
-1. In Figma desktop, go to **Plugins → Development → HTML to Figma — Design System → Run**
+1. In Figma desktop, go to **Plugins → Development → Mimetic → Run**
 2. A small badge appears showing **● ...** (amber, connecting)
 3. Within a second it turns green: **● ready**
 
@@ -886,7 +886,7 @@ The component documentation has value for design decisions, code handoff, and de
 ## Troubleshooting
 
 **"Figma plugin is not connected"**
-→ The bridge is running but the Figma plugin is not. Go to Figma desktop → Plugins → Development → HTML to Figma — Design System → Run. The bridge terminal should print "plugin connected".
+→ The bridge is running but the Figma plugin is not. Go to Figma desktop → Plugins → Development → Mimetic → Run. The bridge terminal should print "plugin connected".
 
 **"Component not found locally and no component key was resolved"**
 → Either the library is not enabled in your file, or the component key is wrong. Check Assets → Team library to ensure your library is toggled on. Verify the component key by looking up the component in your library file.
@@ -912,16 +912,16 @@ Work through this list in order:
 - [ ] Claude Code installed and signed in
 - [ ] Figma Personal Access Token generated
 - [ ] Figma Read MCP added to `~/.claude/settings.json`
-- [ ] `html-to-figma-design-system/` folder created with `package.json`
-- [ ] `npm install` run inside `html-to-figma-design-system/`
+- [ ] `mimetic/` folder created with `package.json`
+- [ ] `npm install` run inside `mimetic/`
 - [ ] `.env` file created with Figma token and bridge port
 - [ ] `bridge.js`, `mcp.js`, and `plugin/` folder created
-- [ ] html-to-figma-design-system registered in `~/.claude/settings.json`
+- [ ] mimetic registered in `~/.claude/settings.json`
 - [ ] Claude Code restarted so it picks up both MCPs
 - [ ] Plugin imported into Figma from `plugin/manifest.json`
 - [ ] Team library enabled in your target Figma file
 - [ ] Variables exported from Figma and organised into foundation files
 - [ ] Variable names and component keys saved to Claude's memory (`MEMORY.md`)
-- [ ] Bridge running: `npm run bridge` in `html-to-figma-design-system/`
+- [ ] Bridge running: `npm run bridge` in `mimetic/`
 - [ ] Plugin running and showing **● ready** in Figma
 - [ ] Ask Claude to build a UI

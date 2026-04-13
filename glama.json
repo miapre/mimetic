@@ -1,9 +1,9 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
-  "name": "html-to-figma-design-system",
-  "displayName": "HTML to Figma Design System",
+  "name": "mimetic",
+  "displayName": "Mimetic",
   "description": "MCP server that translates HTML prototypes into Figma using your design system's published components and design token variables. The only tool that produces DS-native Figma output — real component instances and token bindings, not hardcoded shapes.",
-  "homepage": "https://github.com/miapre/html-to-figma-design-system",
+  "homepage": "https://github.com/miapre/mimetic",
   "license": "MIT",
   "categories": ["design", "figma", "productivity"],
   "tags": ["figma", "design-system", "html-to-figma", "mcp", "design-tokens", "model-context-protocol", "claude"],

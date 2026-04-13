@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.miapre/html-to-figma-design-system",
-  "title": "HTML to Figma — Design System",
+  "name": "io.github.miapre/mimetic",
+  "title": "Mimetic",
   "description": "Translate HTML prototypes into Figma using your design system's real components and tokens.",
   "version": "1.1.0",
-  "websiteUrl": "https://github.com/miapre/html-to-figma-design-system",
+  "websiteUrl": "https://github.com/miapre/mimetic",
   "repository": {
-    "url": "https://github.com/miapre/html-to-figma-design-system",
+    "url": "https://github.com/miapre/mimetic",
     "source": "github"
   },
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "html-to-figma-design-system",
+      "identifier": "mimetic",
       "version": "1.1.0",
       "runtimeHint": "npx",
       "transport": {
