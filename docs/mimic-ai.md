@@ -463,9 +463,144 @@ Rules:
 
 ---
 
+## Phase 3.7 — Execution mode detection and mandatory boilerplate
+
+**Objective:** When construction uses raw JavaScript via `use_figma` rather than the `figma_*` bridge abstraction tools, emit a canonical DS helper block before writing any construction code. This is not optional.
+
+**Detection:** If the bridge executes arbitrary JavaScript (i.e. the script contains `figma.createText()`, `figma.createFrame()`, or similar Plugin API calls directly), the raw-JavaScript execution path is active. The `figma_*` abstraction tools are not present and their DS compliance guarantees do not apply.
+
+**When raw-JavaScript execution is detected — mandatory pre-script block:**
+
+Every `use_figma` call, without exception, must open with the following canonical boilerplate before any construction code:
+
+```javascript
+// ── MIMIC DS BOILERPLATE — required at top of every use_figma call ──────────
+const getVar = id => figma.variables.getVariableById(id);
+const bindFill = (node, id) => {
+  const v = getVar(id);
+  if (!v) throw new Error(`DS var not found: ${id}`);
+  node.fills = [{type:'SOLID', color:{r:0,g:0,b:0}}];
+  node.setBoundVariableForPaint(0, 'color', v);
+};
+const bindStroke = (node, id) => {
+  const v = getVar(id);
+  if (!v) throw new Error(`DS var not found: ${id}`);
+  node.strokes = [{type:'SOLID', color:{r:0,g:0,b:0}}];
+  node.setBoundVariableForPaint(0, 'color', v, 'strokes');
+};
+const applyStyle = async (node, key) => {
+  const s = await figma.importStyleByKeyAsync(key);
+  node.textStyleId = s.id;
+};
+const txt = async (chars, tsKey, varId, x, y, parent) => {
+  await figma.loadFontAsync({family:'Inter', style:'Regular'}).catch(()=>{});
+  const t = figma.createText();
+  t.characters = chars;
+  if (tsKey) await applyStyle(t, tsKey);  // textStyleId — NEVER skip
+  if (varId) bindFill(t, varId);          // DS color variable — NEVER skip
+  t.x = x; t.y = y;
+  if (parent) parent.appendChild(t);
+  return t;
+};
+const dsBadge = async (compKey, label, x, y, parent) => {
+  const c = await figma.importComponentByKeyAsync(compKey);
+  const inst = c.createInstance();
+  inst.x = x; inst.y = y;
+  const tn = inst.findOne(n => n.type === 'TEXT');
+  if (tn) { await figma.loadFontAsync(tn.fontName).catch(()=>{}); tn.characters = label; }
+  if (parent) parent.appendChild(inst);
+  return inst;
+};
+const dsIcon = async (iconKey, x, y, parent) => {
+  const c = await figma.importComponentByKeyAsync(iconKey);
+  const inst = c.createInstance();
+  inst.x = x; inst.y = y;
+  if (parent) parent.appendChild(inst);
+  return inst;
+};
+// ── End boilerplate ──────────────────────────────────────────────────────────
+```
+
+**Enforcement rules (non-negotiable):**
+- No `figma.createText()` call may appear outside the `txt()` helper
+- No fill may be set as `node.fills = [{color:{r,g,b}}]` outside `bindFill()` or `bindStroke()`
+- `node.fontSize`, `node.fontName`, `node.fontWeight`, `node.lineHeight` must never be set directly on a text node
+- Hardcoded `{r,g,b}` color objects in fills or strokes are forbidden without exception
+- DS component instances (badges, buttons, icons) must be created via `dsBadge()` / `dsIcon()` or an equivalent helper that uses `importComponentByKeyAsync` — never via `figma.createFrame()` styled to look like a component
+
+**Icon-inside-button pattern (swapComponent — not appendChild):**
+
+Figma instances are sealed containers. `appendChild` into an instance throws. For DS buttons that contain an icon placeholder, use `swapComponent`:
+
+```javascript
+const iconBtn = async (btnKey, iconKey, x, y, parent) => {
+  const btnC = await figma.importComponentByKeyAsync(btnKey);
+  const btn = btnC.createInstance();
+  btn.x = x; btn.y = y;
+  const ph = btn.findOne(n => n.type === 'INSTANCE');
+  if (ph) {
+    const icoC = await figma.importComponentByKeyAsync(iconKey);
+    ph.swapComponent(icoC);
+  }
+  if (parent) parent.appendChild(btn);
+  return btn;
+};
+```
+
+**Variable and text style pre-load:**
+
+Before any construction begins, pre-load all DS variable IDs and text style IDs needed for the screen into named dictionaries (`V` and `TS`). Do not look up variables inline during node construction — every lookup at construction time risks a missing-variable error that silently skips the binding.
+
+```javascript
+// Pre-loaded at Phase 3 — fill in discovered IDs
+const V = {
+  'bg-primary':     'VariableID:...',
+  'text-primary':   'VariableID:...',
+  // ... all variables needed for this screen
+};
+const TS = {
+  'xs/Regular':   'S:...',
+  'sm/Semibold':  'S:...',
+  // ... all text styles needed for this screen
+};
+```
+
+If a variable ID cannot be resolved during Phase 3, stop and find the correct ID before writing the build script. A build script that calls `getVar(undefined)` will silently fail to bind the variable — it is not acceptable to defer this discovery to runtime.
+
+---
+
 ## Phase 4 — Figma construction
 
 **Objective:** Build the Figma structure cleanly using the bridge tools.
+
+Pre-build element inventory (mandatory — must complete before any construction call):
+
+Before writing the first `use_figma` script, produce a written mapping of every element in the HTML to its Figma resolution. This is not a mental checklist — it must be written out explicitly in the response before any tool call. Format:
+
+```
+Element inventory — [screen name]
+──────────────────────────────────────────────────────
+HTML element               | Figma resolution          | Position / notes
+---------------------------|---------------------------|---------------------
+Page header (title)        | DS Page Header instance   | x=0, y=0; title overridden to "trc-01234567…"; badges hidden
+Tags row (no label)        | DS Badge instances only    | No "Tags:" label — not in HTML
+Transport button (play)    | DS Button sm/Tertiary      | Icon only — DS icon swapped in via swapComponent; text hidden
+Transport button (prev)    | DS Button sm/Tertiary      | Icon only
+Frame info ("Frame 1 · …") | txt() node                | RIGHT-aligned inside playback bar
+Agent "entry" badge        | DS Badge instance          | Inside node card; not a custom frame
+Event type (agent.input)   | DS Badge instance (Brand)  | In current event row
+Event type (plain text)    | txt() node — NOT a badge   | Waterfall event rows; type is text, not a component
+Container height (flow)    | 5 nodes × row-height + gaps| Calculated from content — no extra whitespace
+```
+
+Rules for the inventory:
+- Every HTML element that will appear in Figma must have a row
+- The "Figma resolution" column must explicitly state whether the element is: a DS component INSTANCE, a `txt()` text node, a primitive frame, or a calculated container
+- Any element resolved as plain `txt()` text must not become a DS component in construction, and vice versa — the inventory is binding
+- Layout positions that carry semantic meaning (right-aligned, left-aligned, nested inside a specific parent) must be noted explicitly
+- Container heights for coordinate-based panels (graph, waterfall, gantt) must be calculated from their content before construction, written in the inventory, and matched exactly during construction — do not leave whitespace the HTML does not have
+
+Proceeding to construction without a completed inventory is a Phase 4 failure.
 
 Rules:
 - Every container is an auto layout frame — use `figma_create_frame` with `layoutMode: HORIZONTAL` or `VERTICAL`
@@ -624,6 +759,67 @@ Page layout consistency rule:
 - Vertical rhythm: spacing between sections must be consistent throughout the page; do not alternate between two different gap values within the same content column
 - If the HTML source specifies an explicit `padding-bottom` or `margin-bottom` on the content container, replicate it as `paddingBottom` on the Figma content frame
 - Enforce at the artboard level — verify after Phase 4 construction and before Phase 5 validation
+
+Post-chunk validation sweep (raw-JavaScript execution path only — blocking gate):
+
+After every `use_figma` call during construction, before writing the next chunk, run the following validation script as a separate `use_figma` call. The next chunk must not start until the sweep returns `'PASS'`.
+
+```javascript
+// Post-chunk DS compliance sweep
+const page = figma.root.children.find(p => p.id === TARGET_PAGE_ID);
+await figma.setCurrentPageAsync(page);
+const artboard = figma.currentPage.findOne(n => n.name === ARTBOARD_NAME);
+const violations = [];
+
+// ── Check 1: Text style and color variable compliance ────────────────────────
+artboard.findAll(n => n.type === 'TEXT').forEach(t => {
+  if (!t.textStyleId)
+    violations.push({node: t.name || t.id, issue: 'missing textStyleId', text: t.characters.slice(0,60)});
+  const hasBoundFill = t.fills?.some(f => f.boundVariables?.color);
+  if (!hasBoundFill)
+    violations.push({node: t.name || t.id, issue: 'raw fill — no DS color variable', text: t.characters.slice(0,60)});
+});
+
+// ── Check 2: Raw fill/stroke colors on containers ────────────────────────────
+const FILL_TYPES = new Set(['FRAME','RECTANGLE','ELLIPSE']);
+artboard.findAll(n => FILL_TYPES.has(n.type)).forEach(node => {
+  (node.fills || []).forEach(f => {
+    if (f.type === 'SOLID' && !f.boundVariables?.color)
+      violations.push({node: node.name || node.id, issue: 'raw fill — no DS color variable'});
+  });
+  (node.strokes || []).forEach(s => {
+    if (s.type === 'SOLID' && !s.boundVariables?.color)
+      violations.push({node: node.name || node.id, issue: 'raw stroke — no DS color variable'});
+  });
+});
+
+// ── Check 3: Custom frames masquerading as DS components ─────────────────────
+// Any FRAME (not INSTANCE) whose name contains a component keyword is a fake component.
+const COMPONENT_KEYWORDS = ['badge','btn','button','icon','chip','tag'];
+artboard.findAll(n => n.type === 'FRAME').forEach(node => {
+  const lname = (node.name || '').toLowerCase();
+  if (COMPONENT_KEYWORDS.some(k => lname.includes(k)))
+    violations.push({node: node.name || node.id, issue: 'FRAME named as DS component — must be an INSTANCE imported via importComponentByKeyAsync'});
+});
+
+// ── Check 4: DS component instances with default placeholder text ─────────────
+// These strings are the most common DS library defaults across design systems.
+const DS_PLACEHOLDERS = ['Title', 'Description', 'Label', 'Button text', 'Badge', 'Placeholder', 'Button label'];
+artboard.findAll(n => n.type === 'INSTANCE').forEach(inst => {
+  inst.findAll(n => n.type === 'TEXT').forEach(t => {
+    if (DS_PLACEHOLDERS.includes(t.characters))
+      violations.push({node: inst.name || inst.id, issue: `hydration failure — DS placeholder text "${t.characters}" not replaced`});
+  });
+});
+
+return violations.length === 0
+  ? 'PASS'
+  : JSON.stringify({FAIL: violations.length, violations}, null, 2);
+```
+
+- If the sweep returns `FAIL`: fix every listed violation before proceeding. Do not suppress or ignore violations by marking them acceptable — each one is a construction failure.
+- Do not skip this sweep to save bridge calls. Every skipped sweep is a violation that survives into the final file.
+- This sweep is not a substitute for using the Phase 3.7 helpers — it is the enforcement backstop for anything that slips through.
 
 When no suitable component exists:
 - construct a local editable structure inside the generated Figma file
@@ -1008,6 +1204,7 @@ Bridge capability gaps discovered during real execution. These are future enhanc
 - **Form element support** — no primitive for `<input>`, `<select>`, `<checkbox>`; these must be approximated as text + frame constructs
 - **Mixed absolute/flex layout support** — no mechanism for placing absolutely positioned children inside an auto-layout parent; required for canvas-type panels where nodes have spatial coordinates
 - **Batched node creation** ✓ resolved — use `figma_batch` with an `operations` array; all operations execute in a single bridge round trip
+- **Raw-JavaScript execution path** (`use_figma`) — when the bridge executes arbitrary Plugin API JavaScript instead of `figma_*` abstraction tools, the abstraction layer's DS compliance guarantees do not apply. Phase 3.7 mandatory boilerplate and the Phase 4 post-chunk validation sweep compensate for the missing guardrails. Both are required whenever this execution path is active. Audits that only test the `figma_*` abstraction path do not cover this path — test both modes independently.
 
 ---
 
