@@ -142,7 +142,13 @@ Explicit rules encode what Mimetic has learned about your DS beyond component ma
 
 **Key deduplication rule:** Before writing any pattern_key in Phase 7, check the patterns loaded here. If a key already exists that covers the same pattern (same taxonomy category, same semantic role), use the existing key. Do not create a synonym.
 
-**DS update signal:** If the user says they updated their design system (added or changed components), add `reset_gap_seen_counts: true` to the Phase 7 write call. This resets all gap rules to seen_count=0, causing Mimetic to re-run DS search for every previously known gap on the next run — ensuring newly added components are discovered immediately instead of being blocked by the threshold skip.
+**DS update signal:** If the user says they updated their design system (added or changed components), add `reset_gap_seen_counts: true` to the Phase 7 write call. This resets seen_count=0 on all `gap` AND `substitution` rules. The reset takes effect on the **next run** — the current run has already loaded its Phase -1 state and proceeds normally.
+
+**Important:** `reset_gap_seen_counts` resets seen_count on substitution rules, but Phase 3 step 0 applies substitution rules based on `type=substitution AND state=active` — there is no seen_count threshold for substitutions. **To actually unlock DS search for a substitution rule, you must explicitly write `state: "resolved"` on it.** For any pattern the user says was added to the DS and currently has a substitution rule, write:
+```json
+{ "rule_key": "label/chip", "state": "resolved" }
+```
+This causes Phase 3 step 0 to hit the resolved branch and run a full DS search on the next run, discovering the new component. `reset_gap_seen_counts` alone is not sufficient for substitution rules.
 
 **If the knowledge file is empty or does not exist:** proceed normally. The file will be created at Phase 7.
 
@@ -307,14 +313,14 @@ Rules:
 **Objective:** Map every node to the design system without breaking structure.
 
 Resolution order per node:
-0. **Explicit rule check** — before any DS search, check explicit_rules from Phase -1:
-   - If a `substitution` rule exists → use `substitution_key` directly. No DS search. Write `increment_seen: true` in Phase 7 to confirm the substitution is still working.
-   - If a `gap` rule exists with `state: "resolved"` → treat as new pattern; run full DS search (rule is stale, DS may have been updated again).
-   - If a `gap` rule exists with seen_count ≥ 3 (and not resolved) → skip DS search. Use primitive or `substitution_key` if one is recorded.
-   - If a `gap` rule exists with seen_count < 3 → run DS search anyway (DS may have been updated):
-     - DS search **finds a component**: gap is resolved. Write component mapping in `updates` AND `{ rule_key, state: "resolved" }` in `rule_updates` in Phase 7.
+0. **Explicit rule check** — before any DS search, check explicit_rules from Phase -1. Evaluate in this exact order:
+   - **Any rule with `state: "resolved"`** (regardless of type) → treat as new pattern; run full DS search. The rule was cleared by a prior resolution or reset — check if the DS situation has changed again.
+   - **`substitution` rule (state: active)** → use `substitution_key` directly. No DS search. Write `increment_seen: true` in Phase 7 to confirm it's still working.
+   - **`gap` rule (state: active, seen_count ≥ 3)** → skip DS search. Use primitive or `substitution_key` if one is recorded.
+   - **`gap` rule (state: active, seen_count < 3)** → run DS search anyway (DS may have been updated):
+     - DS search **finds a component**: resolved. Write component mapping in `updates` AND `{ rule_key, state: "resolved" }` in `rule_updates` in Phase 7.
      - DS search **still finds nothing**: write `{ rule_key, increment_seen: true }` in Phase 7.
-   - If a `convention` rule exists → apply it during steps 1–2.
+   - **`convention` rule** → apply the recorded rule during steps 1–2.
 1. **Exact match** — component exists, use it directly
 2. **Approximate match** — closest component with noted deviation
 3. **Primitive fallback** — no component match; use DS variables for spacing, color, and type
@@ -806,7 +812,19 @@ For every pattern resolved via exact or approximate match in Phase 3:
 
 **For primitive fallbacks:** do not write a `updates` entry. Primitives are not mappings.
 
-**For user corrections:** submit the entry with `increment_correction: true` instead of `increment_use: true`. This demotes VERIFIED → CANDIDATE. **Additionally:** if the corrected pattern has an associated explicit rule (check Phase -1 explicit_rules for a matching rule_key), also write a rule_update with `reset_seen_count: true` and `type: "gap"` to clear any substitution association. Without this, the old substitution rule will re-apply on the next run and override the correction.
+**For user corrections — two-part write (both parts are mandatory):**
+
+Part 1 — demote the pattern:
+```json
+{ "pattern_key": "label/chip", "increment_correction": true }
+```
+
+Part 2 — reset the associated rule (if one exists in Phase -1 explicit_rules):
+```json
+{ "rule_key": "label/chip", "type": "gap", "reset_seen_count": true }
+```
+
+**Never write Part 1 without Part 2** when an associated rule exists. Omitting Part 2 means the old substitution rule survives and re-applies the wrong component on the next run, silently undoing the correction. Always scan Phase -1 explicit_rules for a matching rule_key before closing the correction write.
 
 ---
 
@@ -861,6 +879,8 @@ For DS usage patterns you discovered this run that should be remembered:
 
 Conventions do not use `increment_seen` — seen_count is not meaningful for conventions. Write them once and update `notes` if the convention changes.
 
+Convention notes must be specific enough to apply unambiguously. Good: `"Use 'filled' variant for primary buttons — 'solid' is reserved for destructive actions"`. Bad: `"Buttons use a special variant"`. A vague convention note will be misapplied or ignored. If you cannot write a specific note, do not write the convention — wait until you have enough context to make it precise.
+
 To permanently suppress a recommendation the user has acknowledged and decided to leave unresolved:
 
 ```json
@@ -878,7 +898,11 @@ Dismissed gaps are excluded from all future recommendations.
 
 **Gap recommendations surface automatically:** the response includes a `recommendations` array listing any active, non-dismissed gaps with seen_count ≥ 3. These are the clearest signal Mimetic can produce about what the user's DS is missing.
 
-**Key format warnings:** if a pattern_key or rule_key doesn't match the `category/name` taxonomy format, the response includes a `key_warnings` array. Fix the keys immediately — malformed keys fragment the knowledge base.
+**Key format warnings:** if a pattern_key or rule_key doesn't match the `category/name` taxonomy format, the response includes a `key_warnings` array. **Treat these as write errors, not advisories.** The malformed key was saved — correct it immediately by re-submitting the write with the proper taxonomy key and state override to overwrite the bad entry. Do not proceed to Phase 6 with unresolved key warnings.
+
+**Rule type change warnings:** if the response includes `rule_type_warnings`, a rule's type was changed (e.g. gap → convention). This is a permanent structural mutation. Verify it was intentional. If not, immediately re-submit a correcting rule_update to restore the original type.
+
+**Exception — correction workflow:** when executing a user correction (Part 2 writes `type: "gap"` and `reset_seen_count: true` on a substitution rule), a `rule_type_warnings` entry is expected and correct. Do not treat it as an error in this context. The type change from `substitution` to `gap` is the intended result of the correction.
 
 **After writing, report in the Phase 6 knowledge section:**
 - Total patterns in knowledge file, how many VERIFIED / CANDIDATE
@@ -887,7 +911,8 @@ Dismissed gaps are excluded from all future recommendations.
 - Active substitution rules applied this run
 - Any new gap rules created this run, any gaps resolved this run
 - DS enhancement recommendations (from response `recommendations` array) — **mandatory to surface, never omit**
-- Any key_warnings from the response — fix before closing the run report
+- Any `key_warnings` from the response — **treat as errors, fix immediately, do not close the run report**
+- Any `rule_type_warnings` from the response — verify intentional, correct if not
 
 ---
 

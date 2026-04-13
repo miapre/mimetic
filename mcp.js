@@ -857,8 +857,9 @@ const TOOLS = [
       'Use state="REJECTED" to permanently suppress a mapping. ' +
       'Use dismissed_conflicts to suppress a DS evolution conflict notice for a specific candidate component. ' +
       'Use rule_updates to record DS gaps, substitutions, and conventions. ' +
-      'Use reset_gap_seen_counts=true when the user signals their DS was updated — resets all gap rules so new components can be discovered. ' +
-      'Gaps with seen_count ≥ 3 are surfaced as DS enhancement recommendations (unless dismissed or resolved).',
+      'Use reset_gap_seen_counts=true when the user signals their DS was updated — resets all gap AND substitution rules so new components can be discovered. ' +
+      'Gaps with seen_count ≥ 3 are surfaced as DS enhancement recommendations (unless dismissed or resolved). ' +
+      'Response includes key_warnings (malformed key format — treat as errors, fix immediately) and rule_type_warnings (rule type changed — confirm intentional).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -985,10 +986,26 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
     } else if (name === 'mimetic_knowledge_write') {
       const knowledge = loadKnowledge();
 
-      // DS update signal: reset all gap rules so newly added DS components can be discovered
+      // DS update signal: reset gap AND substitution rules so newly added DS components can be discovered.
+      // Substitution rules are reset too — if the real component was added to the DS, the substitution
+      // should be re-evaluated rather than continuing to win Phase 3 step 0 indefinitely.
       if (fixedArgs.reset_gap_seen_counts) {
         for (const rule of knowledge.explicit_rules) {
-          if (rule.type === 'gap') rule.seen_count = 0;
+          if (rule.type === 'gap' || rule.type === 'substitution') rule.seen_count = 0;
+        }
+      }
+
+      // Type transition check: warn when an existing rule's type is being changed.
+      // Must run BEFORE applyRuleUpdates mutates the entries.
+      const typeWarnings = [];
+      for (const u of (fixedArgs.rule_updates ?? [])) {
+        if (u.rule_key && u.type) {
+          const existing = knowledge.explicit_rules.find(r => r.rule_key === u.rule_key);
+          if (existing && existing.type !== u.type) {
+            typeWarnings.push(
+              `rule_key "${u.rule_key}" type is changing from "${existing.type}" to "${u.type}" — confirm this is intentional`
+            );
+          }
         }
       }
 
@@ -1023,7 +1040,8 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         total_rules: (knowledge.explicit_rules ?? []).length,
         ds_recommendations: recommendations.length,
         recommendations: recommendations.map(r => ({ rule_key: r.rule_key, seen_count: r.seen_count, reason: r.reason })),
-        ...(keyWarnings.length > 0 && { key_warnings: keyWarnings }),
+        ...(keyWarnings.length  > 0 && { key_warnings:       keyWarnings  }),
+        ...(typeWarnings.length > 0 && { rule_type_warnings: typeWarnings }),
         path: KNOWLEDGE_PATH,
       };
 
