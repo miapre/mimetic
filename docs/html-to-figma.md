@@ -142,6 +142,8 @@ Explicit rules encode what Mimetic has learned about your DS beyond component ma
 
 **Key deduplication rule:** Before writing any pattern_key in Phase 7, check the patterns loaded here. If a key already exists that covers the same pattern (same taxonomy category, same semantic role), use the existing key. Do not create a synonym.
 
+**DS update signal:** If the user says they updated their design system (added or changed components), add `reset_gap_seen_counts: true` to the Phase 7 write call. This resets all gap rules to seen_count=0, causing Mimetic to re-run DS search for every previously known gap on the next run — ensuring newly added components are discovered immediately instead of being blocked by the threshold skip.
+
 **If the knowledge file is empty or does not exist:** proceed normally. The file will be created at Phase 7.
 
 **Never:** modify knowledge during Phase -1. This phase is read-only.
@@ -306,10 +308,13 @@ Rules:
 
 Resolution order per node:
 0. **Explicit rule check** — before any DS search, check explicit_rules from Phase -1:
-   - If a `substitution` rule exists for this pattern_key → use `substitution_key` directly. No DS search.
-   - If a `gap` rule exists with seen_count ≥ 3 → skip DS search. Go to step 3 (primitive) or use the `substitution_key` if one is recorded.
-   - If a `gap` rule exists with seen_count < 3 → run DS search anyway (DS may have been updated since the gap was first recorded). If DS search finds a component, the gap is resolved — write the mapping in Phase 7. If it still finds nothing, increment the gap's seen_count in Phase 7.
-   - If a `convention` rule exists for this pattern_key → apply the convention during steps 1–2.
+   - If a `substitution` rule exists → use `substitution_key` directly. No DS search. Write `increment_seen: true` in Phase 7 to confirm the substitution is still working.
+   - If a `gap` rule exists with `state: "resolved"` → treat as new pattern; run full DS search (rule is stale, DS may have been updated again).
+   - If a `gap` rule exists with seen_count ≥ 3 (and not resolved) → skip DS search. Use primitive or `substitution_key` if one is recorded.
+   - If a `gap` rule exists with seen_count < 3 → run DS search anyway (DS may have been updated):
+     - DS search **finds a component**: gap is resolved. Write component mapping in `updates` AND `{ rule_key, state: "resolved" }` in `rule_updates` in Phase 7.
+     - DS search **still finds nothing**: write `{ rule_key, increment_seen: true }` in Phase 7.
+   - If a `convention` rule exists → apply it during steps 1–2.
 1. **Exact match** — component exists, use it directly
 2. **Approximate match** — closest component with noted deviation
 3. **Primitive fallback** — no component match; use DS variables for spacing, color, and type
@@ -801,7 +806,7 @@ For every pattern resolved via exact or approximate match in Phase 3:
 
 **For primitive fallbacks:** do not write a `updates` entry. Primitives are not mappings.
 
-**For user corrections:** submit the entry with `increment_correction: true` instead of `increment_use: true`. This demotes VERIFIED → CANDIDATE.
+**For user corrections:** submit the entry with `increment_correction: true` instead of `increment_use: true`. This demotes VERIFIED → CANDIDATE. **Additionally:** if the corrected pattern has an associated explicit rule (check Phase -1 explicit_rules for a matching rule_key), also write a rule_update with `reset_seen_count: true` and `type: "gap"` to clear any substitution association. Without this, the old substitution rule will re-apply on the next run and override the correction.
 
 ---
 
@@ -833,6 +838,17 @@ If you used a substitution (used a different DS component to fill the gap):
 
 If a substitution rule already existed from Phase -1 and you applied it this run, still submit it with `increment_seen: true` — this confirms the substitution is still accurate and increments its recurrence count.
 
+If a gap from Phase -1 was resolved this run (DS search found a component that wasn't there before):
+
+```json
+{
+  "rule_key": "label/chip",
+  "state": "resolved"
+}
+```
+
+Resolved rules are excluded from future recommendations and future runs will search normally for that pattern.
+
 For DS usage patterns you discovered this run that should be remembered:
 
 ```json
@@ -843,21 +859,35 @@ For DS usage patterns you discovered this run that should be remembered:
 }
 ```
 
-Conventions do not use `increment_seen`. They are written once and updated if the convention changes.
+Conventions do not use `increment_seen` — seen_count is not meaningful for conventions. Write them once and update `notes` if the convention changes.
+
+To permanently suppress a recommendation the user has acknowledged and decided to leave unresolved:
+
+```json
+{
+  "rule_key": "label/chip",
+  "dismissed": true
+}
+```
+
+Dismissed gaps are excluded from all future recommendations.
 
 ---
 
 **Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see `verified` count increase in the response. On the next run, VERIFIED entries skip DS lookup entirely.
 
-**Gap recommendations surface automatically:** the response includes a `recommendations` array listing any gaps with seen_count ≥ 3. Report these in Phase 6 — they represent the clearest signal that the user's DS is missing something.
+**Gap recommendations surface automatically:** the response includes a `recommendations` array listing any active, non-dismissed gaps with seen_count ≥ 3. These are the clearest signal Mimetic can produce about what the user's DS is missing.
+
+**Key format warnings:** if a pattern_key or rule_key doesn't match the `category/name` taxonomy format, the response includes a `key_warnings` array. Fix the keys immediately — malformed keys fragment the knowledge base.
 
 **After writing, report in the Phase 6 knowledge section:**
 - Total patterns in knowledge file, how many VERIFIED / CANDIDATE
 - Which entries were promoted to VERIFIED this run
-- DS lookup calls saved (VERIFIED entries × calls avoided)
+- DS lookup calls saved (VERIFIED entries × calls avoided) plus rule-based skips (substitutions + high-confidence gaps)
 - Active substitution rules applied this run
-- Any new gap rules created this run
-- DS enhancement recommendations (from response `recommendations` array) — mandatory to surface
+- Any new gap rules created this run, any gaps resolved this run
+- DS enhancement recommendations (from response `recommendations` array) — **mandatory to surface, never omit**
+- Any key_warnings from the response — fix before closing the run report
 
 ---
 

@@ -35,7 +35,10 @@ function loadKnowledge() {
     return { version: KNOWLEDGE_VERSION, patterns: [], explicit_rules: [], updated: null };
   }
   try {
-    return JSON.parse(readFileSync(KNOWLEDGE_PATH, 'utf8'));
+    const data = JSON.parse(readFileSync(KNOWLEDGE_PATH, 'utf8'));
+    // Migrate: older knowledge files may not have explicit_rules
+    if (!Array.isArray(data.explicit_rules)) data.explicit_rules = [];
+    return data;
   } catch {
     // Corrupted file — back it up before any write overwrites it
     try { renameSync(KNOWLEDGE_PATH, KNOWLEDGE_PATH + '.bak'); } catch { /* ignore */ }
@@ -115,7 +118,8 @@ function applyPatternUpdates(knowledge, updates) {
 }
 
 // Merge an array of explicit rule updates (DS gaps, substitutions, conventions)
-// into knowledge.explicit_rules. Handles: upsert and seen_count increment.
+// into knowledge.explicit_rules.
+// Handles: upsert, seen_count increment/reset, state, dismissal, convention init.
 function applyRuleUpdates(knowledge, ruleUpdates) {
   if (!Array.isArray(ruleUpdates)) return;
   if (!Array.isArray(knowledge.explicit_rules)) knowledge.explicit_rules = [];
@@ -125,27 +129,40 @@ function applyRuleUpdates(knowledge, ruleUpdates) {
     if (!rule_key) continue;
 
     const idx = knowledge.explicit_rules.findIndex(r => r.rule_key === rule_key);
+    const isConvention = (update.type ?? 'gap') === 'convention';
 
     if (idx === -1) {
+      // New rule.
+      // Conventions don't use seen_count semantically — initialize to 0.
+      // Gaps and substitutions start at 1 (first occurrence).
       knowledge.explicit_rules.push({
         rule_key,
         type:              update.type ?? 'gap',
+        state:             update.state ?? 'active',
         substitution_key:  update.substitution_key  ?? null,
         substitution_name: update.substitution_name ?? null,
         reason:            update.reason ?? null,
-        seen_count:        1,
+        seen_count:        isConvention ? 0 : 1,
         first_seen:        new Date().toISOString(),
         last_seen:         new Date().toISOString(),
+        dismissed:         false,
         notes:             update.notes ?? null,
       });
     } else {
       const rule = knowledge.explicit_rules[idx];
       if (update.type)               rule.type              = update.type;
+      if (update.state)              rule.state             = update.state;
       if (update.substitution_key)   rule.substitution_key  = update.substitution_key;
       if (update.substitution_name)  rule.substitution_name = update.substitution_name;
-      if (update.reason !== undefined) rule.reason          = update.reason;
-      if (update.notes  !== undefined) rule.notes           = update.notes;
-      if (update.increment_seen) {
+      if (update.reason  !== undefined) rule.reason         = update.reason;
+      if (update.notes   !== undefined) rule.notes          = update.notes;
+      if (update.dismissed !== undefined) rule.dismissed    = update.dismissed;
+
+      // reset_seen_count takes priority over increment_seen
+      if (update.reset_seen_count) {
+        rule.seen_count = 0;
+        rule.last_seen  = new Date().toISOString();
+      } else if (update.increment_seen) {
         rule.seen_count = (rule.seen_count ?? 0) + 1;
         rule.last_seen  = new Date().toISOString();
       }
@@ -836,11 +853,12 @@ const TOOLS = [
       'Write pattern→component mappings and explicit DS rules to the Mimetic knowledge file (ds-knowledge.json). ' +
       'Call this at the end of every successful HTML-to-Figma run. ' +
       'Automatically promotes CANDIDATE entries to VERIFIED once use_count reaches 3 with no corrections. ' +
-      'Use increment_correction=true when the user corrected a mapping to demote it back to CANDIDATE. ' +
+      'Use increment_correction=true when the user corrected a mapping — also write a matching rule_update with reset_seen_count=true. ' +
       'Use state="REJECTED" to permanently suppress a mapping. ' +
       'Use dismissed_conflicts to suppress a DS evolution conflict notice for a specific candidate component. ' +
-      'Use rule_updates to record DS gaps (patterns with no DS component), substitutions (what to use instead), ' +
-      'and conventions (DS usage rules). Gaps with seen_count ≥ 3 are surfaced as DS enhancement recommendations.',
+      'Use rule_updates to record DS gaps, substitutions, and conventions. ' +
+      'Use reset_gap_seen_counts=true when the user signals their DS was updated — resets all gap rules so new components can be discovered. ' +
+      'Gaps with seen_count ≥ 3 are surfaced as DS enhancement recommendations (unless dismissed or resolved).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -850,14 +868,14 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              pattern_key:          { type: 'string',  description: 'Required. Canonical taxonomy key for the HTML pattern (e.g. "metric/kpi", "label/chip"). Must match the Pattern Key Taxonomy.' },
+              pattern_key:          { type: 'string',  description: 'Required. Canonical taxonomy key (e.g. "metric/kpi", "label/chip"). Must match the Pattern Key Taxonomy.' },
               component_key:        { type: 'string',  description: 'Figma component key hash for the mapped DS component.' },
-              component_name:       { type: 'string',  description: 'Human-readable component name (for readability in the knowledge file).' },
+              component_name:       { type: 'string',  description: 'Human-readable component name.' },
               state:                { type: 'string',  enum: ['CANDIDATE', 'VERIFIED', 'REJECTED', 'EXPIRED'], description: 'Explicit state override. Omit to let promotion logic handle CANDIDATE→VERIFIED automatically.' },
               increment_use:        { type: 'boolean', description: 'Set true to increment use_count by 1 for an existing entry.' },
-              increment_correction: { type: 'boolean', description: 'Set true when the user corrected this mapping. Increments correction_count and demotes VERIFIED→CANDIDATE.' },
-              dismissed_conflicts:  { type: 'array',   items: { type: 'string' }, description: 'Component keys to suppress in future DS evolution conflict scans for this pattern.' },
-              notes:                { type: 'string',  description: 'Optional context note about this mapping.' },
+              increment_correction: { type: 'boolean', description: 'Set true when the user corrected this mapping. Increments correction_count and demotes VERIFIED→CANDIDATE. Also write a rule_update with reset_seen_count=true for any associated rule.' },
+              dismissed_conflicts:  { type: 'array',   items: { type: 'string' }, description: 'Component keys to suppress in future DS evolution conflict scans.' },
+              notes:                { type: 'string',  description: 'Optional context note.' },
             },
             required: ['pattern_key'],
           },
@@ -868,16 +886,23 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              rule_key:          { type: 'string',  description: 'Required. Semantic pattern name this rule applies to (e.g. "label/chip", "form/input-select"). Must match the Pattern Key Taxonomy.' },
-              type:              { type: 'string',  enum: ['gap', 'substitution', 'convention'], description: 'gap = no DS component for this pattern; substitution = use this component instead; convention = DS usage rule to remember.' },
-              substitution_key:  { type: 'string',  description: 'Component key of the DS component to use as fallback when this pattern has no direct DS match.' },
+              rule_key:          { type: 'string',  description: 'Required. Pattern key this rule applies to (e.g. "label/chip"). Must match the Pattern Key Taxonomy.' },
+              type:              { type: 'string',  enum: ['gap', 'substitution', 'convention'], description: 'gap = no DS component; substitution = use substitution_key instead; convention = DS usage rule.' },
+              state:             { type: 'string',  enum: ['active', 'resolved'], description: 'Set "resolved" when a previously missing DS component now exists. Removes the rule from future recommendations and re-enables DS search.' },
+              substitution_key:  { type: 'string',  description: 'Component key to use as fallback when pattern has no direct DS match.' },
               substitution_name: { type: 'string',  description: 'Human-readable name of the substitution component.' },
-              reason:            { type: 'string',  description: 'Why this rule exists (e.g. "No chip component in DS — Badge used instead").' },
-              increment_seen:    { type: 'boolean', description: 'Set true to increment seen_count. Used to track how often this gap or substitution recurs across runs.' },
-              notes:             { type: 'string',  description: 'Optional additional context about this rule.' },
+              reason:            { type: 'string',  description: 'Why this rule exists.' },
+              increment_seen:    { type: 'boolean', description: 'Set true to increment seen_count by 1. Use for gap/substitution rules — not for conventions.' },
+              reset_seen_count:  { type: 'boolean', description: 'Set true to reset seen_count to 0. Use when a correction is made (paired with increment_correction on the pattern update) or when demoting a stale rule.' },
+              dismissed:         { type: 'boolean', description: 'Set true to permanently suppress this gap from DS recommendations. Use when the user acknowledges the gap and decides not to add the component.' },
+              notes:             { type: 'string',  description: 'Optional context about this rule.' },
             },
             required: ['rule_key'],
           },
+        },
+        reset_gap_seen_counts: {
+          type: 'boolean',
+          description: 'Set true when the user signals their design system was updated. Resets seen_count to 0 on ALL gap-type rules, causing Mimetic to re-run DS search for those patterns on the next run and discover any newly added components.',
         },
       },
       required: ['updates'],
@@ -959,10 +984,37 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
 
     } else if (name === 'mimetic_knowledge_write') {
       const knowledge = loadKnowledge();
+
+      // DS update signal: reset all gap rules so newly added DS components can be discovered
+      if (fixedArgs.reset_gap_seen_counts) {
+        for (const rule of knowledge.explicit_rules) {
+          if (rule.type === 'gap') rule.seen_count = 0;
+        }
+      }
+
       applyPatternUpdates(knowledge, fixedArgs.updates ?? []);
       applyRuleUpdates(knowledge, fixedArgs.rule_updates ?? []);
       saveKnowledge(knowledge);
-      const recommendations = (knowledge.explicit_rules ?? []).filter(r => r.type === 'gap' && r.seen_count >= 3);
+
+      // Only active, non-dismissed gap rules at threshold surface as recommendations
+      const recommendations = (knowledge.explicit_rules ?? []).filter(
+        r => r.type === 'gap' && r.state !== 'resolved' && !r.dismissed && r.seen_count >= 3
+      );
+
+      // Soft key format check: pattern_key and rule_key should be category/name
+      const keyFormatRe = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
+      const keyWarnings = [];
+      for (const u of (fixedArgs.updates ?? [])) {
+        if (u.pattern_key && !keyFormatRe.test(u.pattern_key)) {
+          keyWarnings.push(`pattern_key "${u.pattern_key}" does not match taxonomy format (expected "category/name" — e.g. "metric/kpi")`);
+        }
+      }
+      for (const u of (fixedArgs.rule_updates ?? [])) {
+        if (u.rule_key && !keyFormatRe.test(u.rule_key)) {
+          keyWarnings.push(`rule_key "${u.rule_key}" does not match taxonomy format (expected "category/name")`);
+        }
+      }
+
       result = {
         updated: knowledge.updated,
         total_patterns: knowledge.patterns.length,
@@ -971,6 +1023,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         total_rules: (knowledge.explicit_rules ?? []).length,
         ds_recommendations: recommendations.length,
         recommendations: recommendations.map(r => ({ rule_key: r.rule_key, seen_count: r.seen_count, reason: r.reason })),
+        ...(keyWarnings.length > 0 && { key_warnings: keyWarnings }),
         path: KNOWLEDGE_PATH,
       };
 
