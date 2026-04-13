@@ -22,6 +22,8 @@ Here is an example of what you can build with this system:
 
 Claude wrote the code, executed it, and the entire page appeared in Figma in under two minutes.
 
+**Two things Mimic needs before every build:** First, it will ask where in Figma you want the output — answer with a Figma link or plain language (file name, page, artboard). Second, your component library must be enabled in that file, not just published. If Mimic can't find any components, it stops and tells you how to fix it before proceeding.
+
 **A note on Figma API limits:** Mimic is designed around how Figma's API actually works. Write operations — creating frames, inserting components, binding variables — are free and unlimited. Read operations — inspecting library components, reading design context, capturing screenshots — draw from a daily quota. Mimic minimizes reads by caching what it learns, skipping lookups for patterns it already knows, and limiting screenshots to one per build. The first run costs the most. Every subsequent run costs less.
 
 ---

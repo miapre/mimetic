@@ -295,6 +295,35 @@ Only issue a contingency read if the error message matches none of the above.
 
 ---
 
+## Phase 0.8 — Build target declaration (mandatory — ask before anything else)
+
+**Objective:** Confirm exactly where in Figma the build will go before any parsing, DS inspection, or construction begins. If this information is not in the user's request, ask for it now. Do not proceed until it is confirmed.
+
+**What to ask:**
+
+> "Before I start — where in Figma should I build this?
+> You can share a Figma link (to the file, a specific page, or a frame), or just tell me the file name and page. If you want me to place it next to existing content, point me to the artboard or frame."
+
+**What the user can provide (all are valid):**
+- A Figma URL to the file: `https://www.figma.com/design/abc123/...`
+- A Figma URL to a specific page or frame (includes `node-id`)
+- Plain language: "my main product file, the Screens page, next to the Login artboard"
+- A file key directly: `abc123xyz`
+
+**What to extract from the response:**
+- `file_key` — the Figma file to build in
+- `page` — which page (by name or ID)
+- `placement` — where on the page: next to a named frame, specific coordinates, or new artboard at default position
+
+**Rules:**
+- If the user's original request already includes a Figma URL or clear file/page reference, skip the question — extract the target and proceed
+- If any of the three values cannot be determined, ask before proceeding — do not assume
+- If the user provides only a file URL (no page), ask which page
+- Record the confirmed target in working memory — it is used in Phase 3.5 (bridge pre-flight) and Phase 4 (artboard placement)
+- This question is asked once per run. Do not re-ask mid-build.
+
+---
+
 ## Phase 1 — Parsing and layout
 
 **Objective:** Build a reliable structural representation of the HTML. Do not use AI for this phase — parse deterministically.
@@ -546,14 +575,28 @@ Rules:
 
 ## Phase 3.6 — Design system availability check
 
-**Objective:** Ensure DS components can actually be inserted during Phase 4.
+**Objective:** Confirm that at least one DS component library is accessible in the target Figma file before construction begins. This is a hard blocker — do not proceed to Phase 4 without confirmation.
 
-Rules:
-- Verify that required design system libraries are enabled in the target Figma file
-- If DS components are not accessible:
-  - do not attempt repeated insert failures
-  - fall back to primitive construction immediately
-  - record this as a DS environment limitation in the report
+**Procedure:**
+1. Run a minimal `search_design_system` query (e.g., "button") against the target file
+2. If results are returned → library is accessible. Proceed to Phase 3.7.
+3. If 0 results are returned → stop. Surface the following message to the user:
+
+> "I can't find any design system components in this Figma file. This usually means no component library is enabled here.
+>
+> To fix it:
+> 1. Open your Figma file
+> 2. Click the **Assets panel** (book icon in the left sidebar)
+> 3. Click the **Team library** icon at the top
+> 4. Find your design system and toggle it **on**
+>
+> Once that's done, let me know and I'll continue the build."
+
+**Rules:**
+- Do not attempt Phase 4 construction until this check passes
+- Do not fall back silently to primitives — that produces a build without DS compliance and gives the user no signal that something is wrong
+- If the user confirms the library is enabled and the search still returns 0 results, check whether the target file key from Phase 0.8 is correct
+- Record the check result in the Phase 6 report
 
 ---
 
