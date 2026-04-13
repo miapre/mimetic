@@ -2,13 +2,21 @@
   "$schema": "https://glama.ai/mcp/schemas/server.json",
   "name": "mimetic",
   "displayName": "Mimetic",
-  "description": "MCP server that translates HTML prototypes into Figma using your design system's published components and design token variables. The only tool that produces DS-native Figma output — real component instances and token bindings, not hardcoded shapes.",
+  "description": "An MCP that learns your design system. Translates HTML into Figma using your published components and design tokens — and compounds over time. Every run teaches Mimetic your DS vocabulary: by run 10, familiar patterns resolve instantly with near-zero library lookups. Your corrections teach it too.",
   "homepage": "https://github.com/miapre/mimetic",
   "license": "MIT",
   "categories": ["design", "figma", "productivity"],
   "tags": ["figma", "design-system", "html-to-figma", "mcp", "design-tokens", "model-context-protocol", "claude"],
   "runtime": "node",
   "tools": [
+    {
+      "name": "mimetic_knowledge_read",
+      "description": "Load known pattern→component mappings before a run. VERIFIED entries skip DS lookup entirely."
+    },
+    {
+      "name": "mimetic_knowledge_write",
+      "description": "Persist pattern mappings after a run. Auto-promotes CANDIDATE→VERIFIED at 3 consistent uses."
+    },
     {
       "name": "figma_insert_component",
       "description": "Insert a published library component instance into a Figma frame"

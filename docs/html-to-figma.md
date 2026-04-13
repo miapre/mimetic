@@ -31,6 +31,27 @@ When there is a conflict between two priorities, the higher one wins. Visual acc
 
 ---
 
+## Phase -1 — Knowledge load (mandatory, always first)
+
+**Objective:** Load accumulated DS knowledge before any parsing or DS inspection begins.
+
+Call `mimetic_knowledge_read` with no arguments. Record the result in working memory.
+
+**How to use the returned knowledge:**
+
+| Entry state | Action in Phase 3 |
+|---|---|
+| `VERIFIED` (use_count ≥ 3, correction_count = 0) | Use the stored component_key directly — skip DS lookup for this pattern |
+| `CANDIDATE` (use_count 1–2) | Use as a strong hint — confirm the component_key is still importable, then use it |
+| `REJECTED` | Never use this mapping — fall back to DS inspection or primitive |
+| `EXPIRED` | Skip — component key no longer valid; treat as new pattern |
+
+**If the knowledge file is empty or does not exist:** proceed normally. The file will be created at Phase 7.
+
+**Never:** modify knowledge during Phase -1. This phase is read-only.
+
+---
+
 ## Phase 0 — Research (optional, non-blocking)
 
 Run only when unfamiliar with a pattern or tool. Never block execution on it.
@@ -163,6 +184,11 @@ Chart detection rule:
 **Objective:** Discover actual variable paths, naming conventions, component keys, and text style IDs before mapping.
 
 Rules:
+- Before querying the DS, check Phase -1 knowledge for VERIFIED entries covering the patterns detected in Phase 2
+- For each VERIFIED pattern: record the stored component_key — skip the DS search call for that pattern
+- For CANDIDATE patterns: still run a confirming DS search, but use the stored component_key as the expected answer
+- For new patterns (not in knowledge): run full DS inspection as normal
+- This tiering directly reduces DS lookup calls across runs — the savings compound as more entries reach VERIFIED state
 - Inspect available design system variables before resolution
 - Do not assume naming formats
 - Use discovered variable paths in Phase 3 mappings
@@ -640,40 +666,42 @@ Output as HTML file (not terminal text). Include:
 
 ---
 
-## Phase 7 — Design system knowledge capture
+## Phase 7 — Knowledge write (mandatory, always last)
 
-**Objective:** Capture structured knowledge to improve future runs against the same design system.
+**Objective:** Persist pattern→component mappings from this run so future runs benefit immediately.
 
-Detect and record:
-- Repeated component usage patterns
-- Consistent layout structures
-- Variable combinations that recur
-- Decisions made consistently across nodes
+Call `mimetic_knowledge_write` with the updates array. This is not optional — skipping Phase 7 means the run produced no learning value.
 
-Only save if:
-- Pattern appears more than once
-- Confidence is high
-- Does not contradict any base rule
+**What to write:**
 
-Format:
+For every pattern resolved in Phase 3, submit one update entry:
+
 ```json
 {
-  "type": "pattern | component_usage",
-  "definition": "...",
-  "context": "...",
-  "confidence": 0.0
+  "pattern_key": "metric/kpi",
+  "component_key": "3iUvHvO7znmQ...",
+  "component_name": "MetricCard",
+  "increment_use": true
 }
 ```
 
-Rules:
-- Do not learn from single occurrences
-- Do not overwrite base rules
-- Do not mix design systems
-- Flag all captures for user review — do not apply automatically
-- Captured knowledge must not modify behavior during the current execution
-- It may only be used in future runs if explicitly loaded
+- `pattern_key`: semantic label you assigned to the HTML pattern (e.g. `"table/data-row"`, `"filter-bar/chip"`, `"card/feature"`)
+- `component_key`: the componentKey hash used in Phase 4
+- `component_name`: human-readable name (for inspection)
+- `increment_use`: always `true` — this increments use_count, enabling automatic promotion to VERIFIED at 3 uses
 
-Output: a "Design system knowledge" section in the Phase 6 report listing what was learned, why, and at what confidence level.
+**For primitive fallbacks (no DS component used):** do not write a knowledge entry. Primitives are not mappings.
+
+**For user corrections:** if the user tells you a mapping was wrong during this session, submit the same entry with `increment_correction: true` instead of `increment_use: true`. This demotes VERIFIED → CANDIDATE and signals that the mapping needs re-evaluation.
+
+**Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see this reflected in the response (`verified` count increases). On the next run, VERIFIED entries skip DS lookup entirely.
+
+**After writing, report in the Phase 6 knowledge section:**
+- Total patterns in knowledge file
+- How many are VERIFIED / CANDIDATE
+- Which entries were promoted to VERIFIED this run
+- DS lookup calls saved vs a fresh run (VERIFIED entries × calls avoided)
+- Any patterns that remain unresolved (no component found, no entry written)
 
 ---
 
