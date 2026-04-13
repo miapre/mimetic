@@ -1,8 +1,8 @@
-# Mimetic
+# Mimic AI
 
 **An MCP that learns your design system.**
 
-Mimetic translates HTML into Figma using your published components and design tokens. But the conversion is just the starting point — every run teaches Mimetic your DS vocabulary. By run 10, familiar patterns resolve instantly with near-zero library lookups. Your corrections teach it too.
+Mimic AI translates HTML into Figma using your published components and design tokens. But the conversion is just the starting point — every run teaches Mimic AI your DS vocabulary. By run 10, familiar patterns resolve instantly with near-zero library lookups. Your corrections teach it too.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
@@ -15,19 +15,19 @@ Mimetic translates HTML into Figma using your published components and design to
 
 ## How it learns
 
-Mimetic maintains a local knowledge file — `ds-knowledge.json` — that records how HTML patterns map to your DS components. Every run reads from it before doing any library inspection, and writes back what it used.
+Mimic AI maintains a local knowledge file — `ds-knowledge.json` — that records how HTML patterns map to your DS components. Every run reads from it before doing any library inspection, and writes back what it used.
 
 | Run | What happens |
 |---|---|
-| Run 1 | Mimetic inspects your library to resolve each pattern. Saves every successful mapping as a CANDIDATE. |
+| Run 1 | Mimic AI inspects your library to resolve each pattern. Saves every successful mapping as a CANDIDATE. |
 | Run 3 | Patterns used consistently 3 times with no corrections are promoted to VERIFIED. No DS lookup needed for those. |
 | Run 10+ | Familiar patterns resolve instantly. DS calls are reserved for genuinely new patterns. |
 
 **The knowledge file is yours.** It lives on your machine, travels with your project, and is fully inspectable JSON. Nothing is sent anywhere.
 
-**Your corrections teach Mimetic.** If you change a component Mimetic placed — and tell it — the mapping is demoted and re-evaluated. The system adjusts.
+**Your corrections teach Mimic AI.** If you change a component Mimic AI placed — and tell it — the mapping is demoted and re-evaluated. The system adjusts.
 
-**Your DS evolves and Mimetic notices.** When a new component is added that's a better match for an existing mapping, Mimetic flags it in the run report. It never auto-switches — you decide.
+**Your DS evolves and Mimic AI notices.** When a new component is added that's a better match for an existing mapping, Mimic AI flags it in the run report. It never auto-switches — you decide.
 
 ---
 
@@ -35,7 +35,7 @@ Mimetic maintains a local knowledge file — `ds-knowledge.json` — that record
 
 Other HTML-to-Figma tools are stateless. Every run starts from scratch: inspect library, resolve patterns, build, done. The work done on run 1 doesn't help run 50.
 
-Mimetic compounds. The longer you use it against the same design system, the less work each run requires, and the more consistent the output becomes. It converges on your DS vocabulary instead of re-discovering it every time.
+Mimic AI compounds. The longer you use it against the same design system, the less work each run requires, and the more consistent the output becomes. It converges on your DS vocabulary instead of re-discovering it every time.
 
 This is the part that can't be replicated by a generic write-back tool. The knowledge belongs to your team's specific DS, your specific naming conventions, and your specific corrections over time.
 
@@ -45,7 +45,7 @@ This is the part that can't be replicated by a generic write-back tool. The know
 
 ### Translate an HTML prototype into Figma
 
-Have an existing HTML file — a prototype, a coded mockup, a landing page? Mimetic reads it and recreates it inside Figma using your design system instead of hardcoded values.
+Have an existing HTML file — a prototype, a coded mockup, a landing page? Mimic AI reads it and recreates it inside Figma using your design system instead of hardcoded values.
 
 > *"Here's an HTML file I built as a prototype. Translate it into Figma on the 'Prototypes' page, artboard 'Onboarding v2'. Use my design system components wherever possible — match the layout, hierarchy, and content."*
 
@@ -71,11 +71,11 @@ Name the components you want, and Claude will find and insert the real library i
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/miapre/mimetic/main/install.sh)
 ```
-The script clones this repo, runs `npm install`, asks for your Figma token, and prints the exact block to add to `~/.claude/settings.json`.
+The script clones this repo, runs `npm install`, asks for your Figma token, and writes the MCP entry to `~/.claude/settings.json`.
 
 **Step 3 — Restart Claude Code**, then each session:
 1. `cd ~/mimetic && npm run bridge` — keep this terminal open
-2. In Figma desktop: **Plugins → Development → Mimetic → Run**
+2. In Figma desktop: **Plugins → Development → Mimic AI → Run**
 3. The plugin badge shows **● ready** — you're ready
 
 ---
@@ -229,7 +229,7 @@ npm run bridge
 ```
 
 **2. Run the plugin in Figma desktop:**
-Plugins → Development → Mimetic → Run
+Plugins → Development → Mimic AI → Run
 
 The plugin badge shows **● ready** when connected.
 
@@ -264,7 +264,7 @@ This tool runs entirely on your machine. No design data, component names, token 
 ## Troubleshooting
 
 **"Figma plugin is not connected"**
-→ The bridge is running but the plugin is not. Go to Figma desktop → Plugins → Development → Mimetic → Run.
+→ The bridge is running but the plugin is not. Go to Figma desktop → Plugins → Development → Mimic AI → Run.
 
 **"Library import failed"**
 → Your design system library is not enabled in the target file. Open the Assets panel → Team library → toggle it on.

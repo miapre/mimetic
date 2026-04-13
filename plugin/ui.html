@@ -37,14 +37,14 @@
 <body>
   <div class="badge">
     <div class="dot connecting" id="dot"></div>
-    <span class="label" id="label">Mimetic...</span>
+    <span class="label" id="label">Mimic AI...</span>
   </div>
 
   <script>
     const dot = document.getElementById('dot');
     let ws = null;
 
-    const labels = { connected: 'Mimetic: On', connecting: 'Mimetic...', disconnected: 'Mimetic: Off' };
+    const labels = { connected: 'Mimic AI: On', connecting: 'Mimic AI...', disconnected: 'Mimic AI: Off' };
 
     function setState(state) {
       dot.className = 'dot ' + state;
@@ -67,7 +67,7 @@
         setTimeout(connect, 3000);
       };
 
-      ws.onerror = (e) => { console.error('[Mimetic] WebSocket error', e); };
+      ws.onerror = (e) => { console.error('[Mimic AI] WebSocket error', e); };
 
       ws.onmessage = event => {
         try {

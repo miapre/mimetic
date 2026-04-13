@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mimetic — one-command installer
+# Mimic AI — one-command installer
 # Usage: bash install.sh
 
 set -e
@@ -8,7 +8,7 @@ REPO="https://github.com/miapre/mimetic.git"
 DEFAULT_DIR="$HOME/mimetic"
 
 echo ""
-echo "Mimetic installer"
+echo "Mimic AI installer"
 echo "======================================"
 echo ""
 
@@ -76,7 +76,7 @@ fi
 SETTINGS_FILE="$HOME/.claude/settings.json"
 echo ""
 echo "======================================"
-echo "Register Mimetic in Claude Code"
+echo "Register Mimic AI in Claude Code"
 echo ""
 read -rp "Auto-update $SETTINGS_FILE? [Y/n]: " AUTO_WRITE
 AUTO_WRITE="${AUTO_WRITE:-Y}"
@@ -126,6 +126,6 @@ echo "Installation complete."
 echo ""
 echo "Each session:"
 echo "  1. Start the bridge:  cd $INSTALL_DIR && npm run bridge"
-echo "  2. In Figma desktop:  Plugins > Development > Mimetic > Run"
+echo "  2. In Figma desktop:  Plugins > Development > Mimic AI > Run"
 echo "  3. Talk to Claude."
 echo ""

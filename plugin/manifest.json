@@ -1,5 +1,5 @@
 {
-  "name": "Mimetic",
+  "name": "Mimic AI",
   "id": "html-to-figma-design-system",
   "api": "1.0.0",
   "main": "code.js",
@@ -8,6 +8,6 @@
   "permissions": ["teamlibrary"],
   "networkAccess": {
     "allowedDomains": ["*"],
-    "reasoning": "Connects to the local Mimetic bridge server to receive design instructions from Claude Code."
+    "reasoning": "Connects to the local Mimic AI bridge server to receive design instructions from Claude Code."
   }
 }
