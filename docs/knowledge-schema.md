@@ -37,6 +37,7 @@ Each entry in `patterns` records one HTML pattern → DS component mapping.
   "use_count": 5,
   "correction_count": 0,
   "last_used": "2026-04-13T12:00:00.000Z",
+  "aliases": ["KPI tile", "revenue-card", "kpi-metric"],
   "dismissed_conflicts": [],
   "notes": null
 }
@@ -51,6 +52,7 @@ Each entry in `patterns` records one HTML pattern → DS component mapping.
 | `use_count` | number | How many times this mapping was used. Auto-incremented each run. |
 | `correction_count` | number | How many times the user corrected this mapping. A correction demotes `VERIFIED` → `CANDIDATE`. |
 | `last_used` | ISO 8601 string | Timestamp of the last run that used this entry. |
+| `aliases` | array of strings | Exact HTML labels that previously triggered this mapping — class names, element text content, or semantic role text. Added automatically by Phase 7 via `add_alias`. Used in Phase 3 step 0.5 for deterministic matching before LLM classification runs. Safe to edit manually: add known synonyms your HTML uses, or remove incorrect ones. |
 | `dismissed_conflicts` | array of strings | Component keys the user has acknowledged as not a conflict. |
 | `notes` | string or null | Free-text annotation. Safe to edit manually. |
 
@@ -135,6 +137,7 @@ The knowledge file is safe to edit manually. Common reasons:
 - **Demote a VERIFIED entry you know is wrong:** set `"state": "CANDIDATE"` and `"correction_count": 1`.
 - **Remove a bad entry entirely:** delete the object from the `patterns` array.
 - **Inject a known component key:** add a `patterns` entry with `"state": "VERIFIED"` and the correct `component_key`. Mimic AI will use it on the next run without any DS lookup.
+- **Seed aliases for faster matching:** add known HTML labels to the `aliases` array of any entry. For example, if your team's HTML always uses `class="kpi-tile"` for metric cards, add `"kpi-tile"` to the `metric/kpi` entry's aliases. On the next run, that node resolves instantly with zero reads and no LLM classification.
 - **Dismiss a gap recommendation:** set `"dismissed": true` on the rule entry.
 - **Reset a gap's seen count after adding the missing component to your DS:** set `"seen_count": 0` and `"state": "resolved"` on the rule entry. On the next run, Mimic AI searches the DS fresh and, if it finds the new component, creates a pattern entry.
 - **Share knowledge across a team:** the file is plain JSON — commit it to your repository. Team members who pull it start with your accumulated mappings already in place.

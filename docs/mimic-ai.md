@@ -131,6 +131,8 @@ Call `mimic_ai_knowledge_read` with no arguments. Record the full result in work
 
 **VERIFIED and CANDIDATE entries cost zero reads.** A build where all patterns are VERIFIED or CANDIDATE requires no DS searches and no `get_variable_defs` call (if the variable cache is also warm). This is the target state after 3 runs.
 
+**Alias loading:** Each pattern entry may include an `aliases` array — the exact HTML labels (class names, text content, data attributes) that previously triggered this mapping. Load all aliases into working memory alongside the pattern entries. They are used in Phase 3 step 0.5 for deterministic matching before LLM classification runs.
+
 **Variable cache restoration (check before Phase 2.5):** After loading patterns, scan for a convention rule matching `file/{fileKey}/variable-cache`. If found, parse its `notes` field and restore the V dict and TS dict into working memory. This eliminates the `get_variable_defs` read from the Phase 0.7 budget — mark slot 1 as consumed-but-skipped.
 
 **How to use the returned explicit_rules:**
@@ -437,6 +439,10 @@ Rules:
 
 Resolution order per node:
 0. **Explicit rule check** — before any DS search, check explicit_rules from Phase -1. Evaluate in this exact order:
+0.5. **Alias check** — after explicit rules, before any DS search or LLM classification: scan the aliases arrays loaded from Phase -1 patterns. If the node's raw HTML label (class name, element text, data-attribute, or semantic role text) exactly matches any alias, use that entry's component_key directly. Same cost as VERIFIED — 0 reads, no LLM classification, deterministic. Record the alias match in Phase 7 with `increment_use: true`. If no alias matches, proceed to step 1.
+   - Alias matching is exact string match only — no fuzzy matching, no stemming
+   - If multiple patterns share an alias (collision), treat as no match and proceed to step 1
+   - Do not create aliases in Phase 3 — they are only recorded in Phase 7
    - **Any rule with `state: "resolved"`** (regardless of type) → treat as new pattern; run full DS search. The rule was cleared by a prior resolution or reset — check if the DS situation has changed again.
    - **`substitution` rule (state: active)** → use `substitution_key` directly. No DS search. Write `increment_seen: true` in Phase 7 to confirm it's still working.
    - **`gap` rule (state: active, seen_count ≥ 3)** → skip DS search. Use primitive or `substitution_key` if one is recorded.
@@ -829,6 +835,14 @@ Never:
 - Do not create or publish formal components to the design system library
 - Flatten structure for visual convenience
 
+Component key validation rule (lazy heartbeat):
+- When inserting any VERIFIED or CANDIDATE component via `importComponentByKeyAsync`, if the call throws or returns null for a previously-known key: the component was deleted or re-keyed in the DS
+- Do not retry with the same key — it is stale
+- Immediately: mark that entry as EXPIRED in working memory, fall back to 1 targeted `search_design_system` query for that pattern (uses 1 contingency read from Phase 0.7 slots 4–5), and proceed with whatever the search returns
+- Record the expired key in the Phase 6 report under "Stale component keys detected"
+- Write `state: "EXPIRED"` for that entry in Phase 7 — the next run treats it as a new pattern
+- This is the only validation mechanism for component key staleness — there is no pre-flight scan (which would consume reads before the build). Errors are caught at the point of use, not upfront.
+
 Post insertion fit rule:
 - After inserting any large structural component, verify that it fits within the intended parent frame and artboard
 - Check for clipping, unintended cropping, or size mismatch between the component and its slot
@@ -1145,7 +1159,8 @@ For every pattern resolved via exact or approximate match in Phase 3:
   "pattern_key": "metric/kpi",
   "component_key": "3iUvHvO7znmQ...",
   "component_name": "MetricCard",
-  "increment_use": true
+  "increment_use": true,
+  "add_alias": "KPI tile"
 }
 ```
 
@@ -1153,8 +1168,19 @@ For every pattern resolved via exact or approximate match in Phase 3:
 - `component_key`: the componentKey hash used in Phase 4
 - `component_name`: human-readable name (for inspection)
 - `increment_use`: always `true` — increments use_count toward VERIFIED promotion at 3 uses
+- `add_alias`: the exact HTML label that identified this pattern this run — the raw class name, element text, or semantic role text from the source (e.g. `"KPI tile"`, `"revenue-card"`, `"metric/stat"`). The MCP appends it to the entry's `aliases` array if not already present. Omit this field only if the HTML had no recoverable label for the pattern.
 
 **For primitive fallbacks:** do not write a `updates` entry. Primitives are not mappings.
+
+**For stale component keys (EXPIRED during Phase 4):** write a state override in `updates`:
+```json
+{
+  "pattern_key": "metric/kpi",
+  "component_key": "3iUvHvO7znmQ...",
+  "state": "EXPIRED"
+}
+```
+Do not increment use. The EXPIRED state causes the next run to treat this as a new pattern and run a fresh DS search.
 
 **For user corrections — two-part write (both parts are mandatory):**
 
@@ -1290,11 +1316,18 @@ Mimic AI learning summary — Run [N]
 Mode:                [Instant / Learning]
 Patterns saved:      [X] new, [Y] updated
 Promoted to VERIFIED:[Z] (these skip DS lookup from now on)
-DS lookups skipped:  [N] (via VERIFIED entries and substitution rules)
+Alias matches:       [N] patterns resolved by alias (zero reads, zero LLM classification)
+DS lookups skipped:  [N] (via VERIFIED/CANDIDATE entries and substitution rules)
 DS gaps detected:    [N] pattern(s) with no matching DS component
+Stale keys expired:  [N] (will re-resolve on next run)
 Read budget used:    [N] of 5 reads (slots: [list which slots were consumed])
-Variable cache:      [written / already warm — 0 reads next run]
+Knowledge maturity:  [early / developing / stable] — [V] of [T] patterns VERIFIED ([X]%)
 ```
+
+Maturity thresholds:
+- `early`: fewer than 5 total patterns, or VERIFIED < 30%
+- `developing`: VERIFIED 30–79%
+- `stable`: VERIFIED ≥ 80% and fewer than 2 new patterns this run
 
 If `promoted_to_verified` is non-empty, list each promoted pattern_key by name — these are milestone events.
 
@@ -1306,7 +1339,7 @@ DS recommendation: Consider adding a [pattern name] component — seen [N] times
 **Rules:**
 - Always present this summary, even if nothing was learned (state "0 new patterns — all patterns were previously known")
 - Use plain language — no JSON, no internal field names
-- Keep it to under 10 lines
+- Keep it to under 15 lines
 - This is the only user-facing evidence that the learning system is working — never skip it
 
 ---
