@@ -13,6 +13,11 @@ Mimic AI translates HTML into Figma using your published components and design t
 
 ---
 
+<!-- TODO: Add a demo GIF here showing HTML → Figma conversion. Recommended: screen recording of a real build with the plugin badge visible, ~30–60 seconds, showing real DS components being inserted. -->
+<!-- TODO: Add a before/after screenshot: HTML source on the left, Figma output on the right with real components and variable bindings visible. -->
+
+---
+
 ## How it learns
 
 Mimic AI maintains a local knowledge file — `ds-knowledge.json` — that records how HTML patterns map to your DS components. Every run reads from it before doing any library inspection, and writes back what it used.
@@ -25,9 +30,11 @@ Mimic AI maintains a local knowledge file — `ds-knowledge.json` — that recor
 
 **The knowledge file is yours.** It lives on your machine, travels with your project, and is fully inspectable JSON. Nothing is sent anywhere.
 
-**Your corrections teach Mimic AI.** If you change a component Mimic AI placed — and tell it — the mapping is demoted and re-evaluated. The system adjusts.
+**Your corrections teach Mimic AI.** If Mimic AI inserts the wrong component, tell Claude: *"That component was wrong — use [the correct one] instead, and remember it for next time."* Claude demotes the mapping, records the correction, and uses the right component from that point on. No configuration needed — a plain sentence is enough.
 
 **Your DS evolves and Mimic AI notices.** When a new component is added that's a better match for an existing mapping, Mimic AI flags it in the run report. It never auto-switches — you decide.
+
+**Every run produces a learning summary.** At the end of each build, Claude reports how many patterns were saved, how many were promoted to VERIFIED (meaning future builds skip the DS lookup entirely), and any design system gaps detected — patterns that appeared in the HTML with no matching DS component. These gap reports are the clearest signal about what your design system might be missing.
 
 ---
 
@@ -65,13 +72,19 @@ Name the components you want, and Claude will find and insert the real library i
 
 ## Quick start
 
-**Step 1 — Make sure your Figma is set up** (see [Before you start](#before-you-start-figma-requirements) below)
+> **Requirements before you begin:** Node.js v20.6+, git, Figma desktop app, **Figma Professional plan or above** (the free plan cannot publish component libraries or bind variables — the tool's core features require a paid Figma plan). Full Figma setup steps are in [Before you start](#before-you-start-figma-requirements) below.
 
-**Step 2 — Run the installer:**
+**Step 1 — Run the installer:**
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/miapre/mimic-ai/main/install.sh)
 ```
 The script clones this repo, runs `npm install`, asks for your Figma token, and writes the MCP entry to `~/.claude/settings.json`.
+
+**Step 2 — Install the Figma plugin:**
+1. Open **Figma desktop**
+2. From the menu bar: **Plugins → Development → Import plugin from manifest…**
+3. Navigate to your `~/mimic-ai/plugin/` folder and select `manifest.json`
+4. Confirm — the plugin now appears under **Plugins → Development → Mimic AI**
 
 **Step 3 — Restart Claude Code**, then each session:
 1. `cd ~/mimic-ai && npm run bridge` — keep this terminal open
@@ -143,11 +156,13 @@ You only need to do this once per file.
 </details>
 
 <details>
-<summary><strong>5. Figma plan note</strong></summary>
+<summary><strong>5. Figma plan requirement</strong></summary>
 
-Publishing component libraries and using variables (design tokens) requires a **Figma Professional plan or above** — not the Starter/Free plan.
+Publishing component libraries and using variables (design tokens) requires a **Figma Professional plan or above** — not the Starter/Free plan. This is a hard requirement, not a feature limitation.
 
-If you are on a free plan, the bridge can still create frames and text nodes, but component insertion and variable binding will not work.
+**What works on the free plan:** The bridge can create frames and raw text nodes.
+
+**What does not work on the free plan:** Component insertion, variable binding, and design token application — the three features that make Mimic AI useful. If you are on a free plan, upgrade before setting up the tool.
 
 </details>
 
@@ -162,6 +177,8 @@ Prefer to set things up manually, or want to understand each step? See **[docs/G
 - How to find and save component keys
 - How to build Claude's memory for consistent results across sessions
 - Build script patterns and layout rules
+
+To inspect or manually manage the knowledge file, see **[docs/knowledge-schema.md](docs/knowledge-schema.md)** for the full schema reference — including how to inject known mappings, dismiss recommendations, share knowledge across a team, and reset entries after DS changes.
 
 ---
 

@@ -916,6 +916,36 @@ Dismissed gaps are excluded from all future recommendations.
 
 ---
 
+## Phase 8 — Learning summary (mandatory, always last, presented to the user)
+
+**Objective:** Make the learning event visible. After Phase 7 completes, present a brief structured summary to the user. This is not a report — it is a plain-language statement of what the system learned this run.
+
+Present the following, formatted as a short list with clear labels:
+
+```
+Mimic AI learning summary — Run [N]
+────────────────────────────────────
+Patterns saved:      [X] new, [Y] updated
+Promoted to VERIFIED:[Z] (these skip DS lookup from now on)
+DS lookups skipped:  [N] (via VERIFIED entries and substitution rules)
+DS gaps detected:    [N] pattern(s) with no matching DS component
+```
+
+If `promoted_to_verified` is non-empty, list each promoted pattern_key by name — these are milestone events.
+
+If `recommendations` is non-empty (gaps with seen_count ≥ 3), present each as a specific suggestion:
+```
+DS recommendation: Consider adding a [pattern name] component — seen [N] times with no DS match (currently substituted with [substitution_name]).
+```
+
+**Rules:**
+- Always present this summary, even if nothing was learned (state "0 new patterns — all patterns were previously known")
+- Use plain language — no JSON, no internal field names
+- Keep it to under 10 lines
+- This is the only user-facing evidence that the learning system is working — never skip it
+
+---
+
 ## Extension — Chart translation (activate only if charts detected)
 
 **Detection signals:** `<canvas>`, complex `<svg>`, axis labels, repeated bar/line shapes, legends, numeric tick labels.

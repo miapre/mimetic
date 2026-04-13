@@ -30,9 +30,8 @@ Claude wrote the code, executed it, and the entire page appeared in Figma in und
 |---|---|---|
 | [Claude Code](https://claude.ai/claude-code) (CLI, VS Code, or desktop) | The AI that does the work — install options in Part 1 | Anthropic account required |
 | [Node.js](https://nodejs.org/) v20.6 or later | Runs the local bridge server (v20.6+ required for `--env-file` support) | Free |
-| Python 3 | Runs build scripts | Free |
 | [Figma desktop app](https://www.figma.com/downloads/) | Required — browser Figma won't work | Free plan works |
-| A Figma account with a published component library | Your design system | Figma plan required for libraries |
+| A Figma account with a published component library | Your design system | **Figma Professional plan or above required** for component libraries and variable binding |
 | A Figma Personal Access Token | Lets the bridge look up component keys | Free to generate |
 
 ---

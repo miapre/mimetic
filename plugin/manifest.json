@@ -1,6 +1,6 @@
 {
   "name": "Mimic AI",
-  "id": "html-to-figma-design-system",
+  "id": "mimic-ai",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
