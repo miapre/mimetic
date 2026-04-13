@@ -84,7 +84,7 @@ async function sendToPlugin(type, params) {
   if (!pluginSocket || pluginSocket.readyState !== 1 /* OPEN */) {
     throw new Error(
       'Figma plugin is not connected. ' +
-      'Open Figma desktop, go to Plugins > Development, and run "Mimetic".'
+      'Open Figma desktop, go to Plugins > Development, and run "Mimic AI".'
     );
   }
 

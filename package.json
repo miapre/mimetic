@@ -2,7 +2,7 @@
   "name": "mimetic",
   "mcpName": "io.github.miapre/mimetic",
   "version": "1.1.0",
-  "description": "Mimetic — MCP server that translates HTML into Figma using your design system's real components and tokens",
+  "description": "Mimic AI — MCP server that translates HTML into Figma using your design system's real components and tokens",
   "type": "module",
   "scripts": {
     "bridge": "node --env-file=.env bridge.js",

@@ -343,7 +343,7 @@ In the Claude Code chat panel, paste a Figma design URL and ask Claude to descri
 
 ---
 
-## Part 3 — Set up the Write Bridge (mimetic)
+## Part 3 — Set up the Write Bridge (Mimic AI)
 
 This custom system lets Claude create things in Figma. It has three components:
 
@@ -448,7 +448,7 @@ This tells Figma how to load your plugin:
 
 ```json
 {
-  "name": "Mimetic",
+  "name": "Mimic AI",
   "id": "mimetic",
   "api": "1.0.0",
   "main": "code.js",
@@ -507,7 +507,7 @@ Charts are rendered entirely within one plugin call. Instead of creating each do
 
 ---
 
-### 3.7 Register mimetic with Claude Code
+### 3.7 Register Mimic AI with Claude Code
 
 Update `~/.claude/settings.json` to include both MCPs:
 
@@ -540,7 +540,7 @@ Use the full absolute path to `mcp.js` — relative paths do not work here.
 1. Open Figma desktop
 2. From the menu bar: **Plugins → Development → Import plugin from manifest…**
 3. Navigate to your `mimetic/plugin/` folder and select `manifest.json`
-4. The plugin now appears under **Plugins → Development → Mimetic**
+4. The plugin now appears under **Plugins → Development → Mimic AI**
 
 ### 4.2 Enable your team library in the target file
 
@@ -570,7 +570,7 @@ You will see:
 
 **Step 2 — Run the plugin in Figma:**
 
-1. In Figma desktop, go to **Plugins → Development → Mimetic → Run**
+1. In Figma desktop, go to **Plugins → Development → Mimic AI → Run**
 2. A small badge appears showing **● ...** (amber, connecting)
 3. Within a second it turns green: **● ready**
 
@@ -886,7 +886,7 @@ The component documentation has value for design decisions, code handoff, and de
 ## Troubleshooting
 
 **"Figma plugin is not connected"**
-→ The bridge is running but the Figma plugin is not. Go to Figma desktop → Plugins → Development → Mimetic → Run. The bridge terminal should print "plugin connected".
+→ The bridge is running but the Figma plugin is not. Go to Figma desktop → Plugins → Development → Mimic AI → Run. The bridge terminal should print "plugin connected".
 
 **"Component not found locally and no component key was resolved"**
 → Either the library is not enabled in your file, or the component key is wrong. Check Assets → Team library to ensure your library is toggled on. Verify the component key by looking up the component in your library file.

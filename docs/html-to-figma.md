@@ -1,4 +1,4 @@
-# Mimetic — Orchestration Protocol
+# Mimic AI — Orchestration Protocol
 
 How Claude should convert an HTML file into a Figma design using a real design system.
 
@@ -131,7 +131,7 @@ Call `mimetic_knowledge_read` with no arguments. Record the full result in worki
 
 **How to use the returned explicit_rules:**
 
-Explicit rules encode what Mimetic has learned about your DS beyond component mappings: what patterns have no component, what substitutions to use instead, and DS usage conventions.
+Explicit rules encode what Mimic AI has learned about your DS beyond component mappings: what patterns have no component, what substitutions to use instead, and DS usage conventions.
 
 | Rule type | Action in Phase 3 |
 |---|---|
@@ -730,7 +730,7 @@ Output as HTML file (not terminal text). Include:
 **4. Design system gaps and recommendations**
 - Values or patterns in the source that had no token or component equivalent
 - For each gap resolved via an explicit substitution rule: name the substitution used and why
-- **DS enhancement recommendations** (mandatory when present): any gap with seen_count ≥ 3 in the knowledge file must be called out explicitly as a recommendation to add to the DS. Format: pattern name, how many times seen across runs, what substitution is currently being used. These are the highest-signal signals Mimetic can produce about the user's DS — never omit them.
+- **DS enhancement recommendations** (mandatory when present): any gap with seen_count ≥ 3 in the knowledge file must be called out explicitly as a recommendation to add to the DS. Format: pattern name, how many times seen across runs, what substitution is currently being used. These are the highest-signal signals Mimic AI can produce about the user's DS — never omit them.
 
 **5. Performance insights**
 - Report total bridge calls
@@ -896,7 +896,7 @@ Dismissed gaps are excluded from all future recommendations.
 
 **Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see `verified` count increase in the response. On the next run, VERIFIED entries skip DS lookup entirely.
 
-**Gap recommendations surface automatically:** the response includes a `recommendations` array listing any active, non-dismissed gaps with seen_count ≥ 3. These are the clearest signal Mimetic can produce about what the user's DS is missing.
+**Gap recommendations surface automatically:** the response includes a `recommendations` array listing any active, non-dismissed gaps with seen_count ≥ 3. These are the clearest signal Mimic AI can produce about what the user's DS is missing.
 
 **Key format warnings:** if a pattern_key or rule_key doesn't match the `category/name` taxonomy format, the response includes a `key_warnings` array. **Treat these as write errors, not advisories.** The malformed key was saved — correct it immediately by re-submitting the write with the proper taxonomy key and state override to overwrite the bad entry. Do not proceed to Phase 6 with unresolved key warnings.
 

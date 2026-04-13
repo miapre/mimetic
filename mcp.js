@@ -824,13 +824,13 @@ const TOOLS = [
     },
   },
 
-  // ── Mimetic learning loop ─────────────────────────────────────────────────
+  // ── Mimic AI learning loop ────────────────────────────────────────────────
 
   {
     name: 'mimetic_knowledge_read',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      'Read the Mimetic design system knowledge file (ds-knowledge.json). ' +
+      'Read the Mimic AI knowledge file (ds-knowledge.json). ' +
       'Call this at the start of every HTML-to-Figma run to load known pattern→component mappings. ' +
       'VERIFIED entries should be used directly without a fresh DS lookup. ' +
       'CANDIDATE entries should be used with a confirming DS check. ' +
@@ -850,7 +850,7 @@ const TOOLS = [
     name: 'mimetic_knowledge_write',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     description:
-      'Write pattern→component mappings and explicit DS rules to the Mimetic knowledge file (ds-knowledge.json). ' +
+      'Write pattern→component mappings and explicit DS rules to the Mimic AI knowledge file (ds-knowledge.json). ' +
       'Call this at the end of every successful HTML-to-Figma run. ' +
       'Automatically promotes CANDIDATE entries to VERIFIED once use_count reaches 3 with no corrections. ' +
       'Use increment_correction=true when the user corrected a mapping — also write a matching rule_update with reset_seen_count=true. ' +
@@ -903,7 +903,7 @@ const TOOLS = [
         },
         reset_gap_seen_counts: {
           type: 'boolean',
-          description: 'Set true when the user signals their design system was updated. Resets seen_count to 0 on ALL gap-type rules, causing Mimetic to re-run DS search for those patterns on the next run and discover any newly added components.',
+          description: 'Set true when the user signals their design system was updated. Resets seen_count to 0 on ALL gap-type rules, causing Mimic AI to re-run DS search for those patterns on the next run and discover any newly added components.',
         },
       },
       required: ['updates'],

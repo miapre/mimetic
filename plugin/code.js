@@ -1835,7 +1835,7 @@ const HANDLERS = {
 figma.ui.onmessage = async msg => {
   // Internal bridge connection events — no response needed
   if (msg.type === '__bridge_connected') {
-    figma.notify('Mimetic connected ✓', { timeout: 2000 });
+    figma.notify('Mimic AI connected ✓', { timeout: 2000 });
     return;
   }
   if (msg.type === '__bridge_disconnected') return;
