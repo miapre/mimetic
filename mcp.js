@@ -717,7 +717,7 @@ function bridgeType(toolName) {
 // ---------------------------------------------------------------------------
 
 const server = new Server(
-  { name: 'html-to-figma-design-system', version: '1.1.0' },
+  { name: 'mimetic', version: '1.1.0' },
   { capabilities: { tools: {} } }
 );
 

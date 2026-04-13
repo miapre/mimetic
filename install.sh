@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# html-to-figma-design-system — one-command installer
+# Mimetic — one-command installer
 # Usage: bash install.sh
 
 set -e
 
-REPO="https://github.com/miapre/html-to-figma-design-system.git"
-DEFAULT_DIR="$HOME/html-to-figma-design-system"
+REPO="https://github.com/miapre/mimetic.git"
+DEFAULT_DIR="$HOME/mimetic"
 
 echo ""
-echo "html-to-figma-design-system installer"
+echo "Mimetic installer"
 echo "======================================"
 echo ""
 
@@ -68,7 +68,7 @@ echo ""
 echo "======================================"
 echo "Almost done. Add this block to ~/.claude/settings.json under \"mcpServers\":"
 echo ""
-echo "    \"html-to-figma-design-system\": {"
+echo "    \"mimetic\": {"
 echo "      \"command\": \"node\","
 echo "      \"args\": [\"$INSTALL_DIR/mcp.js\"]"
 echo "    }"
@@ -81,6 +81,6 @@ echo "Installation complete."
 echo ""
 echo "Each session:"
 echo "  1. Start the bridge:  cd $INSTALL_DIR && npm run bridge"
-echo "  2. In Figma desktop:  Plugins > Development > HTML to Figma — Design System > Run"
+echo "  2. In Figma desktop:  Plugins > Development > Mimetic > Run"
 echo "  3. Talk to Claude."
 echo ""

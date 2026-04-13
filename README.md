@@ -1,4 +1,4 @@
-# HTML to Figma — Design System
+# Mimetic
 
 **The only MCP that translates HTML into Figma using your own design system.**
 
@@ -7,7 +7,7 @@ Give Claude an HTML file. It reads your design system — published components a
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
 ![Platform: macOS / Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
-[![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers/html-to-figma-design-system)
+[![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers/mimetic)
 
 > **Not a Figma product.** This is an independent, open-source MCP server built for Claude Code.
 
@@ -51,13 +51,13 @@ Name the components you want, and Claude will find and insert the real library i
 
 **Step 2 — Run the installer:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/miapre/html-to-figma-design-system/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/miapre/mimetic/main/install.sh)
 ```
 The script clones this repo, runs `npm install`, asks for your Figma token, and prints the exact block to add to `~/.claude/settings.json`.
 
 **Step 3 — Restart Claude Code**, then each session:
-1. `cd ~/html-to-figma-design-system && npm run bridge` — keep this terminal open
-2. In Figma desktop: **Plugins → Development → HTML to Figma — Design System → Run**
+1. `cd ~/mimetic && npm run bridge` — keep this terminal open
+2. In Figma desktop: **Plugins → Development → Mimetic → Run**
 3. The plugin badge shows **● ready** — you're ready
 
 ---
@@ -199,12 +199,12 @@ Once the MCP is registered, Claude has access to:
 
 **1. Start the bridge** (keep this terminal open):
 ```bash
-cd ~/html-to-figma-design-system   # or wherever you installed it
+cd ~/mimetic   # or wherever you installed it
 npm run bridge
 ```
 
 **2. Run the plugin in Figma desktop:**
-Plugins → Development → HTML to Figma — Design System → Run
+Plugins → Development → Mimetic → Run
 
 The plugin badge shows **● ready** when connected.
 
@@ -239,7 +239,7 @@ This tool runs entirely on your machine. No design data, component names, token 
 ## Troubleshooting
 
 **"Figma plugin is not connected"**
-→ The bridge is running but the plugin is not. Go to Figma desktop → Plugins → Development → HTML to Figma — Design System → Run.
+→ The bridge is running but the plugin is not. Go to Figma desktop → Plugins → Development → Mimetic → Run.
 
 **"Library import failed"**
 → Your design system library is not enabled in the target file. Open the Assets panel → Team library → toggle it on.

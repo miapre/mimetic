@@ -1,4 +1,4 @@
-# HTML to Figma — Orchestration Protocol
+# Mimetic — Orchestration Protocol
 
 How Claude should convert an HTML file into a Figma design using a real design system.
 
