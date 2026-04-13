@@ -139,7 +139,17 @@ The script clones this repo, runs `npm install`, asks for your Figma token, and 
 **Step 3 — Restart Claude Code**, then each session:
 1. `cd ~/mimic-ai && npm run bridge` — keep this terminal open
 2. In Figma desktop: **Plugins → Development → Mimic AI → Run**
-3. The plugin badge shows **● ready** — you're ready
+3. The plugin badge shows **● ready**
+
+**Step 4 — Enable your design system in the target file:**
+1. Open the Figma file where you want Claude to build
+2. Open the **Assets panel** (book icon, left sidebar)
+3. Click the **Team library** icon at the top
+4. Find your design system and toggle it **on**
+
+Without this, Mimic can't find any components and will stop before building anything.
+
+**You're ready.** Ask Claude to build something — include a Figma link or tell it which file and page to use.
 
 ---
 
