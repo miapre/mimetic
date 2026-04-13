@@ -133,7 +133,7 @@ function findTextNode(root, name) {
 const FONT_STYLES = {
   400: 'Regular',
   500: 'Medium',
-  600: 'Bold',
+  600: 'Semi Bold',
   700: 'Bold',
 };
 
@@ -1835,7 +1835,7 @@ const HANDLERS = {
 figma.ui.onmessage = async msg => {
   // Internal bridge connection events — no response needed
   if (msg.type === '__bridge_connected') {
-    figma.notify('HTML to Figma — Design System connected ✓', { timeout: 2000 });
+    figma.notify('Mimetic connected ✓', { timeout: 2000 });
     return;
   }
   if (msg.type === '__bridge_disconnected') return;

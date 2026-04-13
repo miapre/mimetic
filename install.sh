@@ -12,9 +12,14 @@ echo "Mimetic installer"
 echo "======================================"
 echo ""
 
-# Check Node.js
+# Check dependencies
 if ! command -v node &>/dev/null; then
   echo "Error: Node.js is required (v20.6+). Install it from https://nodejs.org and re-run."
+  exit 1
+fi
+
+if ! command -v git &>/dev/null; then
+  echo "Error: git is required. Install it from https://git-scm.com and re-run."
   exit 1
 fi
 
@@ -44,7 +49,11 @@ cd "$INSTALL_DIR"
 
 echo ""
 echo "Installing dependencies..."
-npm install
+if ! npm install; then
+  echo ""
+  echo "Error: npm install failed. Fix the error above and re-run."
+  exit 1
+fi
 
 # .env setup
 if [ ! -f .env ]; then
@@ -63,17 +72,53 @@ if [ ! -f .env ]; then
   fi
 fi
 
-# settings.json snippet
+# settings.json — offer to write automatically
+SETTINGS_FILE="$HOME/.claude/settings.json"
 echo ""
 echo "======================================"
-echo "Almost done. Add this block to ~/.claude/settings.json under \"mcpServers\":"
+echo "Register Mimetic in Claude Code"
 echo ""
-echo "    \"mimetic\": {"
-echo "      \"command\": \"node\","
-echo "      \"args\": [\"$INSTALL_DIR/mcp.js\"]"
-echo "    }"
+read -rp "Auto-update $SETTINGS_FILE? [Y/n]: " AUTO_WRITE
+AUTO_WRITE="${AUTO_WRITE:-Y}"
+
+if [[ "$AUTO_WRITE" =~ ^[Yy]$ ]]; then
+  node -e "
+    const fs = require('fs');
+    const path = '$SETTINGS_FILE';
+    let config = {};
+    if (fs.existsSync(path)) {
+      try { config = JSON.parse(fs.readFileSync(path, 'utf8')); }
+      catch(e) { console.error('Warning: could not parse ' + path + ' — adding mcpServers key.'); }
+    }
+    if (!config.mcpServers) config.mcpServers = {};
+    if (config.mcpServers.mimetic) {
+      console.log('mimetic entry already present — updating path.');
+    }
+    config.mcpServers.mimetic = { command: 'node', args: ['$INSTALL_DIR/mcp.js'] };
+    fs.mkdirSync(require('path').dirname(path), { recursive: true });
+    fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
+    console.log('Written to $SETTINGS_FILE');
+  "
+  if [ $? -ne 0 ]; then
+    echo ""
+    echo "Auto-write failed. Add this manually to $SETTINGS_FILE under \"mcpServers\":"
+    echo ""
+    echo "    \"mimetic\": {"
+    echo "      \"command\": \"node\","
+    echo "      \"args\": [\"$INSTALL_DIR/mcp.js\"]"
+    echo "    }"
+  fi
+else
+  echo ""
+  echo "Add this manually to $SETTINGS_FILE under \"mcpServers\":"
+  echo ""
+  echo "    \"mimetic\": {"
+  echo "      \"command\": \"node\","
+  echo "      \"args\": [\"$INSTALL_DIR/mcp.js\"]"
+  echo "    }"
+fi
 echo ""
-echo "Then restart Claude Code."
+echo "Restart Claude Code to load the MCP server."
 echo ""
 echo "======================================"
 echo ""

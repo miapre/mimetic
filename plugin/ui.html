@@ -53,6 +53,7 @@
 
     function connect() {
       setState('connecting');
+      // Port must match bridge.js BRIDGE_PORT (default 3055). Plugin cannot read env vars.
       ws = new WebSocket('ws://localhost:3055');
 
       ws.onopen = () => {
@@ -66,7 +67,7 @@
         setTimeout(connect, 3000);
       };
 
-      ws.onerror = () => {};
+      ws.onerror = (e) => { console.error('[Mimetic] WebSocket error', e); };
 
       ws.onmessage = event => {
         try {

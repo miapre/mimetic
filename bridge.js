@@ -18,6 +18,8 @@ import { readFileSync } from 'fs';
 // Config
 // ---------------------------------------------------------------------------
 
+// Default port 3055. If you change BRIDGE_PORT here, also update the WebSocket
+// URL in plugin/ui.html — the Figma plugin cannot read environment variables.
 const PORT = parseInt(process.env.BRIDGE_PORT || '3055', 10);
 const FIGMA_TOKEN = process.env.FIGMA_ACCESS_TOKEN;
 
@@ -215,7 +217,15 @@ wss.on('connection', ws => {
 
   ws.on('close', () => {
     console.log('[bridge] Figma plugin disconnected');
-    if (pluginSocket === ws) pluginSocket = null;
+    if (pluginSocket === ws) {
+      pluginSocket = null;
+      // Immediately reject any in-flight requests — avoids 120s hang on reconnect.
+      for (const [id, entry] of pending) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error('Figma plugin disconnected. Run the plugin again to reconnect.'));
+      }
+      pending.clear();
+    }
   });
 
   ws.on('error', e => console.error('[bridge] plugin socket error:', e.message));
