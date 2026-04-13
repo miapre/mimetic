@@ -114,6 +114,45 @@ function applyPatternUpdates(knowledge, updates) {
   }
 }
 
+// Merge an array of explicit rule updates (DS gaps, substitutions, conventions)
+// into knowledge.explicit_rules. Handles: upsert and seen_count increment.
+function applyRuleUpdates(knowledge, ruleUpdates) {
+  if (!Array.isArray(ruleUpdates)) return;
+  if (!Array.isArray(knowledge.explicit_rules)) knowledge.explicit_rules = [];
+
+  for (const update of ruleUpdates) {
+    const { rule_key } = update;
+    if (!rule_key) continue;
+
+    const idx = knowledge.explicit_rules.findIndex(r => r.rule_key === rule_key);
+
+    if (idx === -1) {
+      knowledge.explicit_rules.push({
+        rule_key,
+        type:              update.type ?? 'gap',
+        substitution_key:  update.substitution_key  ?? null,
+        substitution_name: update.substitution_name ?? null,
+        reason:            update.reason ?? null,
+        seen_count:        1,
+        first_seen:        new Date().toISOString(),
+        last_seen:         new Date().toISOString(),
+        notes:             update.notes ?? null,
+      });
+    } else {
+      const rule = knowledge.explicit_rules[idx];
+      if (update.type)               rule.type              = update.type;
+      if (update.substitution_key)   rule.substitution_key  = update.substitution_key;
+      if (update.substitution_name)  rule.substitution_name = update.substitution_name;
+      if (update.reason !== undefined) rule.reason          = update.reason;
+      if (update.notes  !== undefined) rule.notes           = update.notes;
+      if (update.increment_seen) {
+        rule.seen_count = (rule.seen_count ?? 0) + 1;
+        rule.last_seen  = new Date().toISOString();
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bridge communication
 // ---------------------------------------------------------------------------
@@ -794,12 +833,14 @@ const TOOLS = [
     name: 'mimetic_knowledge_write',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     description:
-      'Write pattern→component mappings to the Mimetic design system knowledge file (ds-knowledge.json). ' +
-      'Call this at the end of every successful HTML-to-Figma run to record what was used. ' +
+      'Write pattern→component mappings and explicit DS rules to the Mimetic knowledge file (ds-knowledge.json). ' +
+      'Call this at the end of every successful HTML-to-Figma run. ' +
       'Automatically promotes CANDIDATE entries to VERIFIED once use_count reaches 3 with no corrections. ' +
       'Use increment_correction=true when the user corrected a mapping to demote it back to CANDIDATE. ' +
       'Use state="REJECTED" to permanently suppress a mapping. ' +
-      'Use dismissed_conflicts to suppress a DS evolution conflict notice for a specific candidate component.',
+      'Use dismissed_conflicts to suppress a DS evolution conflict notice for a specific candidate component. ' +
+      'Use rule_updates to record DS gaps (patterns with no DS component), substitutions (what to use instead), ' +
+      'and conventions (DS usage rules). Gaps with seen_count ≥ 3 are surfaced as DS enhancement recommendations.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -809,7 +850,7 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              pattern_key:          { type: 'string',  description: 'Required. Semantic identifier for the HTML pattern (e.g. "metric/kpi", "table/data-row").' },
+              pattern_key:          { type: 'string',  description: 'Required. Canonical taxonomy key for the HTML pattern (e.g. "metric/kpi", "label/chip"). Must match the Pattern Key Taxonomy.' },
               component_key:        { type: 'string',  description: 'Figma component key hash for the mapped DS component.' },
               component_name:       { type: 'string',  description: 'Human-readable component name (for readability in the knowledge file).' },
               state:                { type: 'string',  enum: ['CANDIDATE', 'VERIFIED', 'REJECTED', 'EXPIRED'], description: 'Explicit state override. Omit to let promotion logic handle CANDIDATE→VERIFIED automatically.' },
@@ -819,6 +860,23 @@ const TOOLS = [
               notes:                { type: 'string',  description: 'Optional context note about this mapping.' },
             },
             required: ['pattern_key'],
+          },
+        },
+        rule_updates: {
+          type: 'array',
+          description: 'Array of explicit DS rule updates: gaps (no component exists), substitutions (use this instead), or conventions (DS usage rules).',
+          items: {
+            type: 'object',
+            properties: {
+              rule_key:          { type: 'string',  description: 'Required. Semantic pattern name this rule applies to (e.g. "label/chip", "form/input-select"). Must match the Pattern Key Taxonomy.' },
+              type:              { type: 'string',  enum: ['gap', 'substitution', 'convention'], description: 'gap = no DS component for this pattern; substitution = use this component instead; convention = DS usage rule to remember.' },
+              substitution_key:  { type: 'string',  description: 'Component key of the DS component to use as fallback when this pattern has no direct DS match.' },
+              substitution_name: { type: 'string',  description: 'Human-readable name of the substitution component.' },
+              reason:            { type: 'string',  description: 'Why this rule exists (e.g. "No chip component in DS — Badge used instead").' },
+              increment_seen:    { type: 'boolean', description: 'Set true to increment seen_count. Used to track how often this gap or substitution recurs across runs.' },
+              notes:             { type: 'string',  description: 'Optional additional context about this rule.' },
+            },
+            required: ['rule_key'],
           },
         },
       },
@@ -902,12 +960,17 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
     } else if (name === 'mimetic_knowledge_write') {
       const knowledge = loadKnowledge();
       applyPatternUpdates(knowledge, fixedArgs.updates ?? []);
+      applyRuleUpdates(knowledge, fixedArgs.rule_updates ?? []);
       saveKnowledge(knowledge);
+      const recommendations = (knowledge.explicit_rules ?? []).filter(r => r.type === 'gap' && r.seen_count >= 3);
       result = {
         updated: knowledge.updated,
         total_patterns: knowledge.patterns.length,
         verified: knowledge.patterns.filter(p => p.state === 'VERIFIED').length,
         candidate: knowledge.patterns.filter(p => p.state === 'CANDIDATE').length,
+        total_rules: (knowledge.explicit_rules ?? []).length,
+        ds_recommendations: recommendations.length,
+        recommendations: recommendations.map(r => ({ rule_key: r.rule_key, seen_count: r.seen_count, reason: r.reason })),
         path: KNOWLEDGE_PATH,
       };
 
