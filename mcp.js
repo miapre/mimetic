@@ -14,8 +14,103 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 const BRIDGE_URL = process.env.BRIDGE_URL || 'http://127.0.0.1:3055';
+
+// ---------------------------------------------------------------------------
+// Knowledge file — persistent DS pattern→component mappings
+// ---------------------------------------------------------------------------
+
+const __dir = dirname(fileURLToPath(import.meta.url));
+const KNOWLEDGE_PATH = process.env.KNOWLEDGE_PATH || resolve(__dir, 'ds-knowledge.json');
+
+const KNOWLEDGE_VERSION = 1;
+const VERIFIED_THRESHOLD = 3; // use_count required for CANDIDATE → VERIFIED promotion
+
+function loadKnowledge() {
+  if (!existsSync(KNOWLEDGE_PATH)) {
+    return { version: KNOWLEDGE_VERSION, patterns: [], explicit_rules: [], updated: null };
+  }
+  try {
+    return JSON.parse(readFileSync(KNOWLEDGE_PATH, 'utf8'));
+  } catch {
+    return { version: KNOWLEDGE_VERSION, patterns: [], explicit_rules: [], updated: null };
+  }
+}
+
+function saveKnowledge(knowledge) {
+  knowledge.updated = new Date().toISOString();
+  writeFileSync(KNOWLEDGE_PATH, JSON.stringify(knowledge, null, 2), 'utf8');
+}
+
+// Merge an array of incoming pattern updates into the knowledge file.
+// Handles: upsert, use_count increment, CANDIDATE→VERIFIED promotion,
+// correction_count increment, state override, dismissed_conflicts merge.
+function applyPatternUpdates(knowledge, updates) {
+  for (const update of updates) {
+    const { pattern_key } = update;
+    if (!pattern_key) continue;
+
+    const idx = knowledge.patterns.findIndex(p => p.pattern_key === pattern_key);
+
+    if (idx === -1) {
+      // New entry
+      knowledge.patterns.push({
+        pattern_key,
+        component_key:        update.component_key ?? null,
+        component_name:       update.component_name ?? null,
+        state:                update.state ?? 'CANDIDATE',
+        use_count:            update.use_count ?? 1,
+        correction_count:     update.correction_count ?? 0,
+        last_used:            new Date().toISOString(),
+        dismissed_conflicts:  update.dismissed_conflicts ?? [],
+        notes:                update.notes ?? null,
+      });
+    } else {
+      const entry = knowledge.patterns[idx];
+
+      // Explicit state override (e.g. REJECTED, EXPIRED)
+      if (update.state) entry.state = update.state;
+
+      // Increment use_count if requested
+      if (update.increment_use) {
+        entry.use_count = (entry.use_count ?? 0) + 1;
+        entry.last_used = new Date().toISOString();
+      }
+
+      // Increment correction_count if requested
+      if (update.increment_correction) {
+        entry.correction_count = (entry.correction_count ?? 0) + 1;
+        // Correction demotes VERIFIED → CANDIDATE
+        if (entry.state === 'VERIFIED') entry.state = 'CANDIDATE';
+      }
+
+      // Update component binding if provided
+      if (update.component_key)  entry.component_key  = update.component_key;
+      if (update.component_name) entry.component_name = update.component_name;
+      if (update.notes !== undefined) entry.notes = update.notes;
+
+      // Merge dismissed_conflicts
+      if (Array.isArray(update.dismissed_conflicts)) {
+        entry.dismissed_conflicts = [
+          ...new Set([...(entry.dismissed_conflicts ?? []), ...update.dismissed_conflicts])
+        ];
+      }
+
+      // Auto-promote: CANDIDATE → VERIFIED when threshold met and no corrections
+      if (
+        entry.state === 'CANDIDATE' &&
+        entry.use_count >= VERIFIED_THRESHOLD &&
+        entry.correction_count === 0
+      ) {
+        entry.state = 'VERIFIED';
+      }
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Bridge communication
@@ -670,6 +765,64 @@ const TOOLS = [
       },
     },
   },
+
+  // ── Mimetic learning loop ─────────────────────────────────────────────────
+
+  {
+    name: 'mimetic_knowledge_read',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Read the Mimetic design system knowledge file (ds-knowledge.json). ' +
+      'Call this at the start of every HTML-to-Figma run to load known pattern→component mappings. ' +
+      'VERIFIED entries should be used directly without a fresh DS lookup. ' +
+      'CANDIDATE entries should be used with a confirming DS check. ' +
+      'Returns the full knowledge object, or a single entry if pattern_key is provided.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern_key: {
+          type: 'string',
+          description: 'Optional. Return only the entry matching this pattern key (e.g. "metric/kpi"). Omit to return all entries.',
+        },
+      },
+    },
+  },
+
+  {
+    name: 'mimetic_knowledge_write',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    description:
+      'Write pattern→component mappings to the Mimetic design system knowledge file (ds-knowledge.json). ' +
+      'Call this at the end of every successful HTML-to-Figma run to record what was used. ' +
+      'Automatically promotes CANDIDATE entries to VERIFIED once use_count reaches 3 with no corrections. ' +
+      'Use increment_correction=true when the user corrected a mapping to demote it back to CANDIDATE. ' +
+      'Use state="REJECTED" to permanently suppress a mapping. ' +
+      'Use dismissed_conflicts to suppress a DS evolution conflict notice for a specific candidate component.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        updates: {
+          type: 'array',
+          description: 'Array of pattern entry updates to apply.',
+          items: {
+            type: 'object',
+            properties: {
+              pattern_key:          { type: 'string',  description: 'Required. Semantic identifier for the HTML pattern (e.g. "metric/kpi", "table/data-row").' },
+              component_key:        { type: 'string',  description: 'Figma component key hash for the mapped DS component.' },
+              component_name:       { type: 'string',  description: 'Human-readable component name (for readability in the knowledge file).' },
+              state:                { type: 'string',  enum: ['CANDIDATE', 'VERIFIED', 'REJECTED', 'EXPIRED'], description: 'Explicit state override. Omit to let promotion logic handle CANDIDATE→VERIFIED automatically.' },
+              increment_use:        { type: 'boolean', description: 'Set true to increment use_count by 1 for an existing entry.' },
+              increment_correction: { type: 'boolean', description: 'Set true when the user corrected this mapping. Increments correction_count and demotes VERIFIED→CANDIDATE.' },
+              dismissed_conflicts:  { type: 'array',   items: { type: 'string' }, description: 'Component keys to suppress in future DS evolution conflict scans for this pattern.' },
+              notes:                { type: 'string',  description: 'Optional context note about this mapping.' },
+            },
+            required: ['pattern_key'],
+          },
+        },
+      },
+      required: ['updates'],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -735,7 +888,28 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
 
     let result;
 
-    if (name === 'figma_insert_component') {
+    if (name === 'mimetic_knowledge_read') {
+      const knowledge = loadKnowledge();
+      if (fixedArgs.pattern_key) {
+        const entry = knowledge.patterns.find(p => p.pattern_key === fixedArgs.pattern_key) ?? null;
+        result = { entry, path: KNOWLEDGE_PATH };
+      } else {
+        result = { ...knowledge, path: KNOWLEDGE_PATH };
+      }
+
+    } else if (name === 'mimetic_knowledge_write') {
+      const knowledge = loadKnowledge();
+      applyPatternUpdates(knowledge, fixedArgs.updates ?? []);
+      saveKnowledge(knowledge);
+      result = {
+        updated: knowledge.updated,
+        total_patterns: knowledge.patterns.length,
+        verified: knowledge.patterns.filter(p => p.state === 'VERIFIED').length,
+        candidate: knowledge.patterns.filter(p => p.state === 'CANDIDATE').length,
+        path: KNOWLEDGE_PATH,
+      };
+
+    } else if (name === 'figma_insert_component') {
       result = await callBridge('insert_component', fixedArgs);
     } else if (DIRECT_PASS.has(name)) {
       result = await callBridge(bridgeType(name), fixedArgs);

@@ -1,8 +1,8 @@
 # Mimetic
 
-**The only MCP that translates HTML into Figma using your own design system.**
+**An MCP that learns your design system.**
 
-Give Claude an HTML file. It reads your design system — published components and design token variables — and builds the layout inside Figma using real DS instances. Not hardcoded shapes. Not a visual approximation. Real component instances with real token bindings.
+Mimetic translates HTML into Figma using your published components and design tokens. But the conversion is just the starting point — every run teaches Mimetic your DS vocabulary. By run 10, familiar patterns resolve instantly with near-zero library lookups. Your corrections teach it too.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
@@ -13,13 +13,31 @@ Give Claude an HTML file. It reads your design system — published components a
 
 ---
 
-## Why this is different
+## How it learns
 
-Most HTML-to-Figma tools do a visual copy — they dump raw frames with hardcoded hex values. When you get the file, nothing connects to your design system. You have to re-apply tokens, swap in real components, and fix every layer by hand.
+Mimetic maintains a local knowledge file — `ds-knowledge.json` — that records how HTML patterns map to your DS components. Every run reads from it before doing any library inspection, and writes back what it used.
 
-This tool does the opposite. Claude reads your HTML *and* your published component library at the same time, maps HTML elements to DS components, applies your token variables to every fill and text style, and builds a Figma file that's already part of your system.
+| Run | What happens |
+|---|---|
+| Run 1 | Mimetic inspects your library to resolve each pattern. Saves every successful mapping as a CANDIDATE. |
+| Run 3 | Patterns used consistently 3 times with no corrections are promoted to VERIFIED. No DS lookup needed for those. |
+| Run 10+ | Familiar patterns resolve instantly. DS calls are reserved for genuinely new patterns. |
 
-**If you update a token in your library and re-publish, the Figma nodes update automatically.**
+**The knowledge file is yours.** It lives on your machine, travels with your project, and is fully inspectable JSON. Nothing is sent anywhere.
+
+**Your corrections teach Mimetic.** If you change a component Mimetic placed — and tell it — the mapping is demoted and re-evaluated. The system adjusts.
+
+**Your DS evolves and Mimetic notices.** When a new component is added that's a better match for an existing mapping, Mimetic flags it in the run report. It never auto-switches — you decide.
+
+---
+
+## Why this matters
+
+Other HTML-to-Figma tools are stateless. Every run starts from scratch: inspect library, resolve patterns, build, done. The work done on run 1 doesn't help run 50.
+
+Mimetic compounds. The longer you use it against the same design system, the less work each run requires, and the more consistent the output becomes. It converges on your DS vocabulary instead of re-discovering it every time.
+
+This is the part that can't be replicated by a generic write-back tool. The knowledge belongs to your team's specific DS, your specific naming conventions, and your specific corrections over time.
 
 ---
 
@@ -27,7 +45,7 @@ This tool does the opposite. Claude reads your HTML *and* your published compone
 
 ### Translate an HTML prototype into Figma
 
-Have an existing HTML file — a prototype, a coded mockup, a landing page? Claude reads it and recreates it inside Figma using your design system instead of hardcoded values.
+Have an existing HTML file — a prototype, a coded mockup, a landing page? Mimetic reads it and recreates it inside Figma using your design system instead of hardcoded values.
 
 > *"Here's an HTML file I built as a prototype. Translate it into Figma on the 'Prototypes' page, artboard 'Onboarding v2'. Use my design system components wherever possible — match the layout, hierarchy, and content."*
 
@@ -150,6 +168,13 @@ Prefer to set things up manually, or want to understand each step? See **[docs/G
 ## Available tools
 
 Once the MCP is registered, Claude has access to:
+
+**Learning**
+
+| Tool | What it does |
+|---|---|
+| `mimetic_knowledge_read` | Load known pattern→component mappings before a run. VERIFIED entries skip DS lookup entirely. |
+| `mimetic_knowledge_write` | Persist mappings after a run. Auto-promotes CANDIDATE→VERIFIED at 3 consistent uses. |
 
 **Build**
 

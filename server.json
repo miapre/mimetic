@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.miapre/mimetic",
   "title": "Mimetic",
-  "description": "Translate HTML prototypes into Figma using your design system's real components and tokens.",
+  "description": "An MCP that learns your design system. Translates HTML into Figma using your published DS components and tokens — and gets faster every run.",
   "version": "1.1.0",
   "websiteUrl": "https://github.com/miapre/mimetic",
   "repository": {
