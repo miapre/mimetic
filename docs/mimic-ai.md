@@ -122,12 +122,16 @@ Call `mimic_ai_knowledge_read` with no arguments. Record the full result in work
 
 **How to use the returned patterns:**
 
-| Entry state | Action in Phase 3 |
-|---|---|
-| `VERIFIED` (use_count ≥ 3, correction_count = 0) | Use the stored component_key directly — skip DS lookup for this pattern |
-| `CANDIDATE` (use_count 1–2) | Use as a strong hint — confirm the component_key is still importable, then use it |
-| `REJECTED` | Never use this mapping — fall back to DS inspection or primitive |
-| `EXPIRED` | Skip — component key no longer valid; treat as new pattern |
+| Entry state | Action in Phase 3 | Reads consumed |
+|---|---|---|
+| `VERIFIED` (use_count ≥ 3, correction_count = 0) | Use the stored component_key directly. Skip DS lookup. No search, no confirmation call. | **0 reads** |
+| `CANDIDATE` (use_count 1–2) | Use the stored component_key directly. Do NOT run a confirming DS search. Only re-search if a prior run recorded an import error for this exact key. | **0 reads** |
+| `REJECTED` | Never use this mapping. Fall back to DS inspection or primitive. | 1 read (new search) |
+| `EXPIRED` | Treat as new pattern. Run 1 targeted DS search. | 1 read |
+
+**VERIFIED and CANDIDATE entries cost zero reads.** A build where all patterns are VERIFIED or CANDIDATE requires no DS searches and no `get_variable_defs` call (if the variable cache is also warm). This is the target state after 3 runs.
+
+**Variable cache restoration (check before Phase 2.5):** After loading patterns, scan for a convention rule matching `file/{fileKey}/variable-cache`. If found, parse its `notes` field and restore the V dict and TS dict into working memory. This eliminates the `get_variable_defs` read from the Phase 0.7 budget — mark slot 1 as consumed-but-skipped.
 
 **How to use the returned explicit_rules:**
 
@@ -199,6 +203,95 @@ Do not copy implementations. Use findings to inform decisions in later phases.
 - Do not invent content for nodes not present in the rendered output
 - Record in the Phase 6 report whether rendered DOM or static HTML was used as the Phase 1 input
 - If the rendered capture fails partway through, fall back to static HTML for the affected sections — do not abort
+
+---
+
+## Phase 0.7 — Execution mode and read budget (declare before any read)
+
+**Objective:** Declare execution mode and enforce the read budget before any Figma API call. No Figma read tool (`get_design_context`, `get_variable_defs`, `search_design_system`, `get_screenshot`, `get_metadata`) may be called before this phase completes.
+
+### Two execution modes
+
+**Instant mode (default — always use on first run)**
+
+Use when: Phase -1 knowledge file is empty, first run on this screen, or VERIFIED coverage is partial.
+
+- No full DS ingestion
+- Minimum reads only — what is strictly required to build, nothing more
+- Warm-start shortcut: if Phase -1 returned VERIFIED entries covering every pattern in the screen AND the variable cache is populated, the read budget may reach zero — no DS searches, no variable reads required
+
+**Learning mode (activate on subsequent runs, explicitly)**
+
+Use when: Phase -1 VERIFIED coverage is complete, prior runs have populated the V and TS dicts, and the user explicitly wants expanded DS knowledge.
+
+- Additional DS searches permitted after the build is complete
+- `max_reads_soft_ceiling = 20` applies — still subject to a cap
+
+---
+
+### Read budget (Instant mode — hard enforced)
+
+```
+max_reads_first_run       = 5
+max_screenshots_per_build = 1   (applies in all modes)
+```
+
+| Slot | Tool | Purpose | Skip condition |
+|---|---|---|---|
+| 1 | `get_variable_defs` | Collect V dict | Skip if V dict restored from Phase 7 variable cache |
+| 2 | `search_design_system` | Targeted query for 1 new, unverified pattern | Skip if all patterns are VERIFIED in Phase -1 |
+| 3 | `get_screenshot` | Final verification — build complete | Optional; skip if post-chunk sweeps confirmed compliance |
+| 4–5 | Any | Contingency — unclassifiable error only | Use only if error classification table (below) gives no match |
+
+---
+
+### Disallowed reads (protocol violations — not guidelines)
+
+The following are forbidden in Instant mode. Any violation must be documented in the Phase 6 report:
+
+- Full DS scans: `search_design_system` with no specific pattern query, or a generic term (e.g., "component", "all")
+- Repeated DS searches for the same pattern within a single run
+- Read-based retry loops: issuing another read tool call after a failed read of the same type
+- More than 1 screenshot per build
+- Calling `get_variable_defs` when V dict is already populated from Phase 7 cache
+
+---
+
+### Single-pass read strategy (enforced globally)
+
+All reads must complete **before** the first `use_figma` construction call. The session structure must be:
+
+```
+[Read phase] → [Build phase] → [Optional single final screenshot]
+```
+
+Interleaving reads and writes is a protocol violation:
+
+```
+read → write → read → write  ← FORBIDDEN
+```
+
+The read phase ends the moment the first `use_figma` call executes. After that point, no `get_design_context`, `search_design_system`, `get_variable_defs`, or `get_metadata` calls are permitted until all construction is complete.
+
+**Single exception:** if a `use_figma` call returns an error whose cause cannot be determined from the error message alone, 1 targeted read may be issued from the contingency slots (4–5). Document it in Phase 6.
+
+---
+
+### Error classification — resolve without reads
+
+Before issuing a contingency read on any `use_figma` error, check this table first:
+
+| Error message contains | Root cause | Fix — no read required |
+|---|---|---|
+| `figma.pages` | Wrong API | Replace with `figma.root.children` |
+| `clientStorage` | Unsupported API in plugin context | Remove the call entirely |
+| `Cannot set properties of undefined` | Node not found before operation | Add null guard before the operation |
+| `getVariableById` returns `null` | Variable ID missing from V dict | Add missing ID to V dict (known value; re-collect from cache) |
+| `appendChild` into instance / `Expected instance` | Instance mutation attempted | Replace `appendChild` with `swapComponent` |
+| `Cannot read properties of null` (after `findOne`) | Target node absent in this variant | Add null check; node may not exist in this component state |
+| `Font is not available` | Font not loaded before characters write | Add `await figma.loadFontAsync(...)` before the characters assignment |
+
+Only issue a contingency read if the error message matches none of the above.
 
 ---
 
@@ -288,10 +381,11 @@ Chart detection rule:
 **Objective:** Discover actual variable paths, naming conventions, component keys, and text style IDs before mapping.
 
 Rules:
-- Before querying the DS, check Phase -1 knowledge for VERIFIED entries covering the patterns detected in Phase 2
-- For each VERIFIED pattern: record the stored component_key — skip the DS search call for that pattern
-- For CANDIDATE patterns: still run a confirming DS search, but use the stored component_key as the expected answer
-- For new patterns (not in knowledge): run full DS inspection as normal
+- Before querying the DS, check Phase -1 knowledge for VERIFIED and CANDIDATE entries covering the patterns detected in Phase 2
+- For each VERIFIED pattern: record the stored component_key — skip the DS search call entirely (0 reads)
+- For each CANDIDATE pattern: use the stored component_key directly — skip the DS search call entirely (0 reads). Re-search only if a prior session recorded an `importComponentByKeyAsync` failure for this exact key.
+- For new patterns (not in knowledge, or REJECTED/EXPIRED): 1 targeted DS search, maximum. If multiple new patterns need resolution, batch them into a single `search_design_system` query using the most discriminating term. If that single search resolves nothing, record all remaining new patterns as component candidates — do not issue additional searches.
+- Full DS scans (no specific query term) are forbidden regardless of mode
 - This tiering directly reduces DS lookup calls across runs — the savings compound as more entries reach VERIFIED state
 - Inspect available design system variables before resolution
 - Do not assume naming formats
@@ -601,6 +695,17 @@ Rules for the inventory:
 - Container heights for coordinate-based panels (graph, waterfall, gantt) must be calculated from their content before construction, written in the inventory, and matched exactly during construction — do not leave whitespace the HTML does not have
 
 Proceeding to construction without a completed inventory is a Phase 4 failure.
+
+Non-destructive build rule (non-negotiable):
+- Always create a new artboard for each build. Never modify, overwrite, or delete an existing artboard.
+- Position the new artboard adjacent to existing content: query `figma.currentPage.children` for the rightmost node, then place the new frame at `rightmost.x + rightmost.width + 80`.
+- If a prior attempt produced a non-compliant artboard, leave it in place — the user decides what to delete. Build the corrected version as a new frame next to it.
+
+Screenshot discipline:
+- `max_screenshots_per_build = 1`
+- The single allowed screenshot is the final verification screenshot — taken only after all construction and all post-chunk sweeps are complete.
+- Per-chunk screenshots are forbidden.
+- If construction fails mid-build, do not screenshot — document the failure in Phase 6 instead.
 
 Rules:
 - Every container is an auto layout frame — use `figma_create_frame` with `layoutMode: HORIZONTAL` or `VERTICAL`
@@ -1090,6 +1195,24 @@ Dismissed gaps are excluded from all future recommendations.
 
 ---
 
+### Variable ID cache — persist across sessions (mandatory)
+
+After every build, write the full V dict and TS dict as a `convention` rule in `rule_updates`. This eliminates the `get_variable_defs` read on all subsequent runs for this Figma file.
+
+```json
+{
+  "rule_key": "file/BoQobWgIHapsRafUJJyEZ4/variable-cache",
+  "type": "convention",
+  "notes": "{\"V\":{\"bg-primary\":\"VariableID:4231:12\",\"text-primary\":\"VariableID:4231:13\",\"border-secondary\":\"VariableID:4231:44\"},\"TS\":{\"xs/Regular\":\"S:abc123,7649:603\",\"sm/Semibold\":\"S:def456,7649:604\"}}"
+}
+```
+
+- Replace `BoQobWgIHapsRafUJJyEZ4` with the actual Figma file key for the current build
+- The `notes` field is a JSON string containing two keys: `V` (variable ID dict) and `TS` (text style ID dict)
+- Include every variable ID and text style ID used in the build — not a subset
+- **Phase -1 restoration:** on the next run, when Phase -1 loads this convention rule, it must parse `notes` with `JSON.parse(notes)` and restore both dicts to working memory before Phase 2.5. This eliminates slot 1 (`get_variable_defs`) from the Phase 0.7 read budget.
+- Update this entry on every run — the last write is authoritative
+
 **Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see `verified` count increase in the response. On the next run, VERIFIED entries skip DS lookup entirely.
 
 **Gap recommendations surface automatically:** the response includes a `recommendations` array listing any active, non-dismissed gaps with seen_count ≥ 3. These are the clearest signal Mimic AI can produce about what the user's DS is missing.
@@ -1121,10 +1244,13 @@ Present the following, formatted as a short list with clear labels:
 ```
 Mimic AI learning summary — Run [N]
 ────────────────────────────────────
+Mode:                [Instant / Learning]
 Patterns saved:      [X] new, [Y] updated
 Promoted to VERIFIED:[Z] (these skip DS lookup from now on)
 DS lookups skipped:  [N] (via VERIFIED entries and substitution rules)
 DS gaps detected:    [N] pattern(s) with no matching DS component
+Read budget used:    [N] of 5 reads (slots: [list which slots were consumed])
+Variable cache:      [written / already warm — 0 reads next run]
 ```
 
 If `promoted_to_verified` is non-empty, list each promoted pattern_key by name — these are milestone events.
