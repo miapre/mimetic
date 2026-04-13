@@ -7,7 +7,7 @@ Mimic AI translates HTML into Figma using your published components and design t
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
 ![Platform: macOS / Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
-[![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers/mimic-ai)
+[![Glama](https://glama.ai/mcp/servers/@miapre/mimic-ai/badge)](https://glama.ai/mcp/servers/@miapre/mimic-ai)
 
 > **Not a Figma product.** This is an independent, open-source MCP server built for Claude Code.
 
