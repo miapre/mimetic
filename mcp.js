@@ -14,7 +14,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -37,6 +37,8 @@ function loadKnowledge() {
   try {
     return JSON.parse(readFileSync(KNOWLEDGE_PATH, 'utf8'));
   } catch {
+    // Corrupted file — back it up before any write overwrites it
+    try { renameSync(KNOWLEDGE_PATH, KNOWLEDGE_PATH + '.bak'); } catch { /* ignore */ }
     return { version: KNOWLEDGE_VERSION, patterns: [], explicit_rules: [], updated: null };
   }
 }
