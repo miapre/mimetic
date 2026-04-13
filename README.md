@@ -52,6 +52,16 @@ Learning also improves **consistency**. The same HTML pattern resolves to the sa
 
 ---
 
+## Before every build — two things Mimic needs
+
+**1. Where to build**
+Mimic will always ask where in Figma you want the output before it starts. You can answer with a Figma link (file, page, or specific frame), or just describe it in plain language: *"my product file, the Screens page, next to the Login artboard."* If your original request already includes a link, Mimic skips the question.
+
+**2. A library enabled in that file**
+Mimic needs your component library to be enabled in the target Figma file — not just published in your DS file. If no library is found, Mimic stops and tells you exactly how to enable it before continuing. It will never build a screen without DS components and call it done.
+
+---
+
 ## What to expect on your first run
 
 The first run is the most expensive — in reads, in time, and in imperfection. That's expected, and the gap closes fast.
