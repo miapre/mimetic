@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "mimic-ai",
+      "identifier": "@miapre/mimic-ai",
       "version": "1.1.0",
       "runtimeHint": "npx",
       "transport": {

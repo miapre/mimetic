@@ -91,10 +91,10 @@ if [[ "$AUTO_WRITE" =~ ^[Yy]$ ]]; then
       catch(e) { console.error('Warning: could not parse ' + path + ' — adding mcpServers key.'); }
     }
     if (!config.mcpServers) config.mcpServers = {};
-    if (config.mcpServers['mimic-ai']) {
+    if (config.mcpServers['@miapre/mimic-ai']) {
       console.log('mimic-ai entry already present — updating path.');
     }
-    config.mcpServers['mimic-ai'] = { command: 'node', args: ['$INSTALL_DIR/mcp.js'] };
+    config.mcpServers['@miapre/mimic-ai'] = { command: 'node', args: ['$INSTALL_DIR/mcp.js'] };
     fs.mkdirSync(require('path').dirname(path), { recursive: true });
     fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
     console.log('Written to $SETTINGS_FILE');
