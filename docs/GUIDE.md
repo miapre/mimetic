@@ -22,6 +22,8 @@ Here is an example of what you can build with this system:
 
 Claude wrote the code, executed it, and the entire page appeared in Figma in under two minutes.
 
+**A note on Figma API limits:** Mimic is designed around how Figma's API actually works. Write operations — creating frames, inserting components, binding variables — are free and unlimited. Read operations — inspecting library components, reading design context, capturing screenshots — draw from a daily quota. Mimic minimizes reads by caching what it learns, skipping lookups for patterns it already knows, and limiting screenshots to one per build. The first run costs the most. Every subsequent run costs less.
+
 ---
 
 ## What you need before you start
@@ -77,7 +79,30 @@ There are two separate channels between Claude and Figma. Understanding them upf
 
 **Channel 1 — Read (Figma MCP):** Claude uses Figma's official MCP server to read your designs. It can inspect any frame, see what components exist, read property values, and understand the design context. This is read-only — it cannot create or modify anything.
 
+> **Read calls are limited.** Figma's MCP tools draw from a daily quota — 200 calls/day on Professional plans, 600 on Enterprise. Mimic is designed to minimize these calls: it caches component keys and variable IDs after the first use, and skips lookups entirely for patterns it has already learned. On a warm build, Mimic typically uses 0–2 read calls for the entire screen.
+
 **Channel 2 — Write (Mimic AI):** To create things in Figma, this repo provides a custom local system: a small Node.js bridge server that runs on your computer, plus a Figma plugin that runs inside the Figma desktop app. Claude sends instructions to the bridge over HTTP; the bridge forwards them to the plugin over WebSocket; the plugin executes them using Figma's Plugin API.
+
+> **Write calls are free.** There is no rate limit on write operations. Mimic can create as many frames, components, and text nodes as needed without any quota impact.
+
+---
+
+## What to expect on your first run
+
+**Your first run is the most expensive — and the least polished.** That's normal, and the gap closes fast.
+
+**Mimic does not scan your entire design system.** On the first run, it inspects only the patterns it sees in your HTML — one targeted search, not a full library sweep. This keeps the read cost low.
+
+**5 reads is the ceiling.** A cold first run typically uses 3 reads: one to collect variable IDs, one to search for unknown patterns, and one final screenshot. Two more are held in reserve.
+
+**The output will be functional, but some patterns may be off.** Mimic makes its best judgment for patterns it hasn't seen before. A few components may be approximate — close, but not exact. These are candidates for correction, not failures. Tell Claude what was wrong and it will remember.
+
+**After the first run, costs drop fast:**
+- Variable IDs are cached — no re-read on the next run
+- Every pattern used 3× with no corrections becomes permanent — zero lookups from that point on
+- Screenshots are only taken at the very end — one per build, always
+
+**At the end of every run, Mimic tells you exactly what it learned:** how many patterns are now cached, how many reads were used, and what to correct if anything was off. The learning summary is your signal for where the next run will improve.
 
 ---
 

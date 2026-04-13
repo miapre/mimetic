@@ -1,8 +1,8 @@
 # Mimic AI
 
-**An MCP that learns your design system.**
+**An MCP that builds in Figma using your design system — and gets faster every time.**
 
-Mimic AI translates HTML into Figma using your published components and design tokens. But the conversion is just the starting point — every run teaches Mimic AI your DS vocabulary. By run 10, familiar patterns resolve instantly with near-zero library lookups. Your corrections teach it too.
+Mimic AI translates HTML into Figma using your published components and design tokens. It's built for how Figma's API actually works: reads are limited, writes are not. So Mimic minimizes reads, caches what it learns, and uses the budget where it counts. By run 3, familiar patterns require no lookups at all. By run 10, most builds are nearly free.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
@@ -18,31 +18,71 @@ Mimic AI translates HTML into Figma using your published components and design t
 
 ---
 
+## How Mimic works with Figma limits
+
+Figma's API has two kinds of operations: reads and writes. They behave very differently.
+
+**Writes are free.** Every frame Mimic creates, every component it inserts, every token it binds — these use Figma's plugin channel, which has no rate limit. Mimic can write as much as it needs.
+
+**Reads are limited.** Figma's official MCP tools — inspecting library components, reading design context, capturing screenshots — draw from a daily quota (200 on Professional plans, 600 on Enterprise). These calls are shared across everything you do in Claude that day.
+
+Mimic is designed around this reality. It enters every build in **Instant mode** by default: reads only what it must, caches everything it learns, and uses the quota as little as possible. A cold build might use 3–5 reads. A warm build might use 1. A fully learned build might use none.
+
+---
+
 ## How it learns
 
-Mimic AI maintains a local knowledge file — `ds-knowledge.json` — that records how HTML patterns map to your DS components. Every run reads from it before doing any library inspection, and writes back what it used.
+Mimic maintains a local knowledge file — `ds-knowledge.json` — that records how HTML patterns map to your DS components and which variable IDs belong to which tokens. Every run loads from it before doing any library inspection, and writes back what it used.
 
-| Run | What happens |
-|---|---|
-| Run 1 | Mimic AI inspects your library to resolve each pattern. Saves every successful mapping as a CANDIDATE. |
-| Run 3 | Patterns used consistently 3 times with no corrections are promoted to VERIFIED. No DS lookup needed for those. |
-| Run 10+ | Familiar patterns resolve instantly. DS calls are reserved for genuinely new patterns. |
+| Run | What happens | Read cost |
+|---|---|---|
+| Run 1 | Mimic inspects the library for unknown patterns. Caches every successful mapping and your variable IDs. | 3–5 reads |
+| Run 3 | Patterns used consistently 3× with no corrections are promoted to VERIFIED — no lookup needed for those. | 1–2 reads |
+| Run 10+ | All patterns are VERIFIED. Variable IDs are cached. Builds are nearly free. | 0–1 reads |
+
+Learning also improves **consistency**. The same HTML pattern resolves to the same DS component every time — no variance between runs. And it improves **speed**: fewer lookups mean Claude spends more time building and less time discovering.
 
 **The knowledge file is yours.** It lives on your machine, travels with your project, and is fully inspectable JSON. Nothing is sent anywhere.
 
-**Your corrections teach Mimic AI.** If Mimic AI inserts the wrong component, tell Claude: *"That component was wrong — use [the correct one] instead, and remember it for next time."* Claude demotes the mapping, records the correction, and uses the right component from that point on. No configuration needed — a plain sentence is enough.
+**Your corrections teach Mimic.** If Mimic inserts the wrong component, tell Claude: *"That component was wrong — use [the correct one] instead, and remember it for next time."* Claude demotes the mapping, records the correction, and uses the right component from that point on. No configuration needed — a plain sentence is enough.
 
-**Your DS evolves and Mimic AI notices.** When a new component is added that's a better match for an existing mapping, Mimic AI flags it in the run report. It never auto-switches — you decide.
+**Your DS evolves and Mimic notices.** When a new component is added that's a better match for an existing mapping, Mimic flags it in the run report. It never auto-switches — you decide.
 
-**Every run produces a learning summary.** At the end of each build, Claude reports how many patterns were saved, how many were promoted to VERIFIED (meaning future builds skip the DS lookup entirely), and any design system gaps detected — patterns that appeared in the HTML with no matching DS component. These gap reports are the clearest signal about what your design system might be missing.
+**Every run produces a learning summary.** At the end of each build, Claude reports how many patterns were saved, how many were promoted to VERIFIED, how many reads were used, and any design system gaps detected. Gap reports are the clearest signal about what your DS might be missing.
+
+---
+
+## What to expect on your first run
+
+The first run is the most expensive — in reads, in time, and in imperfection. That's expected, and the gap closes fast.
+
+**Instant mode is always on by default.** Mimic does not scan your entire design system. It reads only what it needs for the patterns in your HTML. There is no "full DS ingestion" pass.
+
+**5 reads maximum.** On a first run, Mimic targets 1 variable read, 1 targeted DS search, and 1 final screenshot. That's typically 3 reads. Two more are held in reserve for anything unexpected.
+
+**The output is functional, not perfect.** Patterns Mimic has never seen before will be resolved with its best judgment. A few may be off — resolved as a close component when a better one exists, or built from primitives when a DS component wasn't found. These are candidates for correction, not failures.
+
+**After the first run, the gaps start closing.** Correcting a component teaches Mimic what to use. Repeating a pattern three times makes it permanent. Variable IDs are cached after the first read — no re-collection on subsequent runs.
+
+**The learning summary at the end tells you where things stand:** how many patterns are now VERIFIED, how many reads were used, and what to correct if anything was off.
+
+---
+
+## When Mimic may stop a build
+
+Mimic is aware of your Figma read budget. If a mid-build situation would require reads that exceed what's available or advisable, Mimic stops and tells you — rather than burning calls on uncertain operations.
+
+This is intentional. A partial build with 3 compliant sections is more useful than an incomplete attempt that exhausts the daily budget on retries. You can continue the next day, or ask Mimic to resume from where it stopped.
+
+**Mimic will also stop if a write fails unexpectedly.** It does not retry blindly — it classifies the error, applies a fix if one is known, and reports what happened.
 
 ---
 
 ## Why this matters
 
-Other HTML-to-Figma tools are stateless. Every run starts from scratch: inspect library, resolve patterns, build, done. The work done on run 1 doesn't help run 50.
+Other HTML-to-Figma tools are stateless. Every run starts from scratch: inspect library, resolve patterns, build, done. Run 1 and run 50 cost the same.
 
-Mimic AI compounds. The longer you use it against the same design system, the less work each run requires, and the more consistent the output becomes. It converges on your DS vocabulary instead of re-discovering it every time.
+Mimic compounds. The longer you use it against the same design system, the fewer reads each run requires, the more consistent the output becomes, and the faster builds complete. It converges on your DS vocabulary instead of re-discovering it every time.
 
 This is the part that can't be replicated by a generic write-back tool. The knowledge belongs to your team's specific DS, your specific naming conventions, and your specific corrections over time.
 
