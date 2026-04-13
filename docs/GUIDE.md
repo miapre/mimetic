@@ -521,7 +521,7 @@ Update `~/.claude/settings.json` to include both MCPs:
         "FIGMA_ACCESS_TOKEN": "your_token_here"
       }
     },
-    "mimic-ai": {
+    "@miapre/mimic-ai": {
       "command": "node",
       "args": ["/absolute/path/to/your/mimic-ai/mcp.js"]
     }
