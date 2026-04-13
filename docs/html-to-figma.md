@@ -31,13 +31,96 @@ When there is a conflict between two priorities, the higher one wins. Visual acc
 
 ---
 
+## Pattern key taxonomy (canonical vocabulary — mandatory)
+
+Every pattern resolved in Phase 3 and recorded in Phase 7 must use a key from this list. Do not invent new keys. If a pattern fits no key exactly, use the closest category prefix and add a qualifier (e.g. `card/pricing`). Before writing any new key in Phase 7, check the existing keys loaded in Phase -1 — if a similar key already exists, use it instead.
+
+**Navigation**
+- `nav/top-bar` — horizontal top navigation bar spanning full width
+- `nav/sidebar` — vertical sidebar with stacked links
+- `nav/tab` — tab strip (horizontal tab row)
+- `nav/breadcrumb` — breadcrumb trail
+- `nav/pagination` — page navigation controls
+- `nav/stepper` — step / wizard progress indicator
+
+**Metrics & data display**
+- `metric/kpi` — KPI card (value, label, optional trend or delta)
+- `metric/stat` — single statistic, no card shell
+- `metric/progress` — progress bar, ring, or gauge
+
+**Cards**
+- `card/content` — general content card
+- `card/feature` — feature highlight card
+- `card/profile` — user or entity profile card
+- `card/action` — card with a primary CTA
+- `card/summary` — summary or overview card
+
+**Tables**
+- `table/header` — column header row
+- `table/row` — data row
+- `table/cell` — individual data cell
+- `table/footer` — totals or summary row
+
+**Forms & inputs**
+- `form/input-text` — text input field
+- `form/input-select` — dropdown select
+- `form/input-checkbox` — checkbox
+- `form/input-radio` — radio button
+- `form/input-toggle` — toggle switch
+- `form/input-search` — search field with icon
+- `form/button-primary` — primary action button
+- `form/button-secondary` — secondary action button
+- `form/button-ghost` — ghost / text button
+
+**Labels & status**
+- `label/badge` — status badge or count badge
+- `label/chip` — interactive or decorative chip (filter, category)
+- `label/tag` — categorization tag applied to cards or rows
+- `label/status-dot` — colored dot indicating status inline
+
+**Feedback & alerts**
+- `alert/info` — informational alert or banner
+- `alert/success` — success alert
+- `alert/warning` — warning alert
+- `alert/error` — error alert
+- `feedback/toast` — toast notification
+- `feedback/empty-state` — empty state (no data)
+- `feedback/loader` — loading indicator or skeleton
+
+**Charts**
+- `chart/bar` — bar or column chart
+- `chart/line` — line chart
+- `chart/donut` — donut or pie chart
+- `chart/radar` — radar / spider chart
+- `chart/scatter` — scatter plot
+
+**Layout**
+- `layout/page-header` — page-level header section (title, actions)
+- `layout/section-header` — section heading with optional subtitle
+- `layout/footer` — page footer
+- `layout/hero` — hero or banner section
+- `layout/sidebar-panel` — side panel or drawer
+
+**Overlays & menus**
+- `overlay/modal` — modal dialog
+- `overlay/tooltip` — tooltip
+- `overlay/dropdown-menu` — dropdown menu
+
+**Media & misc**
+- `media/avatar` — user or entity avatar
+- `media/icon` — standalone icon
+- `list/item` — list item (non-table)
+- `divider/horizontal` — horizontal rule or visual separator
+
+---
+
 ## Phase -1 — Knowledge load (mandatory, always first)
 
 **Objective:** Load accumulated DS knowledge before any parsing or DS inspection begins.
 
-Call `mimetic_knowledge_read` with no arguments. Record the result in working memory.
+Call `mimetic_knowledge_read` with no arguments. Record the full result in working memory — both `patterns` and `explicit_rules`.
 
-**How to use the returned knowledge:**
+**How to use the returned patterns:**
 
 | Entry state | Action in Phase 3 |
 |---|---|
@@ -45,6 +128,19 @@ Call `mimetic_knowledge_read` with no arguments. Record the result in working me
 | `CANDIDATE` (use_count 1–2) | Use as a strong hint — confirm the component_key is still importable, then use it |
 | `REJECTED` | Never use this mapping — fall back to DS inspection or primitive |
 | `EXPIRED` | Skip — component key no longer valid; treat as new pattern |
+
+**How to use the returned explicit_rules:**
+
+Explicit rules encode what Mimetic has learned about your DS beyond component mappings: what patterns have no component, what substitutions to use instead, and DS usage conventions.
+
+| Rule type | Action in Phase 3 |
+|---|---|
+| `gap` (seen_count < 3) | DS has no component for this pattern. Run DS search anyway — the DS may have been updated. |
+| `gap` (seen_count ≥ 3) | DS reliably has no component for this pattern. Skip DS search. Fall back to primitive or substitution_key immediately. |
+| `substitution` | DS has no direct match — use `substitution_key` as the component. No DS search needed. |
+| `convention` | Apply the recorded DS usage rule during Phase 3 resolution. |
+
+**Key deduplication rule:** Before writing any pattern_key in Phase 7, check the patterns loaded here. If a key already exists that covers the same pattern (same taxonomy category, same semantic role), use the existing key. Do not create a synonym.
 
 **If the knowledge file is empty or does not exist:** proceed normally. The file will be created at Phase 7.
 
@@ -209,10 +305,15 @@ Rules:
 **Objective:** Map every node to the design system without breaking structure.
 
 Resolution order per node:
+0. **Explicit rule check** — before any DS search, check explicit_rules from Phase -1:
+   - If a `substitution` rule exists for this pattern_key → use `substitution_key` directly. No DS search.
+   - If a `gap` rule exists with seen_count ≥ 3 → skip DS search. Go to step 3 (primitive) or use the `substitution_key` if one is recorded.
+   - If a `gap` rule exists with seen_count < 3 → run DS search anyway (DS may have been updated since the gap was first recorded). If DS search finds a component, the gap is resolved — write the mapping in Phase 7. If it still finds nothing, increment the gap's seen_count in Phase 7.
+   - If a `convention` rule exists for this pattern_key → apply the convention during steps 1–2.
 1. **Exact match** — component exists, use it directly
 2. **Approximate match** — closest component with noted deviation
 3. **Primitive fallback** — no component match; use DS variables for spacing, color, and type
-4. **Component candidate** — pattern with no DS match; flag for future addition
+4. **Component candidate** — pattern with no DS match and no explicit rule yet; flag for Phase 7 gap recording
 
 Layout archetype rule:
 - Before selecting any navigation or shell component, detect the page layout type from the HTML source:
@@ -613,10 +714,12 @@ Output as HTML file (not terminal text). Include:
 - Conflicts resolved (where source style had no clean DS match)
 
 **3. Component candidates**
-- Repeated patterns with no DS match — describe the pattern and its frequency
+- Patterns resolved as "component candidate" this run — describe the pattern and its frequency
 
-**4. Design system gaps**
+**4. Design system gaps and recommendations**
 - Values or patterns in the source that had no token or component equivalent
+- For each gap resolved via an explicit substitution rule: name the substitution used and why
+- **DS enhancement recommendations** (mandatory when present): any gap with seen_count ≥ 3 in the knowledge file must be called out explicitly as a recommendation to add to the DS. Format: pattern name, how many times seen across runs, what substitution is currently being used. These are the highest-signal signals Mimetic can produce about the user's DS — never omit them.
 
 **5. Performance insights**
 - Report total bridge calls
@@ -674,7 +777,13 @@ Call `mimetic_knowledge_write` with the updates array. This is not optional — 
 
 **What to write:**
 
-For every pattern resolved in Phase 3, submit one update entry:
+This call takes two independent arrays: `updates` (pattern→component mappings) and `rule_updates` (DS gaps, substitutions, conventions). Always submit both in a single call.
+
+---
+
+**`updates` — pattern→component mappings**
+
+For every pattern resolved via exact or approximate match in Phase 3:
 
 ```json
 {
@@ -685,23 +794,70 @@ For every pattern resolved in Phase 3, submit one update entry:
 }
 ```
 
-- `pattern_key`: semantic label you assigned to the HTML pattern (e.g. `"table/data-row"`, `"filter-bar/chip"`, `"card/feature"`)
+- `pattern_key`: must be a key from the Pattern Key Taxonomy — check Phase -1 loaded keys first, use an existing key if it covers this pattern
 - `component_key`: the componentKey hash used in Phase 4
 - `component_name`: human-readable name (for inspection)
-- `increment_use`: always `true` — this increments use_count, enabling automatic promotion to VERIFIED at 3 uses
+- `increment_use`: always `true` — increments use_count toward VERIFIED promotion at 3 uses
 
-**For primitive fallbacks (no DS component used):** do not write a knowledge entry. Primitives are not mappings.
+**For primitive fallbacks:** do not write a `updates` entry. Primitives are not mappings.
 
-**For user corrections:** if the user tells you a mapping was wrong during this session, submit the same entry with `increment_correction: true` instead of `increment_use: true`. This demotes VERIFIED → CANDIDATE and signals that the mapping needs re-evaluation.
+**For user corrections:** submit the entry with `increment_correction: true` instead of `increment_use: true`. This demotes VERIFIED → CANDIDATE.
 
-**Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see this reflected in the response (`verified` count increases). On the next run, VERIFIED entries skip DS lookup entirely.
+---
+
+**`rule_updates` — DS gaps, substitutions, and conventions**
+
+For every pattern that resolved to "component candidate" (step 4 in Phase 3 — no DS component found):
+
+```json
+{
+  "rule_key": "label/chip",
+  "type": "gap",
+  "reason": "No chip component found in DS after search",
+  "increment_seen": true
+}
+```
+
+If you used a substitution (used a different DS component to fill the gap):
+
+```json
+{
+  "rule_key": "label/chip",
+  "type": "substitution",
+  "substitution_key": "abc123...",
+  "substitution_name": "Badge",
+  "reason": "No chip in DS — Badge used as nearest semantic equivalent",
+  "increment_seen": true
+}
+```
+
+If a substitution rule already existed from Phase -1 and you applied it this run, still submit it with `increment_seen: true` — this confirms the substitution is still accurate and increments its recurrence count.
+
+For DS usage patterns you discovered this run that should be remembered:
+
+```json
+{
+  "rule_key": "form/button-primary",
+  "type": "convention",
+  "notes": "This DS uses 'filled' variant for primary actions, never 'solid'"
+}
+```
+
+Conventions do not use `increment_seen`. They are written once and updated if the convention changes.
+
+---
+
+**Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see `verified` count increase in the response. On the next run, VERIFIED entries skip DS lookup entirely.
+
+**Gap recommendations surface automatically:** the response includes a `recommendations` array listing any gaps with seen_count ≥ 3. Report these in Phase 6 — they represent the clearest signal that the user's DS is missing something.
 
 **After writing, report in the Phase 6 knowledge section:**
-- Total patterns in knowledge file
-- How many are VERIFIED / CANDIDATE
+- Total patterns in knowledge file, how many VERIFIED / CANDIDATE
 - Which entries were promoted to VERIFIED this run
-- DS lookup calls saved vs a fresh run (VERIFIED entries × calls avoided)
-- Any patterns that remain unresolved (no component found, no entry written)
+- DS lookup calls saved (VERIFIED entries × calls avoided)
+- Active substitution rules applied this run
+- Any new gap rules created this run
+- DS enhancement recommendations (from response `recommendations` array) — mandatory to surface
 
 ---
 
