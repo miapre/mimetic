@@ -8,6 +8,8 @@ build_*.py
 patch_*.py
 builds/
 research/
+internal/
 docs/*-run*.html
 docs/*-audit.html
 docs/*-report*.html
+docs/session-audit-*.html
