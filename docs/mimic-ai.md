@@ -158,6 +158,8 @@ Every pattern resolved in Phase 3 and recorded in Phase 7 must use a key from th
 
 **Objective:** Load accumulated DS knowledge before any parsing or DS inspection begins.
 
+**Knowledge content rule:** The knowledge system stores DS component mappings, successful resolutions, failure cases, and user corrections. It must NEVER store UI pattern names as mapping shortcuts. A stored entry maps an HTML structural pattern to a DS component key — not a UI convention name (like "card" or "hero") to a build recipe. The system must work with any design system, not just ones that follow specific UI naming conventions.
+
 Call `mimic_ai_knowledge_read` with no arguments. Record the full result in working memory — both `patterns` and `explicit_rules`.
 
 **How to use the returned patterns:**
@@ -511,17 +513,16 @@ Produce a complete list of every UI element in the HTML. Not sections — indivi
 
 | Category | What to list |
 |---|---|
-| **Shell** | Sidebar/sidenav, top bar, header, footer |
-| **Cards** | Card containers, card headers, card footers |
-| **Lists** | Checklist items, recommendation items, log entries, table rows |
-| **Inputs** | Checkboxes, radio buttons, toggles, selects, search fields |
-| **Actions** | Every button, link, CTA — with its hierarchy (primary/secondary/link/ghost) |
-| **Indicators** | Progress bars, badges, status dots, chips, tags |
-| **Navigation** | Tabs, breadcrumbs, pagination, steppers |
-| **Content** | Code blocks, text sections, hero banners, metric cards |
+| **Shell structures** | Page-level containers, navigation areas, side panels, fixed headers/footers |
+| **Grouped containers** | Repeated or structured content blocks with sub-elements |
+| **Repeated items** | List entries, grid items, table rows — any repeating pattern |
+| **Interactive elements** | Buttons, links, CTAs, toggles, selects, search fields — with their hierarchy |
+| **Status/label elements** | Status indicators, count labels, category markers, inline metadata |
+| **Navigation structures** | Tab groups, breadcrumbs, pagination, step indicators |
+| **Content blocks** | Text sections, promotional banners, code blocks, metric displays |
 | **Icons** | Every icon used — list by semantic role (edit, arrow, chevron, etc.) |
-| **Affordances** | Chevrons, close buttons, expand/collapse toggles, collapse sidebar buttons |
-| **Footers** | Card footers, section footers, scenario tags, meta rows |
+| **Affordances** | Collapse/expand controls, dismiss buttons, toggle controls |
+| **Sub-elements** | Footer rows inside containers, metadata rows, secondary text |
 | **Secondary controls** | Sort buttons, filter toggles, view switches, keyboard shortcuts |
 
 **Mandatory completeness scan (runs after initial inventory):**
@@ -530,12 +531,12 @@ After producing the initial inventory, scan the HTML a second time with a focuse
 
 | Scan target | What to look for | Why it's missed |
 |---|---|---|
-| **Icons inside buttons/inputs** | SVG icons inside `<button>`, search icons in inputs, chevrons in dropdowns | Treated as part of the parent, not inventoried separately |
-| **Card sub-elements** | Footer rows, meta tags, scenario labels, duration badges, path hints | Card body is inventoried but footer/meta is skipped |
-| **Collapse/expand controls** | Sidebar collapse buttons, accordion toggles, modal close buttons | Small affordances overlooked in section-level scan |
-| **Inline badges per variant** | Type badges with per-instance colors, level badges, status indicators | Counted as "badges" generically without noting color differentiation |
-| **Secondary text** | Timestamps, counts ("9 items"), keyboard shortcuts (⌘K), durations | Treated as decoration, not inventoried |
-| **Footer/action rows** | "See more" links, "Browse the learning hub" footers, pagination | Below the fold, missed during top-down scan |
+| **Icons inside interactive elements** | SVG icons inside buttons, search icons in inputs, chevrons in dropdowns | Treated as part of the parent, not inventoried separately |
+| **Sub-elements of grouped containers** | Footer rows, metadata, secondary labels, reference links | Container body is inventoried but sub-elements are skipped |
+| **Small interactive controls** | Collapse buttons, accordion toggles, dismiss buttons | Small affordances overlooked in section-level scan |
+| **Per-instance differentiation** | Same element type with different colors, sizes, or states across instances | Counted generically without noting per-instance variation |
+| **Secondary text** | Timestamps, counts, keyboard shortcuts, durations | Treated as decoration, not inventoried |
+| **Action rows at boundaries** | Links, CTAs, or navigation elements at the bottom of sections | Below the fold, missed during top-down scan |
 
 **Inventory completeness check (mandatory gate before Step 2):**
 
@@ -547,19 +548,11 @@ After the completeness scan, compare the inventory against the HTML:
 
 This is a rough sanity check, not an exact match — but a significant gap (e.g., HTML has 15 buttons and inventory lists 8) signals missed elements.
 
-**No partial component rule:**
+**No partial construction rule:**
 
-When a composite element is identified (card, list item, sidebar panel, modal), ALL its visible parts must be inventoried:
+When a grouped container is identified in the HTML — any element that contains multiple sub-elements — ALL its visible parts must be inventoried. Do not inventory the container without its children.
 
-| If you identify... | You MUST also include... |
-|---|---|
-| A card | Header, body, footer, all badges, all meta text, all icons |
-| A list item | Icon/avatar, title, subtitle, action button/arrow, badge, timestamp |
-| A sidebar panel | Header, tabs, content area, collapse button, footer |
-| A modal | Close button, header image, meta badges, title, description, CTA |
-| A nav bar | Logo, all tabs, search, avatar, all icons |
-
-Partial construction — building a card body but skipping its footer — is a construction failure equivalent to missing the entire card. If the HTML has it, the inventory must have it, and the build must have it.
+The rule is simple: **if the HTML has it, the inventory must have it, and the build must have it.** Partial construction — building a container's main content but skipping its footer, metadata, or secondary elements — is a construction failure equivalent to missing the entire container.
 
 An element missing from the inventory will be missing from the build. The inventory IS the build plan — there is no second pass to catch omissions.
 
@@ -567,7 +560,9 @@ An element missing from the inventory will be missing from the build. The invent
 
 ### Step 2 — Exhaustive DS component discovery (mandatory, not skippable)
 
-**Search for ALL common DS component patterns** regardless of whether you think they exist. This is not optional. Never skip a search due to assumption — if a pattern is in the list, it MUST be searched.
+**Search for DS components that could match the elements detected in Step 1.** This is not optional. Never skip a search due to assumption — if the HTML contains an element that could map to a DS component, it MUST be searched.
+
+**Search strategy:** Derive search terms from the HTML content, not from a fixed list of UI pattern names. For each structural pattern detected in the HTML, formulate a search query based on the element's role and structure. The search list below provides common starting terms, but the system should add terms based on what the HTML actually contains.
 
 **Query discipline — exact-name-first rule:**
 
@@ -631,11 +626,23 @@ For each rule:
 
 Rules with `confidence ≥ 0.8` are applied without flagging. Rules with `confidence < 0.8` are applied but noted in the build report for user awareness.
 
+**Accuracy-driven rule types (generated from post-build analysis):**
+
+In addition to DS resolution rules (skip, direct_fallback, import_block, pattern_optimization), the rules file includes accuracy-driven rules generated by comparing HTML input against Figma output:
+
+| Rule type | When generated | How applied |
+|---|---|---|
+| `structural_fix` | HTML element exists but was missing from Figma output | **During build:** ensure the element is always created. Applied at construction time — the builder checks structural_fix rules and adds missing elements. |
+| `content_enforcement` | Text or content in Figma didn't match HTML | **During build:** enforce exact text from HTML source. Applied when creating text nodes — the builder checks content rules and uses the HTML value, not a guess. |
+| `ambiguity_resolution` | Multiple valid approaches existed, none was chosen | **Before build:** resolve the ambiguity to a specific approach. Applied during mapping — the builder picks the defined approach instead of leaving it unresolved. |
+
+These rules have `recheck_threshold: 99` — they are effectively permanent unless manually removed. They represent learned structural and content requirements, not DS availability issues that might change.
+
 **Exhaustive search list with conditional synonyms:**
 
 | Primary search term | Synonym (searched ONLY if primary returns nothing) |
 |---|---|
-| `Card header` | `Card title` |
+| `[DS component name]` | `[Alternative name]` — add synonyms as discovered |
 | `Checkbox group item` | `Check item` |
 | `Progress bar` | `Progress indicator` |
 | `Badge` | `Tag`, `Chip`, `Pill` |
@@ -719,7 +726,7 @@ Before using a VERIFIED learning from Phase -1, check it against the live DS dat
 | Decision type | What to check | How (zero extra reads) |
 |---|---|---|
 | Theme rule (e.g., "use Dark mode") | Does the DS Color modes collection have the claimed mode? | Check the collection modes list from Step 4 variable pre-collection |
-| Component rule (e.g., "use Card header for card titles") | Does the component still exist in the Step 2 search cache? | Look up the component key in cached results |
+| Component rule (e.g., "use DS component X for pattern Y") | Does the component still exist in the Step 2 search cache? | Look up the component key in cached results |
 | Variant rule (e.g., "use Checkbox Action for items with badges") | Does the variant still exist in the Step 2 property inspection? | Check the cached variant axes for the component |
 
 **Revalidation outcomes:**
@@ -839,7 +846,7 @@ Element inventory — [screen name]
 HTML element          | DS component              | Variant              | Properties to set
 ----------------------|---------------------------|----------------------|-------------------
 Sidebar               | Sidebar navigation        | True/Desktop         | —
-Card header (Getting) | Card header               | Actions=False        | Title="Getting started"
+Section heading       | [DS component if found]   | [Variant]            | Title="Getting started"
 Checklist item 1      | Checkbox group item       | Checkbox Action      | Badge=Success, text override
 Checklist items 2-4   | Checkbox group item       | Checkbox             | No badge, no action
 Rec items             | Checkbox group item       | Icon Action           | Badge hidden, icon swap
@@ -894,7 +901,7 @@ Before construction:
 ### Step 5 — Reference artboard inspection (when available)
 
 If the target file or page contains existing artboards:
-- Inspect their card structure (padding, gap, radius, Card header usage)
+- Inspect their container structure (padding, gap, radius, component usage patterns)
 - Adopt the same patterns for the new build
 - This ensures consistency across screens in the same file
 
