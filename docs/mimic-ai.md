@@ -688,7 +688,7 @@ Import one instance and record the full property map. This is not optional — i
 5. Store the property map in session context for use in Step 3
 ```
 
-**Cost:** 1 `use_figma` call per component set. **Benefit:** eliminates all property-related iteration (button icon toggles, badge visibility, variant confusion). In the Premium Dashboard session, this would have prevented ~15 iterations.
+**Cost:** 1 `use_figma` call per component set. **Benefit:** eliminates all property-related iteration (button icon toggles, badge visibility, variant confusion).
 
 **Instance child modification rule:** If property inspection reveals that a variant includes a feature as a non-toggleable internal child (e.g., Badge inside Checkbox Action that cannot be hidden via boolean property), document this as a limitation. In Step 3, prefer a variant WITHOUT that feature rather than planning to hide it post-creation. Hiding internal instance children is unreliable in Figma.
 
@@ -770,8 +770,8 @@ When a rule is promoted to project or DS scope, emit a brief informational messa
 
 Format:
 ```
-ℹ️ Learning promoted to DS scope: "Dark mode" now applies to all files using LayerLens Theme.
-   Why: You selected Dark mode in 3 files (Education Portal, Trace Detail, Premium Dashboard) with no conflicts.
+ℹ️ Learning promoted to DS scope: "Dark mode" now applies to all files using your DS library.
+   Why: You selected Dark mode in 3 files with no conflicts.
    Future behavior: New files using this DS will auto-apply Dark mode without asking.
    Override: Tell me to use a different mode in any file and I'll store a file-level override.
 ```
@@ -811,7 +811,7 @@ If a DS component was found in Step 2 (exhaustive search) OR is confirmed used i
 | Component NOT found in Step 2 (searched, zero results) | Primitive is allowed. Document as DS gap. |
 | Component not in search list and not in reference | Search first (add to list). Then decide. |
 
-Example from Education Portal: DS Tabs (Underline) was found in search AND confirmed in reference artboard. Building nav tabs as primitive FRAME + TEXT was a mapping enforcement failure.
+Example: DS Tabs (Underline) was found in search AND confirmed in a reference artboard. Building nav tabs as primitive FRAME + TEXT was a mapping enforcement failure.
 
 **Rule 2 — No component may remain in default state:**
 After inserting ANY DS component instance, every property that conflicts with the HTML must be explicitly set. Component defaults that leak into the build are construction failures.
@@ -821,7 +821,7 @@ Mandatory post-insertion checklist:
 - [ ] Hint text: hidden if not present in HTML
 - [ ] Placeholder text: set to match HTML exactly
 - [ ] Badge/chip color: set to match HTML element's semantic color (not left as default Brand/Gray)
-- [ ] Icon properties: leading/trailing toggled per HTML (learned from Premium Dashboard)
+- [ ] Icon properties: leading/trailing toggled per HTML
 - [ ] Divider: shown/hidden per context
 - [ ] Actions: shown/hidden per context
 - [ ] Text content: all default DS text overridden with actual content
@@ -861,7 +861,7 @@ For each element, determine what features it needs and select the variant that M
 
 **The clean-variant rule:** If a desired element does NOT need a feature, prefer a variant WITHOUT that feature. Do NOT select a richer variant and hide internal children — this is unreliable in Figma and causes iteration loops.
 
-**Example from Premium Dashboard:** Checklist had 4 items. Item 1 needed badge + arrow → Checkbox Action. Items 2-4 needed only text + checkbox → plain Checkbox. Using Checkbox Action for all 4 and trying to hide badges on items 2-4 caused 5+ iterations of failed hiding attempts. Using different variants solved it in 1 step.
+**Example:** A checklist had 4 items. Item 1 needed badge + arrow → Checkbox Action. Items 2-4 needed only text + checkbox → plain Checkbox. Using Checkbox Action for all 4 and trying to hide badges on items 2-4 caused 5+ iterations of failed hiding attempts. Using different variants solved it in 1 step.
 
 **When no clean variant exists:** If every available variant includes an unwanted feature (e.g., all Icon variants include a badge), document the limitation in the mapping table and accept the visual compromise. Do not iterate trying to hide instance children — the cost exceeds the benefit.
 
@@ -972,7 +972,7 @@ When the HTML uses deterministic color assignment (hash functions, CSS class map
 - Match to the closest DS variant by hue
 - Do NOT guess the variant from the semantic name of the element
 
-Example: `compliance` hashes to palette index 3 (pink) via `getTagColor()` — selecting Purple by semantic guess was wrong.
+Example: a tag label hashes to a specific palette index via a deterministic function — selecting a color variant by semantic guess instead of computing the hash was wrong.
 
 When the HTML has level/status colors mapped to bars, dots, or indicators:
 - Read the badge/chip's actual DS fill variable
@@ -1907,7 +1907,7 @@ After Phase 2.5 Step 2 inspects each component set's variants and properties, pe
 
 **When to invalidate:** If `importComponentSetByKeyAsync` throws or returns a different variant structure than cached, re-inspect and update the cache. Component sets can change when the DS library is updated.
 
-**Benefit:** Eliminates repeated property discovery. In the Premium Dashboard session, Button properties (Icon leading/trailing), Checkbox group item variants (7 types), and Card header properties (Divider, Actions, Badge, Dropdown) were discovered through trial and error across ~15 iterations. With cached maps, all properties are known before the first instance is created.
+**Benefit:** Eliminates repeated property discovery. Without cached maps, component properties (icon toggles, variant types, badge visibility) are discovered through trial and error across many iterations. With cached maps, all properties are known before the first instance is created.
 
 **Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see `verified` count increase in the response. On the next run, VERIFIED entries skip DS lookup entirely.
 
