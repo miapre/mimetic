@@ -31,6 +31,46 @@ When there is a conflict between two priorities, the higher one wins. Visual acc
 
 ---
 
+## Text content integrity (global, VERIFIED — applies to every build)
+
+**HARD RULE: Never modify, truncate, or abbreviate text content. Always insert the FULL original text.**
+
+This rule is classified as VERIFIED (global, not DS-specific) and is applied across all builds automatically.
+
+### What is forbidden
+
+- Hardcoding "…" or "..." in any text string
+- Shortening text to fit a perceived container width
+- Paraphrasing or abbreviating source text for visual convenience
+- Inserting placeholder text when the actual content is known
+
+### What is required
+
+- Every text node receives the COMPLETE, UNMODIFIED text from the HTML source
+- If the text may overflow its container, set `textTruncation = 'ENDING'` and/or `maxLines` on the text node — Figma handles the visual truncation automatically
+- The full text must be recoverable by selecting the node in Figma — even if it displays truncated on canvas
+
+### Text sizing rules
+
+| Semantic role | Sizing | Rationale |
+|---|---|---|
+| Labels (field names, section headers, column headers) | `layoutSizingHorizontal = 'HUG'` | Labels define their own width from content |
+| Content / previews (descriptions, messages, previews) | `layoutSizingHorizontal = 'FILL'` | Content fills available space; truncation is visual, not structural |
+| Values (metrics, IDs, timestamps) | `layoutSizingHorizontal = 'HUG'` | Values are typically short and should not stretch |
+| Action text (buttons, links) | `layoutSizingHorizontal = 'HUG'` | Actions size to their label |
+
+### Enforcement
+
+- This rule applies at Phase 4 construction time — not as a post-build fix
+- Any text node containing "…" or "..." that was added by Claude (not present in the HTML source) is a construction failure
+- The Phase 4 post-chunk validation sweep (Check 5) detects trailing ellipsis as a NON-BLOCKING warning with heuristic classification:
+  - **HIGH confidence** (mid-sentence cut, long text ending abruptly): strongly indicates hardcoded truncation — verify and fix
+  - **MEDIUM confidence** (ellipsis at end, but not clearly mid-sentence): check HTML source before acting
+  - **No warning** (short strings, known UI patterns like "Loading…", "See more…"): legitimate content, not flagged
+- Check 5 never blocks construction. The core prevention mechanism is the construction-time rule above — Check 5 is the diagnostic backstop
+
+---
+
 ## Pattern key taxonomy (canonical vocabulary — mandatory)
 
 Every pattern resolved in Phase 3 and recorded in Phase 7 must use a key from this list. Do not invent new keys. If a pattern fits no key exactly, use the closest category prefix and add a qualifier (e.g. `card/pricing`). Before writing any new key in Phase 7, check the existing keys loaded in Phase -1 — if a similar key already exists, use it instead.
@@ -158,6 +198,17 @@ This causes Phase 3 step 0 to hit the resolved branch and run a full DS search o
 
 **If the knowledge file is empty or does not exist:** proceed normally. The file will be created at Phase 7.
 
+**Learning applied before building (mandatory):**
+
+All VERIFIED and CANDIDATE learnings from Phase -1 must be applied BEFORE construction, not after corrections. This includes:
+- Known component mappings → use directly, skip DS search
+- Known DS constraints (e.g., correct library, variable naming) → enforce during resolution
+- Known alignment patterns (e.g., CENTER on mixed-height HORIZONTAL frames) → apply at construction time
+- Known text handling rules → enforce full text content at construction time
+- Known color mappings (level→badge variant→bar color) → apply during color resolution
+
+A VERIFIED learning that is ignored during construction and then "rediscovered" via user correction is a protocol failure — the learning system exists precisely to prevent this.
+
 **Never:** modify knowledge during Phase -1. This phase is read-only.
 
 ---
@@ -231,51 +282,90 @@ Use when: Phase -1 VERIFIED coverage is complete, prior runs have populated the 
 
 ---
 
-### Read budget (Instant mode — hard enforced)
+### Adaptive read control (confidence-driven — no hard caps)
 
-```
-max_reads_first_run       = 5
-max_screenshots_per_build = 1   (applies in all modes)
-```
+Read decisions are driven by confidence, novelty, and iteration depth — not by fixed slot counts. The goal is zero waste, not zero reads.
 
-| Slot | Tool | Purpose | Skip condition |
-|---|---|---|---|
-| 1 | `get_variable_defs` | Collect V dict | Skip if V dict restored from Phase 7 variable cache |
-| 2 | `search_design_system` | Targeted query for 1 new, unverified pattern | Skip if all patterns are VERIFIED in Phase -1 |
-| 3 | `get_screenshot` | Final verification — build complete | Optional; skip if post-chunk sweeps confirmed compliance |
-| 4–5 | Any | Contingency — unclassifiable error only | Use only if error classification table (below) gives no match |
+**Confidence levels:**
+
+| Level | Condition | Allowed reads |
+|---|---|---|
+| High | VERIFIED or CANDIDATE mapping exists; repeated pattern; variable cache warm | **0 reads** — reuse directly |
+| Medium | Partial ambiguity; new variant of known pattern; single unknown property | **1 targeted read** — either 1 DS search OR 1 screenshot, not both |
+| Low | New pattern; no prior mapping; unclear structure | **Exploration allowed** — DS search + optional screenshot if visual ambiguity persists |
+
+Confidence is derived from: Phase -1 knowledge state, structural similarity to known patterns, and repeated usage within the current session.
+
+**Novelty detection:**
+
+| Pattern state | Action |
+|---|---|
+| New (not in knowledge, no alias match) | Allow DS exploration (search + optional screenshot) |
+| Known (VERIFIED, CANDIDATE, or alias match) | Reuse previous results — zero reads |
+| Repeated failure on same pattern | Do NOT re-read — change strategy instead (different search term, fallback to primitive, or escalate to user) |
+
+**Iteration-aware behavior:**
+
+| Phase | Behavior |
+|---|---|
+| Early iterations (first build of a screen) | Allow more reads — this is exploration |
+| Mid iterations (refinements after first build) | Reduce reads — reuse session cache, only read for genuinely new issues |
+| Late iterations (polish, alignment, spacing fixes) | Prioritize reuse — no reads unless ambiguity is unresolvable by reasoning |
+
+Repeated operations on the same node must not trigger repeated reads. If a node was inspected or a DS search was run for a pattern, the result persists for the entire session.
+
+**Variable reads:**
+- Skip `get_variable_defs` entirely if V dict is restored from Phase 7 variable cache
+- Variable IDs are stable across sessions — treat them as permanent unless an import error proves otherwise
+
+**Screenshot reads:**
+- Use screenshots only when visual ambiguity cannot be resolved through reasoning
+- Avoid screenshots when the same area was already inspected or structure is already known
+- Final verification screenshot: allowed when build is complete and visual confirmation adds value
+- Mid-build screenshots: allowed only when visual ambiguity blocks the next construction step and no other diagnostic resolves it
+- Repeated screenshots of the same region: forbidden — reason from the prior screenshot instead
 
 ---
 
 ### Disallowed reads (protocol violations — not guidelines)
 
-The following are forbidden in Instant mode. Any violation must be documented in the Phase 6 report:
+The following are forbidden in all modes. Any violation must be documented in the Phase 6 report:
 
 - Full DS scans: `search_design_system` with no specific pattern query, or a generic term (e.g., "component", "all")
-- Repeated DS searches for the same pattern within a single run
+- Repeated DS searches for the same pattern within a single run (use session cache)
 - Read-based retry loops: issuing another read tool call after a failed read of the same type
-- More than 1 screenshot per build
-- Calling `get_variable_defs` when V dict is already populated from Phase 7 cache
+- Calling `get_variable_defs` when V dict is already populated from Phase 7 cache or session memory
+- Repeated screenshots of the same artboard region without a new diagnostic question
 
 ---
 
-### Single-pass read strategy (enforced globally)
+### Read strategy (reasoning-first)
 
-All reads must complete **before** the first `use_figma` construction call. The session structure must be:
-
-```
-[Read phase] → [Build phase] → [Optional single final screenshot]
-```
-
-Interleaving reads and writes is a protocol violation:
+Prefer this session structure:
 
 ```
-read → write → read → write  ← FORBIDDEN
+[Resolve knowns] → [Targeted reads for unknowns] → [Build] → [Optional verification screenshot]
 ```
 
-The read phase ends the moment the first `use_figma` call executes. After that point, no `get_design_context`, `search_design_system`, `get_variable_defs`, or `get_metadata` calls are permitted until all construction is complete.
+**Reads during iteration (refinement cycles):**
 
-**Single exception:** if a `use_figma` call returns an error whose cause cannot be determined from the error message alone, 1 targeted read may be issued from the contingency slots (4–5). Document it in Phase 6.
+During user-driven iteration (fix → feedback → fix), additional reads are permitted under these conditions:
+- The read targets a genuinely new question not answerable from session memory
+- The same region/pattern was not already read this session
+- Reasoning alone cannot resolve the ambiguity
+
+Iteration must never be blocked by read optimization. If a read is needed to continue refining, take it — but do not repeat reads that were already taken.
+
+**Reasoning-first debugging:**
+
+Replace the pattern `inspect → fix → inspect → fix` with `reason → fix → optional single verification`.
+
+Before issuing any diagnostic read:
+1. Check if the error is classifiable from the error message (see error classification table below)
+2. Check if the affected node's structure is already known from prior reads this session
+3. Check if the fix can be derived from the known state
+
+Only issue a read if ambiguity remains unresolved after steps 1–3.
 
 ---
 
@@ -407,18 +497,434 @@ Chart detection rule:
 
 ---
 
-## Phase 2.5 — Design system inspection
+## Phase 2.5 — Pre-build intelligence (mandatory — runs before ANY construction)
 
-**Objective:** Discover actual variable paths, naming conventions, component keys, and text style IDs before mapping.
+**Objective:** Understand the screen, discover ALL available DS components, and make every mapping decision BEFORE writing a single frame to Figma. This phase replaces the previous "inspect then build" approach with "understand completely, then build once correctly."
 
-Rules:
+**Core principle:** Use components first. Fall back to primitives only when the DS genuinely has no component for the pattern. Never build a primitive when a DS component exists — this is a construction failure, not a style preference.
+
+---
+
+### Step 1 — UI element inventory (from Phase 1 + Phase 2 output)
+
+Produce a complete list of every UI element in the HTML. Not sections — individual elements:
+
+| Category | What to list |
+|---|---|
+| **Shell** | Sidebar/sidenav, top bar, header, footer |
+| **Cards** | Card containers, card headers, card footers |
+| **Lists** | Checklist items, recommendation items, log entries, table rows |
+| **Inputs** | Checkboxes, radio buttons, toggles, selects, search fields |
+| **Actions** | Every button, link, CTA — with its hierarchy (primary/secondary/link/ghost) |
+| **Indicators** | Progress bars, badges, status dots, chips, tags |
+| **Navigation** | Tabs, breadcrumbs, pagination, steppers |
+| **Content** | Code blocks, text sections, hero banners, metric cards |
+| **Icons** | Every icon used — list by semantic role (edit, arrow, chevron, etc.) |
+| **Affordances** | Chevrons, close buttons, expand/collapse toggles, collapse sidebar buttons |
+| **Footers** | Card footers, section footers, scenario tags, meta rows |
+| **Secondary controls** | Sort buttons, filter toggles, view switches, keyboard shortcuts |
+
+**Mandatory completeness scan (runs after initial inventory):**
+
+After producing the initial inventory, scan the HTML a second time with a focused checklist. This scan targets elements that are consistently missed:
+
+| Scan target | What to look for | Why it's missed |
+|---|---|---|
+| **Icons inside buttons/inputs** | SVG icons inside `<button>`, search icons in inputs, chevrons in dropdowns | Treated as part of the parent, not inventoried separately |
+| **Card sub-elements** | Footer rows, meta tags, scenario labels, duration badges, path hints | Card body is inventoried but footer/meta is skipped |
+| **Collapse/expand controls** | Sidebar collapse buttons, accordion toggles, modal close buttons | Small affordances overlooked in section-level scan |
+| **Inline badges per variant** | Type badges with per-instance colors, level badges, status indicators | Counted as "badges" generically without noting color differentiation |
+| **Secondary text** | Timestamps, counts ("9 items"), keyboard shortcuts (⌘K), durations | Treated as decoration, not inventoried |
+| **Footer/action rows** | "See more" links, "Browse the learning hub" footers, pagination | Below the fold, missed during top-down scan |
+
+**Inventory completeness check (mandatory gate before Step 2):**
+
+After the completeness scan, compare the inventory against the HTML:
+
+1. Count the total interactive elements in the HTML (buttons, links, inputs, toggles)
+2. Count the total interactive elements in the inventory
+3. If inventory count < HTML count → inventory is incomplete. Fix before proceeding.
+
+This is a rough sanity check, not an exact match — but a significant gap (e.g., HTML has 15 buttons and inventory lists 8) signals missed elements.
+
+**No partial component rule:**
+
+When a composite element is identified (card, list item, sidebar panel, modal), ALL its visible parts must be inventoried:
+
+| If you identify... | You MUST also include... |
+|---|---|
+| A card | Header, body, footer, all badges, all meta text, all icons |
+| A list item | Icon/avatar, title, subtitle, action button/arrow, badge, timestamp |
+| A sidebar panel | Header, tabs, content area, collapse button, footer |
+| A modal | Close button, header image, meta badges, title, description, CTA |
+| A nav bar | Logo, all tabs, search, avatar, all icons |
+
+Partial construction — building a card body but skipping its footer — is a construction failure equivalent to missing the entire card. If the HTML has it, the inventory must have it, and the build must have it.
+
+An element missing from the inventory will be missing from the build. The inventory IS the build plan — there is no second pass to catch omissions.
+
+---
+
+### Step 2 — Exhaustive DS component discovery (mandatory, not skippable)
+
+**Search for ALL common DS component patterns** regardless of whether you think they exist. This is not optional. Never skip a search due to assumption — if a pattern is in the list, it MUST be searched.
+
+**Query discipline — exact-name-first rule:**
+
+For every search term, use the **exact component name only**:
+- Do NOT add qualifiers (`"Progress bar linear horizontal"` → wrong)
+- Do NOT combine concepts (`"button badge sidebar"` → wrong)
+- Do NOT add context words (`"Checkbox group item checklist"` → wrong)
+- Use the exact term as written in the table below
+
+**Pre-search alias check:** Before running any search, check Phase -1 knowledge for `search-alias/*` convention rules. If an alias exists for the current search term (e.g., `search-alias/checklist-items → Checkbox group item`), use the alias as the query instead. This captures corrections from previous sessions where a search failed and the user provided the actual component name.
+
+**Search flow per term (with resolution rules + conditional synonym expansion):**
+
+```
+For each search term:
+  0. Check RESOLUTION_RULES (internal/learning/RESOLUTION_RULES.json):
+     → If a skip/block/pattern rule exists for this element_type:
+       → Apply the rule's action directly (primitive fallback or optimized pattern)
+       → CACHE as "resolved by rule" and STOP — no DS search needed
+       → This saves 1 read per ruled element
+  1. Check Phase -1 aliases → if alias exists, use alias as query
+  2. Run exact-name search: search_design_system(term)
+  3. Filter results to enabled library ONLY (first operation on results)
+  4. If component found in enabled library → CACHE and STOP
+  5. If NOT found → check synonym table below
+     → If synonym exists → run synonym search (exact name, filtered)
+     → If synonym also not found → mark as "not in DS" and STOP
+  6. Cache final result (found or not-found) — never re-search this term
+```
+
+**Resolution rules integration (adaptive):**
+
+The `RESOLUTION_RULES.json` file in `internal/learning/` contains adaptive rules generated from previous build failures. Each rule has:
+- `condition`: what triggers it (element type + failure reason)
+- `action`: what to do instead (specific primitive pattern)
+- `confidence`: 0–1 numeric score based on frequency and consistency
+- `attempts_blocked`: how many builds this rule has prevented DS resolution
+- `recheck_threshold`: after how many blocked builds to retry DS resolution
+- `invalidation`: when to re-evaluate (DS update, new variant, user override)
+
+**Adaptive behavior per build:**
+
+```
+For each rule:
+  IF attempts_blocked < recheck_threshold:
+    → Apply rule normally (skip DS search, use fallback)
+    → Increment attempts_blocked by 1
+  
+  IF attempts_blocked ≥ recheck_threshold:
+    → Temporarily bypass rule
+    → Attempt DS resolution (run the search)
+    → IF DS now has the component → delete the rule, use DS component
+    → IF DS still doesn't have it → reset attempts_blocked to 0, continue rule
+```
+
+**Post-build rule update:** After every build, update RESOLUTION_RULES.json:
+- Increment `attempts_blocked` for each rule that was applied
+- Update `last_seen_build` to current build identifier
+- If a bypassed rule's DS search succeeds → remove the rule (DS was updated)
+- If a bypassed rule's DS search still fails → reset `attempts_blocked` to 0, increase confidence
+
+Rules with `confidence ≥ 0.8` are applied without flagging. Rules with `confidence < 0.8` are applied but noted in the build report for user awareness.
+
+**Exhaustive search list with conditional synonyms:**
+
+| Primary search term | Synonym (searched ONLY if primary returns nothing) |
+|---|---|
+| `Card header` | `Card title` |
+| `Checkbox group item` | `Check item` |
+| `Progress bar` | `Progress indicator` |
+| `Badge` | `Tag`, `Chip`, `Pill` |
+| `Button` | — |
+| `Sidebar navigation` | `Sidenav` |
+| `Page header` | — |
+| `Tabs` | `Tab bar` |
+| `Table` | — |
+| `Input` | `Text field`, `Search input` |
+| `Avatar` | — |
+| `Dropdown` | `Select`, `Menu` |
+| `Alert` | `Banner`, `Notification` |
+| `Tooltip` | — |
+| `Code snippet` | `Code block` |
+| `Divider` | `Separator` |
+| `Featured icon` | `Icon container` |
+
+**Synonym searches are conditional:** they ONLY fire when the primary exact-name search returns no results from the enabled library. If the primary search finds the component, zero synonym searches run. This means the typical cost is 18 primary searches with 0 synonym searches (best case), or 18 + a few synonyms on first cold run (worst case).
+
+**Library filter enforcement:** After EVERY `search_design_system` result — primary or synonym — immediately filter to the enabled library. This is the FIRST operation on results, before any selection or caching. Results from other libraries are discarded entirely. If nothing remains after filtering → the component is "not found in enabled library."
+
+**Learning-based aliasing (Phase 7 persistence):**
+
+When a user provides a Figma link to a component the system failed to find:
+1. Capture the failed search term and the component's actual DS name
+2. Store as a convention rule in Phase 7: `search-alias/{failed-term} → {actual-name}`
+3. On future runs, Phase -1 loads the alias → Step 2 uses it before searching → exact match on first try
+
+Example: System searched `"checklist items"` (not found). User provides link to `"Checkbox group item"`. Store: `search-alias/checklist-items → Checkbox group item`. Next run: alias resolves → search `"Checkbox group item"` → found.
+
+**Cache ALL results.** These cached results are used throughout the session — no repeated searches. Both "found" and "not found" are cached — a term that returned nothing is never re-searched in the same session.
+
+**For each component found — mandatory property inspection:**
+
+Import one instance and record the full property map. This is not optional — it runs once per component set found.
+
+```
+1. Import the component set: importComponentSetByKeyAsync(key)
+2. Create one instance from the first variant
+3. Record:
+   - Variant axes: list of {axisName: [values]} 
+     e.g., {Size: [sm, md], Type: [Checkbox, Checkbox Action, Icon simple, Icon Action], ...}
+   - Boolean properties: list of {propertyName: defaultValue}
+     e.g., {⬅️ Icon leading: false, ➡️ Icon trailing: false, Badge: true, Divider: true}
+   - Instance swap properties: list of {propertyName: slotType}
+     e.g., {🔀 Icon leading swap: INSTANCE_SWAP, 🔀 Icon trailing swap: INSTANCE_SWAP}
+   - Text node names: list of {name: defaultContent}
+     e.g., {Text: "Basic plan", Subtext: "$10/month", Supporting text: "Includes up to..."}
+4. Remove the test instance
+5. Store the property map in session context for use in Step 3
+```
+
+**Cost:** 1 `use_figma` call per component set. **Benefit:** eliminates all property-related iteration (button icon toggles, badge visibility, variant confusion). In the Premium Dashboard session, this would have prevented ~15 iterations.
+
+**Instance child modification rule:** If property inspection reveals that a variant includes a feature as a non-toggleable internal child (e.g., Badge inside Checkbox Action that cannot be hidden via boolean property), document this as a limitation. In Step 3, prefer a variant WITHOUT that feature rather than planning to hide it post-creation. Hiding internal instance children is unreliable in Figma.
+
+**For existing artboards in the file:** Before building, check if the target page has sibling artboards that already use DS components. If found, inspect them to learn:
+- Card structure (padding, gap, radius)
+- Component selection patterns
+- Variable mode settings
+
+---
+
+### Step 2.5 — Decision priority + revalidation (runs between discovery and mapping)
+
+This step applies to three key decision points: **theme resolution**, **component mapping**, and **variant selection**. It ensures decisions are based on current DS state, not stale assumptions.
+
+**Decision priority order (strict):**
+
+| Priority | Source | When to use |
+|---|---|---|
+| 1 | **Live DS state** | Always check first. The current DS capability is the ground truth. |
+| 2 | **VERIFIED learning** | Apply only if revalidated against live DS state (see below). |
+| 3 | **User input** | Ask only if priorities 1-2 produce no answer or conflict. |
+| 4 | **Fallback** | Primitive construction — only when the DS genuinely has nothing. |
+
+**Lightweight revalidation (mandatory before applying any VERIFIED rule):**
+
+Before using a VERIFIED learning from Phase -1, check it against the live DS data already collected in Step 2. This is NOT an extra read — it's a comparison against cached results.
+
+| Decision type | What to check | How (zero extra reads) |
+|---|---|---|
+| Theme rule (e.g., "use Dark mode") | Does the DS Color modes collection have the claimed mode? | Check the collection modes list from Step 4 variable pre-collection |
+| Component rule (e.g., "use Card header for card titles") | Does the component still exist in the Step 2 search cache? | Look up the component key in cached results |
+| Variant rule (e.g., "use Checkbox Action for items with badges") | Does the variant still exist in the Step 2 property inspection? | Check the cached variant axes for the component |
+
+**Revalidation outcomes:**
+
+| Outcome | Action |
+|---|---|
+| Live DS confirms stored learning | **Auto-apply.** Do NOT ask the user. No question needed. |
+| Live DS contradicts stored learning (component removed, variant renamed, mode unavailable) | **Do NOT apply.** Ask the user: "Previously we used [X], but the DS no longer has it. How should I proceed?" Update the learning with the user's answer. |
+| Live DS has new capability not in stored learning (new component, new variant, new mode) | **Flag opportunity.** Apply the new capability if it's clearly better. Otherwise ask: "The DS now has [Y] which could replace the previous approach. Should I use it?" |
+
+**Theme resolution — special rule (never auto-decide on first encounter):**
+
+Theme selection (Light mode vs Dark mode) is ALWAYS a user decision on first encounter. It is never inferred from the HTML automatically.
+
+**Rule scoping:** Each VERIFIED theme rule has a scope that determines where it applies:
+
+| Scope | Stored as | Applies to | Promotion criteria |
+|---|---|---|---|
+| **file** (default) | `theme/{fileKey}` | Only this specific Figma file | Assigned on first user answer |
+| **project** | `theme/project/{projectName}` | All files in the same Figma project | Promoted when the same theme is chosen in 2+ files of the same project with no conflicts |
+| **DS** | `theme/ds/{libraryKey}` | All files using this DS library | Promoted when the same theme is chosen in 3+ files using the same DS with no conflicts |
+
+**Scope resolution order:** When checking for an applicable theme rule, search from broadest to narrowest: DS scope → project scope → file scope. Apply the first match found. If none found → ask user.
+
+**Decision flow:**
+
+| Situation | Action |
+|---|---|
+| No VERIFIED theme rule at any scope (file, project, or DS) | **ASK the user.** State what the HTML uses and what the DS supports, then ask which mode to apply. Store answer at file scope. |
+| VERIFIED rule found at any scope AND DS still has that mode | **Auto-apply.** The user already decided (directly or via scope promotion). No question needed. |
+| VERIFIED rule found BUT DS no longer has that mode | **Ask again.** Update the rule at the same scope. |
+| Conflicting rules across scopes (e.g., file says Light, DS scope says Dark) | **Do NOT auto-apply.** Ask the user. The file-level answer overrides broader scopes for that file. |
+
+**Scope promotion (automatic, with one-time visibility signal):**
+- After a user answers a theme question for a file → stored at file scope
+- When the system detects the same answer exists for 2+ files in the same project → promote to project scope
+- When the same answer exists for 3+ files using the same DS library → promote to DS scope
+- Promotion never changes the decision — it only broadens where it auto-applies
+- If any file in the group has a DIFFERENT answer → no promotion (conflict detected)
+
+**Promotion signal (one-time, non-blocking):**
+
+When a rule is promoted to project or DS scope, emit a brief informational message at the end of the build (during Phase 7 write or Phase 8 learning summary). This message:
+- Is shown **once**, at the moment of promotion
+- Is **not repeated** on subsequent runs that use the promoted rule
+- Does **not require confirmation** — it is purely informational
+- Does **not interrupt** the build flow
+
+Format:
+```
+ℹ️ Learning promoted to DS scope: "Dark mode" now applies to all files using LayerLens Theme.
+   Why: You selected Dark mode in 3 files (Education Portal, Trace Detail, Premium Dashboard) with no conflicts.
+   Future behavior: New files using this DS will auto-apply Dark mode without asking.
+   Override: Tell me to use a different mode in any file and I'll store a file-level override.
+```
+
+This mechanism is generic — it applies to any learning promoted to DS scope, not only theme rules. Future DS-level promotions (e.g., a component mapping that becomes universal across files) use the same signal pattern.
+
+This rule overrides the general revalidation outcome for theme decisions. Component and variant decisions still follow the standard auto-apply logic when DS confirms them.
+
+**No-repeat questioning rule:** If the live DS state confirms a stored learning, the decision is automatic. The user is NEVER asked to re-confirm something the DS already validates. Questions are reserved for genuine conflicts, new capabilities, or **first-time theme decisions**.
+
+**Learning update behavior:** When the user answers a conflict question:
+- Overwrite the previous VERIFIED rule with the new decision
+- Mark as VERIFIED immediately (user-confirmed)
+- Store the context (which DS state triggered the conflict, what the user chose, why)
+- The updated rule applies for the rest of the session and persists to Phase 7
+
+**Integration with Steps 1-4:**
+- Step 1 (inventory): no change — produces element list
+- Step 2 (discovery): no change — produces cached component/variable data
+- **Step 2.5 (this step):** runs revalidation against Step 2 cache for all VERIFIED learnings from Phase -1. Produces validated decision context.
+- Step 3 (mapping): uses validated decisions from Step 2.5 instead of raw Phase -1 learnings
+- Step 4 (variables): theme decision from Step 2.5 determines which variable mode to set
+
+---
+
+### Step 3 — Element-to-component mapping (decision table)
+
+**Mapping enforcement rules (mandatory):**
+
+**Rule 1 — Found component must be used:**
+If a DS component was found in Step 2 (exhaustive search) OR is confirmed used in a reference artboard on the same page, primitive fallback is NOT allowed for that pattern. The component MUST be used.
+
+| Situation | Action |
+|---|---|
+| Component found in Step 2 cache | Use it. Primitive is a construction failure. |
+| Component confirmed in reference artboard | Use it. Primitive is a construction failure. |
+| Component NOT found in Step 2 (searched, zero results) | Primitive is allowed. Document as DS gap. |
+| Component not in search list and not in reference | Search first (add to list). Then decide. |
+
+Example from Education Portal: DS Tabs (Underline) was found in search AND confirmed in reference artboard. Building nav tabs as primitive FRAME + TEXT was a mapping enforcement failure.
+
+**Rule 2 — No component may remain in default state:**
+After inserting ANY DS component instance, every property that conflicts with the HTML must be explicitly set. Component defaults that leak into the build are construction failures.
+
+Mandatory post-insertion checklist:
+- [ ] Labels: hidden if not present in HTML (e.g., Input field "Email *" label)
+- [ ] Hint text: hidden if not present in HTML
+- [ ] Placeholder text: set to match HTML exactly
+- [ ] Badge/chip color: set to match HTML element's semantic color (not left as default Brand/Gray)
+- [ ] Icon properties: leading/trailing toggled per HTML (learned from Premium Dashboard)
+- [ ] Divider: shown/hidden per context
+- [ ] Actions: shown/hidden per context
+- [ ] Text content: all default DS text overridden with actual content
+
+If a component has visible default text (e.g., "Basic plan", "$10/month", "This is a hint text") after insertion and these don't match the HTML, it is not configured. Fix before proceeding to the next element.
+
+**Rule 3 — Per-instance color differentiation:**
+When the HTML uses the same component type with different colors across instances (e.g., 6 type badges with 6 different colors), each instance must use the correct DS color variant. Using the same variant for all instances is a mapping failure.
+
+For every element in the inventory, produce a mapping decision:
+
+```
+Element inventory — [screen name]
+──────────────────────────────────────────────────
+HTML element          | DS component              | Variant              | Properties to set
+----------------------|---------------------------|----------------------|-------------------
+Sidebar               | Sidebar navigation        | True/Desktop         | —
+Card header (Getting) | Card header               | Actions=False        | Title="Getting started"
+Checklist item 1      | Checkbox group item       | Checkbox Action      | Badge=Success, text override
+Checklist items 2-4   | Checkbox group item       | Checkbox             | No badge, no action
+Rec items             | Checkbox group item       | Icon Action           | Badge hidden, icon swap
+Progress bar          | Progress bar              | Default               | Label="0 / 4"
+Hero primary button   | Button                    | sm/Primary/Default    | Leading=off, trailing=off
+"See more" link       | Button                    | sm/Link color         | Trailing arrow=on
+```
+
+**Variant selection logic — clean-variant rule (mandatory):**
+
+For each element, determine what features it needs and select the variant that MATCHES — not the richest variant available.
+
+| Element needs | Select variant with | Do NOT select |
+|---|---|---|
+| Text only | Plain (Checkbox, Radio button) | Checkbox Action (has badge+arrow you don't need) |
+| Text + action arrow | Action variant (Checkbox Action, Icon Action) | Plain (no arrow) then try to add one |
+| Text + icon | Icon variant (Icon simple, Icon Action) | Checkbox variant then try to add icon |
+| Text + badge + arrow | Action variant with badge (Checkbox Action) | Plain variant then try to insert badge |
+
+**The clean-variant rule:** If a desired element does NOT need a feature, prefer a variant WITHOUT that feature. Do NOT select a richer variant and hide internal children — this is unreliable in Figma and causes iteration loops.
+
+**Example from Premium Dashboard:** Checklist had 4 items. Item 1 needed badge + arrow → Checkbox Action. Items 2-4 needed only text + checkbox → plain Checkbox. Using Checkbox Action for all 4 and trying to hide badges on items 2-4 caused 5+ iterations of failed hiding attempts. Using different variants solved it in 1 step.
+
+**When no clean variant exists:** If every available variant includes an unwanted feature (e.g., all Icon variants include a badge), document the limitation in the mapping table and accept the visual compromise. Do not iterate trying to hide instance children — the cost exceeds the benefit.
+
+**Mapping table visibility — conditional:**
+
+The mapping table is an internal decision tool. Show it to the user ONLY when:
+- The screen has ≥ 10 distinct element types (complex screen)
+- ≥ 3 elements have ambiguous component mappings (low confidence)
+- The build targets a file/page with no prior builds (no established patterns)
+
+For high-confidence builds (≤ 8 elements, all mappings clear, established patterns from prior runs), skip the checkpoint and proceed directly to construction. The table still exists internally — it's just not surfaced.
+
+---
+
+### Step 4 — Variable pre-collection
+
+Before construction:
+- Collect ALL color variable keys needed (fills, strokes, text colors)
+- Collect ALL spacing variable keys needed
+- Collect ALL text style keys needed
+- Set variable mode on artboard IMMEDIATELY after creation
+
+**Base paint color rule:** When using `setBoundVariableForPaint`, the base color must approximate the expected resolved value — never use `{r:0,g:0,b:0}`. Use:
+- White `{r:1,g:1,b:1}` for background fills
+- Light gray `{r:0.9,g:0.91,b:0.93}` for border strokes
+- Dark gray `{r:0.1,g:0.1,b:0.1}` for text fills
+
+---
+
+### Step 5 — Reference artboard inspection (when available)
+
+If the target file or page contains existing artboards:
+- Inspect their card structure (padding, gap, radius, Card header usage)
+- Adopt the same patterns for the new build
+- This ensures consistency across screens in the same file
+
+---
+
+### Session-level DS search cache
+
+Maintain a session-level cache of all DS search results. Before any `search_design_system` call:
+
+1. Check if an identical or semantically equivalent query was already issued this session
+2. If cached: reuse the result — zero reads
+3. If not cached: issue the search, cache the result keyed by query + library filter
+
+This cache persists for the entire session (across all iterations). Component discovery must not repeat for the same pattern. Variable lookups must not repeat once resolved.
+
+### Knowledge-driven read elimination
+
 - Before querying the DS, check Phase -1 knowledge for VERIFIED and CANDIDATE entries covering the patterns detected in Phase 2
 - For each VERIFIED pattern: record the stored component_key — skip the DS search call entirely (0 reads)
 - For each CANDIDATE pattern: use the stored component_key directly — skip the DS search call entirely (0 reads). Re-search only if a prior session recorded an `importComponentByKeyAsync` failure for this exact key.
-- For new patterns (not in knowledge, or REJECTED/EXPIRED): 1 targeted DS search, maximum. If multiple new patterns need resolution, batch them into a single `search_design_system` query using the most discriminating term. If that single search resolves nothing, record all remaining new patterns as component candidates — do not issue additional searches.
+- For new patterns (not in knowledge, or REJECTED/EXPIRED): apply confidence-based read control from Phase 0.7:
+  - If structurally similar to a known pattern (same category, similar role): Medium confidence — 1 targeted search
+  - If genuinely novel: Low confidence — exploration allowed
+  - If multiple new patterns need resolution, batch them into a single `search_design_system` query using the most discriminating term
 - Full DS scans (no specific query term) are forbidden regardless of mode
 - This tiering directly reduces DS lookup calls across runs — the savings compound as more entries reach VERIFIED state
-- Inspect available design system variables before resolution
+
+### Variable and style discovery
+
+- Inspect available design system variables before resolution — but only if the variable cache from Phase 7 is not already loaded
 - Do not assume naming formats
 - Use discovered variable paths in Phase 3 mappings
 - Use `search_design_system` to discover available components and retrieve their `componentKey` hashes
@@ -436,6 +942,64 @@ Rules:
 ## Phase 3 — Design system resolution
 
 **Objective:** Map every node to the design system without breaking structure.
+
+### First-pass correctness rules (mandatory — resolve BEFORE any construction)
+
+The following decisions must ALL be resolved before the first `use_figma` call. Deferring any of these to "fix in iteration" is a protocol violation. Target: ≤ 8 iterations for any screen, down from 15–20.
+
+**1. Complete UI inventory (zero omissions)**
+
+Enumerate EVERY visible element in the HTML — not just major sections. This includes:
+- Toolbars, floating controls, icon groups
+- Count headers, filter rows, dividers
+- Small affordances (chevrons, status dots, separators)
+- Hidden-but-present panels (inactive tabs, collapsed sections)
+
+A missing element discovered post-build costs 2–3 iterations (create + fix + verify). Catching it in inventory costs 0.
+
+**2. Layout structure with alignment pre-set**
+
+For every HORIZONTAL auto-layout frame that will contain children of different heights (badges + text, icons + labels, mixed components):
+- Pre-set `counterAxisAlignItems = 'CENTER'`
+- This is the default unless the HTML explicitly uses top or bottom alignment
+
+Evidence: 6 of 19 iterations in the prior session were alignment fixes on HORIZONTAL frames. All were CENTER.
+
+**3. Color mapping from HTML source (compute, don't guess)**
+
+When the HTML uses deterministic color assignment (hash functions, CSS class mappings, lookup tables):
+- Compute the resolved color from the HTML source code
+- Match to the closest DS variant by hue
+- Do NOT guess the variant from the semantic name of the element
+
+Example: `compliance` hashes to palette index 3 (pink) via `getTagColor()` — selecting Purple by semantic guess was wrong.
+
+When the HTML has level/status colors mapped to bars, dots, or indicators:
+- Read the badge/chip's actual DS fill variable
+- Apply the SAME variable to the corresponding bar/dot/indicator
+- Do NOT assume bar colors match from prior knowledge without verifying the badge variant
+
+**4. Component selection with library filtering**
+
+When selecting any DS component via `search_design_system`:
+- Filter results to libraries enabled in the target file BEFORE selecting a key
+- Never use a component from an unrelated library, even if it has the same name
+- If the component doesn't exist in any enabled library, stop and flag — do not silently use a foreign library
+
+**5. Section inventory completeness check**
+
+Before building, compare the Phase 1 section inventory against the element inventory. Every element must appear in at least one section. Unaccounted elements are build-blocking — resolve before construction.
+
+**6. Spacing scale**
+
+Identify the dominant spacing scale from the HTML (e.g., 8/16/24px grid) and pre-select DS spacing variables for the entire screen before construction begins.
+
+**7. Multi-state screen strategy**
+
+When building multiple states of the same screen (tab variants, modal open/closed, expanded/collapsed):
+- Build the first state fully
+- Clone and modify for subsequent states
+- Do NOT rebuild from scratch — clone-and-modify is 75% more efficient (proven: Events tab in 2 calls vs ~8 from scratch)
 
 Resolution order per node:
 0. **Explicit rule check** — before any DS search, check explicit_rules from Phase -1. Evaluate in this exact order:
@@ -750,11 +1314,12 @@ Non-destructive build rule (non-negotiable):
 - Position the new artboard adjacent to existing content: query `figma.currentPage.children` for the rightmost node, then place the new frame at `rightmost.x + rightmost.width + 80`.
 - If a prior attempt produced a non-compliant artboard, leave it in place — the user decides what to delete. Build the corrected version as a new frame next to it.
 
-Screenshot discipline:
-- `max_screenshots_per_build = 1`
-- The single allowed screenshot is the final verification screenshot — taken only after all construction and all post-chunk sweeps are complete.
-- Per-chunk screenshots are forbidden.
-- If construction fails mid-build, do not screenshot — document the failure in Phase 6 instead.
+Screenshot discipline (adaptive):
+- Screenshots are governed by the confidence-based read control in Phase 0.7 — not by a fixed cap.
+- Final verification screenshot: always allowed after construction is complete.
+- Mid-build screenshots: allowed only when visual ambiguity blocks the next step and reasoning from known state cannot resolve it.
+- Repeated screenshots of the same region: forbidden — reason from the prior result.
+- If construction fails mid-build, prefer documenting the failure over taking a screenshot — unless the failure's visual nature is the diagnostic question.
 
 Rules:
 - Every container is an auto layout frame — use `figma_create_frame` with `layoutMode: HORIZONTAL` or `VERTICAL`
@@ -974,12 +1539,44 @@ artboard.findAll(n => n.type === 'INSTANCE').forEach(inst => {
   });
 });
 
+// ── Check 5: Hardcoded text truncation (VERIFIED global rule — non-blocking) ─
+// Detects likely artificial truncation. Classified as WARNING, not violation.
+// The core rule (never truncate text) is enforced at construction time via the
+// Text Content Integrity global rule — this check is the diagnostic backstop.
+const truncationWarnings = [];
+artboard.findAll(n => n.type === 'TEXT').forEach(t => {
+  const chars = t.characters || '';
+  if (!chars.endsWith('…') && !chars.endsWith('...')) return;
+  // Skip DS component internals — they may have legitimate ellipsis
+  const isInsideInstance = t.parent?.type === 'INSTANCE' || t.parent?.parent?.type === 'INSTANCE';
+  if (isInsideInstance) return;
+  // Heuristic: classify as likely-truncation vs legitimate-ellipsis
+  const isShort = chars.length <= 30;
+  const isKnownPattern = /^(loading|processing|searching|saving|updating|please wait|more|see more|read more|view all|show more|continuing|thinking)/i.test(chars);
+  const isMidSentence = /[a-z,;]\s*[.…]{1,3}$/.test(chars); // ends mid-word or after comma
+  if (isKnownPattern || isShort) {
+    // Likely legitimate — no warning
+  } else if (isMidSentence) {
+    truncationWarnings.push({node: t.name || t.id, confidence: 'HIGH', issue: 'likely hardcoded truncation — text ends mid-sentence with ellipsis', text: chars.slice(-40)});
+  } else {
+    truncationWarnings.push({node: t.name || t.id, confidence: 'MEDIUM', issue: 'possible hardcoded truncation — verify full text was inserted', text: chars.slice(-40)});
+  }
+});
+// Append warnings but do NOT add to violations — these are non-blocking
+if (truncationWarnings.length > 0) {
+  // Attach as advisory — visible in output but does not cause FAIL
+  return violations.length === 0
+    ? JSON.stringify({PASS: true, truncation_warnings: truncationWarnings}, null, 2)
+    : JSON.stringify({FAIL: violations.length, violations, truncation_warnings: truncationWarnings}, null, 2);
+}
+
 return violations.length === 0
   ? 'PASS'
   : JSON.stringify({FAIL: violations.length, violations}, null, 2);
 ```
 
 - If the sweep returns `FAIL`: fix every listed violation before proceeding. Do not suppress or ignore violations by marking them acceptable — each one is a construction failure.
+- If the sweep returns `PASS` with `truncation_warnings`: review each warning. HIGH-confidence warnings (mid-sentence cut) strongly indicate hardcoded truncation — verify the full text was inserted and fix if not. MEDIUM-confidence warnings may be legitimate — check the HTML source before acting. Warnings are non-blocking: construction may proceed while investigating.
 - Do not skip this sweep to save bridge calls. Every skipped sweep is a violation that survives into the final file.
 - This sweep is not a substitute for using the Phase 3.7 helpers — it is the enforcement backstop for anything that slips through.
 
@@ -1266,7 +1863,7 @@ Dismissed gaps are excluded from all future recommendations.
 
 ### Variable ID cache — persist across sessions (mandatory)
 
-After every build, write the full V dict and TS dict as a `convention` rule in `rule_updates`. This eliminates the `get_variable_defs` read on all subsequent runs for this Figma file.
+After every build, write the full V dict and TS dict as a `convention` rule in `rule_updates`. This eliminates `get_variable_defs` reads on all subsequent runs for this Figma file.
 
 ```json
 {
@@ -1279,8 +1876,38 @@ After every build, write the full V dict and TS dict as a `convention` rule in `
 - Replace `BoQobWgIHapsRafUJJyEZ4` with the actual Figma file key for the current build
 - The `notes` field is a JSON string containing two keys: `V` (variable ID dict) and `TS` (text style ID dict)
 - Include every variable ID and text style ID used in the build — not a subset
-- **Phase -1 restoration:** on the next run, when Phase -1 loads this convention rule, it must parse `notes` with `JSON.parse(notes)` and restore both dicts to working memory before Phase 2.5. This eliminates slot 1 (`get_variable_defs`) from the Phase 0.7 read budget.
+- **Phase -1 restoration:** on the next run, when Phase -1 loads this convention rule, it must parse `notes` with `JSON.parse(notes)` and restore both dicts to working memory before Phase 2.5. This eliminates `get_variable_defs` from the read budget entirely.
 - Update this entry on every run — the last write is authoritative
+
+**Variable stability assumption:** DS variable IDs are stable across sessions. Treat cached IDs as permanent unless an `importVariableByKeyAsync` error proves otherwise. A failed import is the only signal to invalidate a cached variable — never re-read "just in case."
+
+**Cumulative cache:** Each run must ADD newly discovered variables to the cache, not replace it. If run N used 20 variables and run N+1 uses 25 (5 new), the cache after run N+1 must contain all 25. This prevents regression where a run that touches fewer variables accidentally shrinks the cache.
+
+**DS search result persistence:** In addition to variable IDs, persist component keys discovered via `search_design_system` in the pattern entries. A pattern with a stored `component_key` (VERIFIED or CANDIDATE) never needs a DS search — the key is the search result.
+
+### Component property map cache — persist across sessions
+
+After Phase 2.5 Step 2 inspects each component set's variants and properties, persist the property map as a convention rule:
+
+```json
+{
+  "rule_key": "component-map/checkbox-group-item",
+  "type": "convention",
+  "notes": "{\"setKey\":\"9a92881d...\",\"axes\":{\"Type\":[\"Checkbox\",\"Checkbox Action\",\"Icon simple\",\"Icon Action\"],\"Size\":[\"sm\",\"md\"],\"Selected\":[\"True\",\"False\"],\"State\":[\"Default\",\"Hover\",\"Focused\"],\"Breakpoint\":[\"Desktop\",\"Mobile\"]},\"booleans\":{},\"textNodes\":[\"Text\",\"Subtext\",\"Supporting text\"],\"notes\":\"Checkbox Action has Badge+Arrow. Icon Action has Icon+Arrow+Badge. Plain Checkbox has no action. Icon simple has icon, no arrow.\"}"
+}
+```
+
+- `rule_key` format: `component-map/{component-name-slug}`
+- `axes`: variant property names and their possible values
+- `booleans`: boolean properties exposed on instances (e.g., Icon leading, Icon trailing)
+- `textNodes`: names of TEXT nodes that need hydration
+- `notes`: human-readable notes about variant behavior and limitations (e.g., "Badge inside Checkbox Action cannot be hidden via visible=false")
+
+**Phase -1 restoration:** On the next run, load all `component-map/*` convention rules and restore them to working memory. Phase 2.5 Step 2 can then SKIP property inspection for any component set that already has a cached map — saving 1 `use_figma` call per component.
+
+**When to invalidate:** If `importComponentSetByKeyAsync` throws or returns a different variant structure than cached, re-inspect and update the cache. Component sets can change when the DS library is updated.
+
+**Benefit:** Eliminates repeated property discovery. In the Premium Dashboard session, Button properties (Icon leading/trailing), Checkbox group item variants (7 types), and Card header properties (Divider, Actions, Badge, Dropdown) were discovered through trial and error across ~15 iterations. With cached maps, all properties are known before the first instance is created.
 
 **Promotion is automatic:** when use_count reaches 3 and correction_count is 0, the MCP promotes the entry to VERIFIED. You will see `verified` count increase in the response. On the next run, VERIFIED entries skip DS lookup entirely.
 
@@ -1320,7 +1947,8 @@ Alias matches:       [N] patterns resolved by alias (zero reads, zero LLM classi
 DS lookups skipped:  [N] (via VERIFIED/CANDIDATE entries and substitution rules)
 DS gaps detected:    [N] pattern(s) with no matching DS component
 Stale keys expired:  [N] (will re-resolve on next run)
-Read budget used:    [N] of 5 reads (slots: [list which slots were consumed])
+Reads used:          [N] total ([breakdown: X DS searches, Y screenshots, Z variable reads])
+Reads saved:         [N] (via cache reuse, knowledge hits, reasoning-first debugging)
 Knowledge maturity:  [early / developing / stable] — [V] of [T] patterns VERIFIED ([X]%)
 ```
 
