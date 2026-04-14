@@ -50,6 +50,10 @@ Learning also improves **consistency**. The same HTML pattern resolves to the sa
 
 **Your DS evolves and Mimic notices.** When a new component is added that's a better match for an existing mapping, Mimic flags it in the run report. It never auto-switches — you decide.
 
+**Theme decisions are remembered.** On the first build in a file, Mimic asks whether to use Light or Dark mode (if your DS supports both). Your answer is stored and auto-applied on every future build in that file — no repeated questions. If you consistently pick the same theme across files using the same DS, it becomes the default for new files too.
+
+**Failures become rules.** If a DS component can't be used correctly (wrong variant structure, import failure, label that can't be hidden), Mimic records it and skips the failed approach on the next run — going straight to a clean fallback instead of retrying and failing again. These rules are adaptive: after several builds, Mimic re-checks whether the DS has been updated and the issue is resolved.
+
 **Every run produces a learning summary.** At the end of each build, Claude reports how many patterns were saved, how many were promoted to VERIFIED, how many reads were used, and any design system gaps detected. Gap reports are the clearest signal about what your DS might be missing.
 
 ---
@@ -68,11 +72,11 @@ Mimic needs your component library to be enabled in the target Figma file — no
 
 The first run is the most expensive — in reads, in time, and in imperfection. That's expected, and the gap closes fast.
 
-**Instant mode is always on by default.** Mimic does not scan your entire design system. It reads only what it needs for the patterns in your HTML. There is no "full DS ingestion" pass.
+**Instant mode is always on by default.** Before building, Mimic runs a pre-build intelligence phase: it inventories every element in your HTML, searches your DS for matching components, inspects their variants and properties, and maps each element to the best available resolution. This all happens before the first frame is created — so the build starts with the right components, not approximations that need to be fixed later.
 
-**5 reads maximum.** On a first run, Mimic targets 1 variable read, 1 targeted DS search, and 1 final screenshot. That's typically 3 reads. Two more are held in reserve for anything unexpected.
+**Reads are adaptive, not fixed.** On a first run, Mimic searches for all common DS patterns upfront — buttons, badges, tabs, inputs, cards, progress bars, and more. It caches everything it finds. Subsequent runs with warm knowledge may need zero reads at all. The system adapts based on what it already knows.
 
-**The output is functional, not perfect.** Patterns Mimic has never seen before will be resolved with its best judgment. A few may be off — resolved as a close component when a better one exists, or built from primitives when a DS component wasn't found. These are candidates for correction, not failures.
+**The output is functional, not perfect.** Patterns Mimic has never seen before will be resolved with its best judgment. If a DS component can't be used correctly (wrong variant, structural mismatch), Mimic builds a clean primitive with your DS variables instead — it never forces a broken component just to avoid a fallback. These are candidates for correction, not failures.
 
 **After the first run, the gaps start closing.** Correcting a component teaches Mimic what to use. Repeating a pattern three times makes it permanent. Variable IDs are cached after the first read — no re-collection on subsequent runs.
 
