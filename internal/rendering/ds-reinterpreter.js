@@ -43,23 +43,82 @@ function loadKnowledge() {
 // TEXT STYLE REINTERPRETATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-// DS text style size tiers (from style names):
-// xxs ≈ 10px, xs ≈ 12px, sm ≈ 14px, md ≈ 16px, lg ≈ 18px, xl ≈ 20px
-// Display: xs ≈ 24px, sm ≈ 30px, md ≈ 36px, lg ≈ 48px, xl ≈ 60px, 2xl ≈ 72px
-const TEXT_SIZE_MAP = [
-  { tier: 'Text xxs',    approxPx: 10 },
-  { tier: 'Text xs',     approxPx: 12 },
-  { tier: 'Text sm',     approxPx: 14 },
-  { tier: 'Text md',     approxPx: 16 },
-  { tier: 'Text lg',     approxPx: 18 },
-  { tier: 'Text xl',     approxPx: 20 },
-  { tier: 'Display xs',  approxPx: 24 },
-  { tier: 'Display sm',  approxPx: 30 },
-  { tier: 'Display md',  approxPx: 36 },
-  { tier: 'Display lg',  approxPx: 48 },
-  { tier: 'Display xl',  approxPx: 60 },
-  { tier: 'Display 2xl', approxPx: 72 },
-];
+// Text size tiers — built dynamically from DS knowledge when available.
+// Falls back to standard scale if no DS knowledge exists.
+var _textSizeMap = null;
+
+function getTextSizeMap() {
+  if (_textSizeMap) return _textSizeMap;
+
+  // Try to derive from DS knowledge (style names contain size info)
+  var knowledge = loadKnowledge();
+  if (knowledge) {
+    var textStyles = knowledge.styles.filter(function(s) { return s.category === 'typography'; });
+    var tierMap = {};
+    for (var i = 0; i < textStyles.length; i++) {
+      var s = textStyles[i];
+      // Extract tier from name like "Text sm/Bold" → "Text sm"
+      var parts = s.name.split('/');
+      if (parts.length >= 2) {
+        var tier = parts[0].trim();
+        // Extract approx px from style description or infer from tier name pattern
+        if (!tierMap[tier] && s.description) {
+          var sizeMatch = s.description.match(/(\d+)/);
+          if (sizeMatch) tierMap[tier] = parseInt(sizeMatch[1]);
+        }
+      }
+    }
+    // If we found tiers with sizes, use them
+    var derived = Object.keys(tierMap).map(function(t) { return { tier: t, approxPx: tierMap[t] }; });
+    if (derived.length >= 4) {
+      _textSizeMap = derived.sort(function(a, b) { return a.approxPx - b.approxPx; });
+      return _textSizeMap;
+    }
+  }
+
+  // Fallback: derive tiers from actual DS style names if possible
+  // This works for any DS — it extracts the naming pattern from available styles
+  const dsKnowledge = loadKnowledge();
+  if (dsKnowledge?.styles) {
+    const textStyles = dsKnowledge.styles.filter(s => s.category === 'typography');
+    if (textStyles.length > 0) {
+      // Extract unique tier prefixes (everything before the "/" in "Text sm/Regular")
+      const tierSizes = {};
+      for (const s of textStyles) {
+        const parts = s.name.split('/');
+        if (parts.length >= 2) {
+          const tier = parts[0].trim();
+          // Try to infer size from the style name or from actual fontSize if available
+          if (!tierSizes[tier]) tierSizes[tier] = [];
+          tierSizes[tier].push(s);
+        }
+      }
+      // Build map from tier names — if we can't determine sizes, use name-order heuristic
+      const tiers = Object.keys(tierSizes).sort();
+      if (tiers.length > 0) {
+        _textSizeMap = tiers.map((tier, i) => ({
+          tier,
+          approxPx: 10 + (i * 4), // rough approximation by order; overridden by DS knowledge when available
+        }));
+        return _textSizeMap;
+      }
+    }
+  }
+
+  // Last resort: common convention (Text/Display naming from Untitled UI)
+  // This is a best-guess for DSs that follow this common pattern
+  _textSizeMap = [
+    { tier: 'Text xs',     approxPx: 12 },
+    { tier: 'Text sm',     approxPx: 14 },
+    { tier: 'Text md',     approxPx: 16 },
+    { tier: 'Text lg',     approxPx: 18 },
+    { tier: 'Display xs',  approxPx: 24 },
+    { tier: 'Display sm',  approxPx: 30 },
+    { tier: 'Display md',  approxPx: 36 },
+    { tier: 'Display lg',  approxPx: 48 },
+  ];
+  return _textSizeMap;
+}
 
 const WEIGHT_MAP = {
   300: 'Regular',
@@ -84,10 +143,11 @@ export function resolveTextStyle(fontSize, fontWeight = 400) {
   const allStyles = knowledge.styles.filter(s => s.category === 'typography');
   if (allStyles.length === 0) return { styleKey: null, styleName: null, confidence: 0, method: 'no_styles' };
 
-  // Find closest size tier
-  let bestTier = TEXT_SIZE_MAP[0];
+  // Find closest size tier (dynamic from DS or fallback)
+  var sizeMap = getTextSizeMap();
+  let bestTier = sizeMap[0];
   let bestDist = Infinity;
-  for (const tier of TEXT_SIZE_MAP) {
+  for (const tier of sizeMap) {
     const dist = Math.abs(tier.approxPx - fontSize);
     if (dist < bestDist) { bestDist = dist; bestTier = tier; }
   }
@@ -331,7 +391,7 @@ export function reinterpretTextParams(params) {
     // Variable binding for text-primary often fails (library walk timeout).
     // Color style import is reliable when preloaded.
     if (!color && !params.fillHex && !params.fills && !result.fillVariable && !result.fillStyleKey) {
-      // Resolve to Gray (light mode)/900 style — same color as text-primary variable
+      // Resolve to the darkest gray style — same color as text-primary variable
       const styleResult = resolveColorStyle({ r: 0.059, g: 0.09, b: 0.165 });
       if (styleResult.styleKey) {
         result.fillStyleKey = styleResult.styleKey;
@@ -353,46 +413,13 @@ export function reinterpretTextParams(params) {
 // COLOR STYLE RESOLUTION (uses 990 color styles from DS knowledge)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Build a color lookup from known gray scale values in the DS
-// These are the most commonly used fills/strokes in product UI
-const GRAY_SCALE_STYLES = {
-  // Gray light mode — mapped from typical Tailwind/DS gray scale RGB values
-  '50':  { r: 0.973, g: 0.98, b: 0.988 },   // #F8FAFC
-  '100': { r: 0.945, g: 0.957, b: 0.969 },   // #F1F5F9
-  '200': { r: 0.886, g: 0.91, b: 0.941 },    // #E2E8F0
-  '300': { r: 0.796, g: 0.835, b: 0.882 },   // #CBD5E1
-  '400': { r: 0.58, g: 0.64, b: 0.72 },      // #94A3B8
-  '500': { r: 0.39, g: 0.455, b: 0.545 },     // #64748B
-  '600': { r: 0.278, g: 0.337, b: 0.412 },    // #475569
-  '700': { r: 0.2, g: 0.255, b: 0.333 },      // #334155
-  '800': { r: 0.118, g: 0.161, b: 0.231 },    // #1E293B
-  '900': { r: 0.059, g: 0.09, b: 0.165 },     // #0F172A
-};
-
-// Accent color reference values — mapped from common CSS accent scales
-const ACCENT_SCALE_STYLES = {
-  // Blue light (Tailwind blue)
-  'Blue light/50':  { r: 0.937, g: 0.965, b: 1.0 },     // #EFF6FF
-  'Blue light/100': { r: 0.859, g: 0.929, b: 0.996 },    // #DBEAFE
-  'Blue light/600': { r: 0.145, g: 0.388, b: 0.921 },    // #2563EB
-  'Blue light/700': { r: 0.114, g: 0.306, b: 0.847 },    // #1D4ED8
-  // Brand (primary blue)
-  'Brand/600':      { r: 0.145, g: 0.388, b: 0.921 },    // #2563EB
-  'Brand/700':      { r: 0.114, g: 0.306, b: 0.847 },    // #1D4ED8
-  // Green
-  'Green/50':       { r: 0.941, g: 0.992, b: 0.957 },    // #F0FDF4
-  'Green/100':      { r: 0.863, g: 0.988, b: 0.906 },    // #DCFCE7
-  'Green/700':      { r: 0.082, g: 0.502, b: 0.239 },    // #15803D
-  // Purple
-  'Purple/50':      { r: 0.961, g: 0.953, b: 1.0 },      // #F5F3FF
-  'Purple/100':     { r: 0.929, g: 0.914, b: 0.992 },    // #EDE9FE
-  'Purple/600':     { r: 0.486, g: 0.227, b: 0.929 },    // #7C3AED
-  'Purple/700':     { r: 0.427, g: 0.157, b: 0.851 },    // #6D28D9
-  // Orange (amber equivalent)
-  'Orange/50':      { r: 1.0, g: 0.984, b: 0.922 },      // #FFFBEB
-  'Orange/100':     { r: 0.996, g: 0.953, b: 0.78 },     // #FEF3C7
-  'Orange/700':     { r: 0.706, g: 0.322, b: 0.055 },    // #B45309
-};
+// Color style resolution uses dynamic DS knowledge — no hardcoded color values.
+// The DS knowledge file (ds-knowledge-normalized.json) contains all color styles
+// with their keys and names. Resolution matches raw RGB values to the closest
+// DS style by computing color distance.
+//
+// For DSs that include resolved RGB values in their style descriptions,
+// exact matching is possible. Otherwise, name-based heuristics are used.
 
 let _colorStyleCache = null;
 
@@ -409,20 +436,21 @@ function buildColorStyleCache() {
     styleByName[s.name] = s.key;
   }
 
-  // Build reference map: key → { name, ref RGB }
+  // Build reference map dynamically from all available color styles.
+  // No hardcoded color values — the map is populated from DS knowledge only.
+  // If the DS knowledge includes resolved RGB values (via description or metadata),
+  // they are used for distance-based matching. Otherwise, name-based matching is used.
   const refMap = {};
-
-  // Add gray scale
-  for (const [level, ref] of Object.entries(GRAY_SCALE_STYLES)) {
-    const name = `Gray (light mode)/${level}`;
-    const key = styleByName[name];
-    if (key) refMap[key] = { name, key, ref };
-  }
-
-  // Add accent scale
-  for (const [name, ref] of Object.entries(ACCENT_SCALE_STYLES)) {
-    const key = styleByName[name];
-    if (key) refMap[key] = { name, key, ref };
+  for (const s of colorStyles) {
+    // Extract RGB from description if available (some DS extractors include hex values)
+    const hexMatch = s.description?.match(/#([0-9a-fA-F]{6})/);
+    if (hexMatch) {
+      const hex = hexMatch[1];
+      const r = parseInt(hex.substr(0, 2), 16) / 255;
+      const g = parseInt(hex.substr(2, 2), 16) / 255;
+      const b = parseInt(hex.substr(4, 2), 16) / 255;
+      refMap[s.key] = { name: s.name, key: s.key, ref: { r, g, b } };
+    }
   }
 
   _colorStyleCache = { styles: colorStyles, refMap, styleByName };
