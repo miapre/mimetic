@@ -28,15 +28,8 @@ import { renderPage } from './renderer.js';
 import { acquireAuth, cleanupAuth } from './auth-acquire.js';
 import { validateAuthValidity } from './auth-validity.js';
 import { persistLearning } from './signal-intelligence.js';
-import { parseHTML } from '../parsing/html-parser.js';
-import { buildInventory, buildMinimalInventory } from '../resolution/ds-inventory-builder.js';
-import { resolveAll, buildResolutionMap } from '../resolution/component-resolver.js';
-import { resolveWithComposites, persistCompositePatterns } from '../resolution/composite-detector.js';
-import { planBuild, persistExecutionPatterns } from '../execution/build-executor.js';
-import { executeTree } from '../execution/tree-executor.js';
-import { applyLayoutIntent } from '../layout/layout-intent.js';
-import { mapLayoutToNodes } from '../layout/rendered-layout-extractor.js';
-import { generateBuildLearning } from '../learning/build-learning.js';
+// Build execution is handled by Claude-orchestrated builds (canonical path).
+// This module only handles input resolution and rendering.
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const BUILDS_DIR = resolve(__dir, '..', 'builds');
@@ -381,132 +374,7 @@ export async function resolveInput(options) {
     pipelineResult.error = err.message;
   }
 
-  // ── STEP 4: Parse, resolve, and plan (when READY + HTML available) ───
-
-  if (pipelineResult.status === 'READY' && pipelineResult.outputPath) {
-    try {
-      const buildStart = Date.now();
-
-      // 4a. Parse HTML
-      const rawHTML = readFileSync(pipelineResult.outputPath, 'utf8');
-      const parsedNodes = parseHTML(rawHTML);
-
-      // Flatten to content nodes: find the deepest container with multiple children
-      function findContentRoot(nodes) {
-        if (nodes.length === 1 && nodes[0].children?.length > 0) return findContentRoot(nodes[0].children);
-        return nodes;
-      }
-      const contentNodes = findContentRoot(parsedNodes);
-
-      // Collect all UI-level elements recursively for resolution
-      const UI_TAGS = new Set(['button', 'a', 'input', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'img', 'svg', 'table', 'nav', 'footer', 'section', 'ul', 'ol', 'li']);
-      const uiElements = [];
-      function collectUI(node) {
-        if (UI_TAGS.has(node.tag)) uiElements.push(node);
-        for (const child of (node.children || [])) collectUI(child);
-      }
-      for (const n of contentNodes) collectUI(n);
-
-      pipelineResult.parsing = {
-        topLevelNodes: parsedNodes.length,
-        contentNodes: contentNodes.length,
-        uiElements: uiElements.length,
-      };
-
-      // 4b. Build DS inventory (from provided dsComponents or minimal)
-      const dsComponents = options.dsComponents || [];
-      const dsInventory = dsComponents.length > 0
-        ? buildInventory(dsComponents, options.dsContext || {})
-        : [];
-
-      pipelineResult.dsInventory = { componentCount: dsInventory.length };
-
-      // 4c. Composite detection
-      const compositeResult = resolveWithComposites(contentNodes, dsInventory);
-      pipelineResult.composites = compositeResult.summary;
-
-      // 4d. Individual resolution on all UI elements
-      const resolved = resolveAll(uiElements, dsInventory);
-      pipelineResult.resolution = resolved.summary;
-
-      // 4e. Build resolution map (keyed by node._id)
-      const resolutionMap = buildResolutionMap(uiElements, resolved.resolutions);
-      pipelineResult.resolutionMapSize = Object.keys(resolutionMap).length;
-
-      // 4f. Build plan
-      const plan = planBuild({
-        nodes: uiElements,
-        resolutions: resolved.resolutions,
-        dsInventory,
-        buildContext: options.buildContext || { pageId: null, parentNodeId: null, designSystemFileKey: null },
-      });
-      pipelineResult.buildPlan = plan.summary;
-
-      // 4g. Persist build learning
-      const buildId = `build-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      persistCompositePatterns(compositeResult.compositeResults, buildId);
-      persistExecutionPatterns(plan, null, buildId);
-
-      pipelineResult.buildDurationMs = Date.now() - buildStart;
-
-      // 4h. Apply layout data
-      const appShell = parsedNodes.find(n => n.attributes?.class?.includes('flex') && n.children?.length > 0);
-      const treeNodes = appShell ? appShell.children : contentNodes;
-
-      // First pass: CSS class-based layout intent (always available)
-      applyLayoutIntent(treeNodes);
-
-      // Second pass: browser-computed layout data (if available from render)
-      // This enriches/overrides CSS-class inferences with actual computed values
-      if (pipelineResult.renderResult?.layoutDataPath) {
-        try {
-          const layoutData = JSON.parse(readFileSync(pipelineResult.renderResult.layoutDataPath, 'utf8'));
-          const mappedCount = mapLayoutToNodes(layoutData, treeNodes);
-          pipelineResult.layoutMapping = { records: layoutData.length, mapped: mappedCount };
-        } catch (e) {
-          pipelineResult.layoutMapping = { error: e.message };
-        }
-      }
-
-      // 4i. Execute into Figma if callBridge is provided
-      if (typeof options.callBridge === 'function') {
-        try {
-
-          const execStats = await executeTree({
-            nodes: treeNodes,
-            resolutionMap,
-            parentNodeId: options.buildContext?.parentNodeId,
-            fileKey: options.buildContext?.designSystemFileKey,
-            callBridge: options.callBridge,
-            buildContext: options.buildContext || {},
-            maxDepth: 10,
-          });
-
-          pipelineResult.execution = execStats;
-          pipelineResult.buildExecuted = true;
-        } catch (execErr) {
-          pipelineResult.executionError = execErr.message;
-          pipelineResult.buildExecuted = false;
-        }
-      } else {
-        pipelineResult.buildExecuted = false;
-      }
-
-      pipelineResult.buildPlanReady = true;
-      pipelineResult._plan = plan;
-      pipelineResult._resolutionMap = resolutionMap;
-      pipelineResult._contentNodes = contentNodes;
-      pipelineResult._resolutions = resolved.resolutions;
-      pipelineResult._uiElements = uiElements;
-
-    } catch (buildErr) {
-      pipelineResult.buildError = buildErr.message;
-      pipelineResult.buildPlanReady = false;
-      // Build failure does NOT change pipeline status — READY still means HTML is valid
-    }
-  }
-
-  // ── STEP 5: Log and learn ───────────────────────────────────────────
+  // ── STEP 4: Log and learn ────────────────────────────────────────────
 
   pipelineResult.durationMs = Date.now() - startTime;
   pipelineResult.url = url;
@@ -523,15 +391,6 @@ export async function resolveInput(options) {
   } catch (e) {
     // Learning failure must never block the pipeline
     pipelineResult.signalIntelligence = { error: e.message };
-  }
-
-  // Build learning artifacts: generate per-build snapshot, update knowledge, check recommendations
-  // This is passive and append-only — never crashes the build, never affects resolution.
-  try {
-    const buildLearning = generateBuildLearning(pipelineResult);
-    pipelineResult.buildLearning = buildLearning;
-  } catch (e) {
-    pipelineResult.buildLearning = { success: false, error: e.message };
   }
 
   return pipelineResult;
