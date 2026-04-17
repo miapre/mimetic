@@ -80,6 +80,14 @@ function nextId() {
   return String(++requestCounter);
 }
 
+// Per-instruction timeout (ms). Component imports may take longer due to library fetching.
+const TIMEOUT_BY_TYPE = {
+  insert_component: 45_000,    // Plugin has internal 15s per attempt × 2 + scan
+  replace_component: 45_000,
+  swap_main_component: 45_000,
+};
+const DEFAULT_TIMEOUT = 120_000;
+
 async function sendToPlugin(type, params) {
   if (!pluginSocket || pluginSocket.readyState !== 1 /* OPEN */) {
     throw new Error(
@@ -90,12 +98,13 @@ async function sendToPlugin(type, params) {
 
   const id = nextId();
   const message = JSON.stringify({ id, type, params });
+  const timeoutMs = TIMEOUT_BY_TYPE[type] || DEFAULT_TIMEOUT;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`Timeout: Figma plugin did not respond to instruction "${type}" within 120s`));
-    }, 120_000);
+      reject(new Error(`Timeout: Figma plugin did not respond to "${type}" within ${timeoutMs / 1000}s. The plugin may have disconnected or the operation hung.`));
+    }, timeoutMs);
 
     pending.set(id, { resolve, reject, timer });
     pluginSocket.send(message);
@@ -144,6 +153,73 @@ const server = http.createServer(async (req, res) => {
       bridge: 'running',
       pluginConnected: !!(pluginSocket && pluginSocket.readyState === 1)
     });
+  }
+
+  // POST /extract-ds — enriched DS extraction via REST API (parallel path, no plugin needed)
+  if (req.method === 'POST' && req.url === '/extract-ds') {
+    if (!FIGMA_TOKEN) return json(res, 400, { ok: false, error: 'FIGMA_ACCESS_TOKEN not set' });
+    try {
+      const body = await readBody(req);
+      const { fileKey } = body;
+      if (!fileKey) throw new Error('"fileKey" is required');
+
+      const apiBase = `https://api.figma.com/v1/files/${fileKey}`;
+      const headers = { 'X-Figma-Token': FIGMA_TOKEN };
+
+      // 1. Components + component sets
+      const [compRes, setRes, styleRes] = await Promise.all([
+        fetch(`${apiBase}/components`, { headers }).then(r => r.json()),
+        fetch(`${apiBase}/component_sets`, { headers }).then(r => r.json()),
+        fetch(`${apiBase}/styles`, { headers }).then(r => r.json()),
+      ]);
+
+      // 2. Variables (may fail on older files or personal plans)
+      let variables = null;
+      try {
+        const varRes = await fetch(`${apiBase}/variables/local`, { headers });
+        if (varRes.ok) variables = await varRes.json();
+      } catch(e) { /* variables not available */ }
+
+      // 3. Batch node details for component metadata (max 50 per call)
+      // PRIORITY: component sets first (they carry variant structure), then standalone
+      const allNodeIds = [
+        ...(setRes.meta?.component_sets || []).map(c => c.node_id),
+        ...(compRes.meta?.components || []).map(c => c.node_id),
+      ].filter(Boolean).slice(0, 50);
+
+      let nodeDetails = {};
+      if (allNodeIds.length > 0) {
+        try {
+          const nodeRes = await fetch(`${apiBase}/nodes?ids=${allNodeIds.join(',')}&depth=2`, { headers });
+          if (nodeRes.ok) {
+            const nd = await nodeRes.json();
+            nodeDetails = nd.nodes || {};
+          }
+        } catch(e) { /* node details not available */ }
+      }
+
+      return json(res, 200, {
+        ok: true,
+        result: {
+          fileKey,
+          extractedAt: new Date().toISOString(),
+          components: compRes.meta?.components || [],
+          componentSets: setRes.meta?.component_sets || [],
+          styles: styleRes.meta?.styles || [],
+          variables: variables?.meta || null,
+          nodeDetails,
+          counts: {
+            components: (compRes.meta?.components || []).length,
+            componentSets: (setRes.meta?.component_sets || []).length,
+            styles: (styleRes.meta?.styles || []).length,
+            variables: variables?.meta?.variables ? Object.keys(variables.meta.variables).length : 0,
+            nodeDetails: Object.keys(nodeDetails).length,
+          },
+        },
+      });
+    } catch(err) {
+      return json(res, 500, { ok: false, error: err.message });
+    }
   }
 
   // POST /execute — run an instruction

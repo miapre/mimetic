@@ -18,6 +18,9 @@ import { readFileSync, writeFileSync, existsSync, renameSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
+import { renderPage } from './internal/rendering/renderer.js';
+import { resolveInput } from './internal/rendering/pipeline-controller.js';
+
 const BRIDGE_URL = process.env.BRIDGE_URL || 'http://127.0.0.1:3055';
 
 // ---------------------------------------------------------------------------
@@ -890,6 +893,82 @@ const TOOLS = [
     },
   },
 
+  // ── Mimic AI pipeline controller ─────────────────────────────────────────
+
+  {
+    name: 'mimic_pipeline_resolve',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description:
+      'Deterministic input resolver for HTML → Figma builds. ' +
+      'Provide a URL, local HTML file path, or raw HTML content. ' +
+      'The controller classifies the input (DIRECT_HTML vs RENDERED_DOM_REQUIRED), ' +
+      'renders client-rendered pages automatically if needed, validates the result, ' +
+      'and returns a ready-to-build HTML file path. ' +
+      'ALWAYS call this BEFORE starting any HTML → Figma build. ' +
+      'If result.status is READY, use result.outputPath as build input. ' +
+      'If result.status is FAILURE, do NOT proceed — report the error.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url:          { type: 'string', description: 'URL to resolve. Fetched and classified automatically.' },
+        htmlFilePath: { type: 'string', description: 'Path to a local HTML file. Skips fetch, classifies directly.' },
+        htmlContent:  { type: 'string', description: 'Raw HTML string. Skips fetch, classifies directly.' },
+        timeout:      { type: 'number', description: 'Render timeout in ms. Default: 30000.' },
+        cookies:      {
+          type: 'array',
+          description: 'Auth cookies for rendering. Each: { name, value, domain, path }.',
+          items: {
+            type: 'object',
+            properties: {
+              name:   { type: 'string' },
+              value:  { type: 'string' },
+              domain: { type: 'string' },
+              path:   { type: 'string' },
+            },
+            required: ['name', 'value', 'domain'],
+          },
+        },
+      },
+    },
+  },
+
+  // ── Mimic AI rendering layer (direct) ──────────────────────────────────
+
+  {
+    name: 'mimic_render_url',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description:
+      'Render a client-rendered web page in a headless browser and extract the full DOM. ' +
+      'Use this when a URL returns only a JS shell, loading spinner, or hydration scaffold — ' +
+      'not meaningful HTML. The renderer waits for the page to fully hydrate using generic ' +
+      'readiness signals (text density, node count, DOM stability) before extracting. ' +
+      'Returns the path to the rendered HTML file which can then be used as build input. ' +
+      'On failure, returns a classified error (auth wall, endless loading, empty shell, etc).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url:       { type: 'string', description: 'URL to render.' },
+        output:    { type: 'string', description: 'Optional output file path. Defaults to internal/builds/rendered-{timestamp}.html.' },
+        timeout:   { type: 'number', description: 'Max render wait in ms. Default: 30000.' },
+        cookies:   {
+          type: 'array',
+          description: 'Auth cookies for the target domain. Each: { name, value, domain, path }.',
+          items: {
+            type: 'object',
+            properties: {
+              name:   { type: 'string' },
+              value:  { type: 'string' },
+              domain: { type: 'string' },
+              path:   { type: 'string' },
+            },
+            required: ['name', 'value', 'domain'],
+          },
+        },
+      },
+      required: ['url'],
+    },
+  },
+
   // ── Mimic AI learning loop ────────────────────────────────────────────────
 
   {
@@ -1040,7 +1119,24 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
 
     let result;
 
-    if (name === 'mimic_ai_knowledge_read') {
+    if (name === 'mimic_pipeline_resolve') {
+      result = await resolveInput({
+        url: fixedArgs.url,
+        htmlFilePath: fixedArgs.htmlFilePath,
+        htmlContent: fixedArgs.htmlContent,
+        timeout: fixedArgs.timeout,
+        cookies: fixedArgs.cookies || [],
+      });
+
+    } else if (name === 'mimic_render_url') {
+      result = await renderPage({
+        url: fixedArgs.url,
+        outputPath: fixedArgs.output,
+        timeout: fixedArgs.timeout,
+        cookies: fixedArgs.cookies || [],
+      });
+
+    } else if (name === 'mimic_ai_knowledge_read') {
       const knowledge = loadKnowledge();
       if (fixedArgs.pattern_key) {
         const entry = knowledge.patterns.find(p => p.pattern_key === fixedArgs.pattern_key) ?? null;
