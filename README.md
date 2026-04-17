@@ -252,6 +252,12 @@ To inspect or manually manage the knowledge file, see **[docs/knowledge-schema.m
 
 Once the MCP is registered, Claude has access to:
 
+**Status**
+
+| Tool | What it does |
+|---|---|
+| `mimic_status` | Check readiness: bridge running, DS knowledge loaded, first-run detection. Call at session start. |
+
 **Learning**
 
 | Tool | What it does |
@@ -335,6 +341,49 @@ Claude uses Figma's official MCP server to inspect designs, discover node IDs, a
 Claude calls tools in `mcp.js`. Each call is an HTTP POST to `bridge.js` running locally on your machine. The bridge forwards the instruction to the Figma plugin over WebSocket. The plugin executes it using Figma's Plugin API and returns the new node ID. Claude uses that ID as the parent for the next element.
 
 All variable bindings are real — nodes created this way use your actual design token variables, not hardcoded values. If you update a token in your library and re-publish, the nodes update automatically.
+
+---
+
+## Project structure
+
+```
+mcp.js              — MCP server, exposes tools to Claude
+bridge.js           — HTTP/WebSocket bridge to Figma plugin
+plugin/
+  code.js           — Figma plugin sandbox, executes instructions
+  ui.html           — Plugin UI, WebSocket relay
+  manifest.json     — Figma plugin manifest
+
+internal/
+  rendering/        — URL rendering (Puppeteer), input resolution
+  resolution/       — Component matching, icon resolution
+  layout/           — Layout tree builder, direction detection
+  learning/         — Build completion, knowledge persistence
+  parsing/          — HTML parsing
+  ds-knowledge/     — DS inventory extraction (gitignored outputs)
+
+CLAUDE.md           — Build protocol, phased lifecycle, workflow rules
+GOLDEN_RULES.md     — 25 rules governing every build
+ROLES.md            — 6 roles operating as phased build gates
+docs/
+  GUIDE.md          — Setup guide, DS structure, build patterns
+  knowledge-schema.md — Knowledge file schema reference
+```
+
+### Governance layer
+
+Mimic uses a multi-role build protocol. Every build follows 6 phases — each owned by a role that acts as a quality gate:
+
+| Phase | Owner | What it does |
+|---|---|---|
+| **0. Target** | Platform Architect | Confirm file, node, artboard placement |
+| **1. DS Discovery** | DS Integration Engineer | Search DS for matching components, produce component map |
+| **2. Inventory** | DS Integration Engineer | Import all text styles, color variables, spacing tokens |
+| **3. Build** | Build Engineer | Execute with per-node compliance checks |
+| **4. QA** | Design QA | Screenshot, verify content fidelity |
+| **5. Report** | Learning Engineer + Product QA | Save build report, communicate to user |
+
+See [`GOLDEN_RULES.md`](GOLDEN_RULES.md) and [`ROLES.md`](ROLES.md) for the full specification.
 
 ---
 
