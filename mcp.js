@@ -286,6 +286,19 @@ function autofix(toolName, args) {
 // ---------------------------------------------------------------------------
 
 const TOOLS = [
+  // ── Status ────────────────────────────────────────────────────────────────
+
+  {
+    name: 'mimic_status',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Check Mimic AI readiness. Returns the status of all required connections: ' +
+      'bridge running, plugin connected, DS knowledge available, knowledge pattern counts. ' +
+      'Call this at the start of a session to understand what is and is not configured. ' +
+      'If first_run is true, guide the user through connecting their DS before building.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+
   // ── Write tools ──────────────────────────────────────────────────────────
 
   {
@@ -524,17 +537,21 @@ const TOOLS = [
     name: 'figma_set_variant',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
-      'Directly set a VARIANT or BOOLEAN component property on an instance. ' +
-      'Use this when figma_set_component_text fails due to "existing errors" on a nested instance. ' +
-      'Use figma_get_component_variants to discover available variant values first.',
+      'Set VARIANT or BOOLEAN component properties on an instance. ' +
+      'Supports single property OR batch mode. ' +
+      'IMPORTANT: For VARIANT properties, Figma requires all variant axes to form a valid combination — ' +
+      'use batch mode (properties object) to set multiple variants at once. ' +
+      'For BOOLEAN properties, use true/false (not strings). ' +
+      'Use figma_get_component_variants to discover available property names and values first.',
     inputSchema: {
       type: 'object',
       properties: {
         nodeId:       { type: 'string' },
-        propertyName: { type: 'string', description: 'Component property name, e.g. "State" or "size".' },
+        propertyName: { type: 'string', description: 'Single property name, e.g. "Size" or "Icon leading". Use "properties" for batch.' },
         value:        { description: 'String for VARIANT, boolean for BOOLEAN.' },
+        properties:   { type: 'object', description: 'Batch mode: { "Size": "sm", "Hierarchy": "Link", "Icon leading": false }. Overrides propertyName/value.' },
       },
-      required: ['nodeId', 'propertyName', 'value'],
+      required: ['nodeId'],
     },
   },
 
@@ -893,6 +910,46 @@ const TOOLS = [
     },
   },
 
+  {
+    name: 'figma_preload_styles',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description:
+      'Batch import DS text and color styles into the plugin cache. ' +
+      'Call at build start with all style keys needed for the build. ' +
+      'Cached styles resolve instantly during create_text/create_frame calls. ' +
+      'Without preloading, each style import has an 8-second timeout.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of DS style keys to preload.',
+        },
+      },
+      required: ['keys'],
+    },
+  },
+
+  {
+    name: 'figma_set_session_defaults',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description:
+      'Set session-level defaults for DS compliance. Call once at build start after preload_styles. ' +
+      'textFillStyleKey sets the default fill for all text nodes that have no explicit fill — ' +
+      'prevents raw #000000 black. Pass the DS text-primary color style key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        textFillStyleKey: {
+          type: 'string',
+          description: 'DS color style key for text-primary (default text fill).',
+        },
+      },
+      required: ['textFillStyleKey'],
+    },
+  },
+
   // ── Mimic AI pipeline controller ─────────────────────────────────────────
 
   {
@@ -966,6 +1023,24 @@ const TOOLS = [
         },
       },
       required: ['url'],
+    },
+  },
+
+  {
+    name: 'mimic_discover_ds',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description:
+      'Extract and normalize a design system from a Figma library file. ' +
+      'Call this on first run or when the DS has been updated. ' +
+      'Queries the Figma REST API for components, component sets, styles, and variables. ' +
+      'Normalizes the extraction into a structured knowledge artifact at internal/ds-knowledge/ds-knowledge-normalized.json. ' +
+      'Returns a summary of what was found (counts of components, styles, variables).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string', description: 'Figma file key for the DS library file.' },
+      },
+      required: ['fileKey'],
     },
   },
 
@@ -1089,6 +1164,8 @@ const DIRECT_PASS = new Set([
   'figma_get_page_nodes',
   'figma_get_pages',
   'figma_change_page',
+  'figma_preload_styles',
+  'figma_set_session_defaults',
 ]);
 
 // Strip "figma_" prefix to get the bridge instruction type.
@@ -1119,7 +1196,39 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
 
     let result;
 
-    if (name === 'mimic_pipeline_resolve') {
+    if (name === 'mimic_status') {
+      // Check all connection statuses
+      const knowledge = loadKnowledge();
+      const hasKnowledge = existsSync(KNOWLEDGE_PATH) && knowledge.patterns.length > 0;
+      const dsKnowledgePath = resolve(__dir, 'internal', 'ds-knowledge', 'ds-knowledge-normalized.json');
+      const hasDsKnowledge = existsSync(dsKnowledgePath);
+
+      let bridgeRunning = false;
+      try {
+        const r = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(2000) });
+        bridgeRunning = r.ok;
+      } catch { /* bridge not running */ }
+
+      const patternCount = knowledge.patterns.length;
+      const verifiedCount = knowledge.patterns.filter(p => p.state === 'VERIFIED').length;
+      const ruleCount = knowledge.explicit_rules.length;
+
+      result = {
+        bridge_running: bridgeRunning,
+        bridge_url: BRIDGE_URL,
+        ds_knowledge_file: hasDsKnowledge,
+        learning_knowledge_file: hasKnowledge,
+        patterns: { total: patternCount, verified: verifiedCount },
+        explicit_rules: ruleCount,
+        first_run: !hasDsKnowledge && patternCount === 0,
+        message: !hasDsKnowledge
+          ? 'No DS knowledge found. Run mimic_discover_ds with your DS library file key to get started.'
+          : !bridgeRunning
+            ? 'DS knowledge loaded but bridge is not running. Start the bridge and Figma plugin.'
+            : 'Ready to build.',
+      };
+
+    } else if (name === 'mimic_pipeline_resolve') {
       result = await resolveInput({
         url: fixedArgs.url,
         htmlFilePath: fixedArgs.htmlFilePath,
@@ -1135,6 +1244,53 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         timeout: fixedArgs.timeout,
         cookies: fixedArgs.cookies || [],
       });
+
+    } else if (name === 'mimic_discover_ds') {
+      // First-run DS discovery: extract via bridge REST API, then normalize
+      const bridgeUrl = process.env.BRIDGE_URL || 'http://127.0.0.1:3055';
+      const knowledgePath = resolve(__dir, 'internal/ds-knowledge/ds-knowledge-normalized.json');
+
+      // Load previous knowledge for change detection
+      let previousCounts = null;
+      if (existsSync(knowledgePath)) {
+        try {
+          const prev = JSON.parse(readFileSync(knowledgePath, 'utf8'));
+          previousCounts = prev.summary || null;
+        } catch (_) {}
+      }
+
+      const extractRes = await fetch(`${bridgeUrl}/extract-ds`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileKey: fixedArgs.fileKey }),
+      });
+      const extractData = await extractRes.json();
+      if (!extractData.ok) throw new Error('DS extraction failed: ' + (extractData.error || 'unknown'));
+
+      // Normalize using ds-knowledge-builder
+      const { buildDSKnowledge } = await import('./internal/ds-knowledge/ds-knowledge-builder.js');
+      const normalized = buildDSKnowledge(extractData.result, []);
+
+      // Detect changes if previous knowledge exists
+      let changes = null;
+      if (previousCounts && normalized.summary) {
+        changes = {};
+        for (const key of Object.keys(normalized.summary)) {
+          const prev = previousCounts[key] || 0;
+          const curr = normalized.summary[key] || 0;
+          if (prev !== curr) changes[key] = { previous: prev, current: curr, delta: curr - prev };
+        }
+        if (Object.keys(changes).length === 0) changes = null;
+      }
+
+      result = {
+        fileKey: fixedArgs.fileKey,
+        firstRun: !previousCounts,
+        counts: extractData.result.counts,
+        normalizedPath: knowledgePath,
+        summary: normalized.summary || null,
+        changes,
+      };
 
     } else if (name === 'mimic_ai_knowledge_read') {
       const knowledge = loadKnowledge();
