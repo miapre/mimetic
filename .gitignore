@@ -1,15 +1,36 @@
 node_modules/
+package-lock.json
+.DS_Store
+
+# Secrets and local tokens
 .env
 .mcpregistry_*
-package-lock.json
 
-# LayerLens-specific artifacts — local only, never push
-build_*.py
-patch_*.py
-builds/
-research/
-internal/
-docs/*-run*.html
-docs/*-audit.html
-docs/*-report*.html
-docs/session-audit-*.html
+# Runtime-generated learning artifacts (user-specific, not source)
+ds-knowledge.json
+internal/learning/*.json
+internal/learning/*.md
+
+# Runtime-generated build outputs
+internal/builds/
+
+# Archive — preserved locally, not published
+internal/_archive/
+
+# DS knowledge cache (generated, large)
+internal/ds-knowledge/
+
+# Build learning workspace (runtime-generated, local only)
+mimic/builds/
+mimic/knowledge/
+mimic/reports/
+
+# Design assets — local only
+Design/
+
+# OS artifacts
+*.swp
+*~
+.Spotlight-V100
+.Trashes
+Thumbs.db

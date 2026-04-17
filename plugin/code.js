@@ -14,6 +14,7 @@ figma.showUI(__html__, { visible: true, width: 120, height: 28 });
 // ---------------------------------------------------------------------------
 
 let variableCache = null; // Map<name, Variable>
+const styleCache = new Map(); // Map<styleKey, figmaStyleId> — preloaded DS styles
 
 async function getVariableByPath(path) {
   if (!variableCache) {
@@ -24,22 +25,32 @@ async function getVariableByPath(path) {
   if (variableCache.has(path)) return variableCache.get(path);
 
   // Library variable import: walk team library collections to find by name
+  // Time-bounded to prevent hanging when library walk is slow
   try {
-    const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
-    for (const col of collections) {
-      const libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
-      for (const lv of libVars) {
-        if (lv.name === path) {
-          const imported = await figma.variables.importVariableByKeyAsync(lv.key);
-          variableCache.set(path, imported);
-          return imported;
+    const result = await Promise.race([
+      (async () => {
+        const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+        for (const col of collections) {
+          const libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
+          for (const lv of libVars) {
+            if (lv.name === path) {
+              const imported = await figma.variables.importVariableByKeyAsync(lv.key);
+              variableCache.set(path, imported);
+              return imported;
+            }
+          }
         }
-      }
-    }
+        return null;
+      })(),
+      new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
+    ]);
+    if (result) return result;
   } catch (_) {
-    // teamLibrary API not available in all plugin contexts — silent fallback
+    // teamLibrary API not available or timed out — silent fallback
   }
 
+  // Mark as not found so we don't retry
+  variableCache.set(path, null);
   return null;
 }
 
@@ -57,6 +68,7 @@ async function applySpacing(node, prop, value) {
 }
 
 // Apply a fill (solid color) to a node using a variable or a hex fallback.
+// Returns true if DS variable was bound, false otherwise.
 async function applyFill(node, variablePath, hexFallback) {
   if (variablePath) {
     const variable = await getVariableByPath(variablePath);
@@ -67,14 +79,15 @@ async function applyFill(node, variablePath, hexFallback) {
         variable
       );
       node.fills = [boundPaint];
-      return;
+      return true;
     }
   }
   if (hexFallback) {
     node.fills = [{ type: 'SOLID', color: hexToRgb(hexFallback) }];
-    return;
+    return false;
   }
   // Neither provided — leave fills as-is
+  return false;
 }
 
 // Apply a stroke to a node using a variable or hex fallback.
@@ -98,6 +111,37 @@ async function applyStroke(node, variablePath, hexFallback, width) {
     node.strokeWeight = width !== undefined && width !== null ? width : 1;
     node.strokeAlign = 'INSIDE';
   }
+}
+
+// Apply a DS color style to a node's fill or stroke.
+// Uses preloaded cache first (instant), falls back to live import with timeout.
+async function applyColorStyle(node, target, styleKey) {
+  if (!styleKey) return false;
+
+  // Check preloaded cache first — instant, no async
+  const cachedId = styleCache.get(styleKey);
+  if (cachedId) {
+    try {
+      if (target === 'fill') node.fillStyleId = cachedId;
+      else if (target === 'stroke') node.strokeStyleId = cachedId;
+      return true;
+    } catch (_) { /* cached ID invalid — fall through to import */ }
+  }
+
+  // Live import with timeout
+  try {
+    const imported = await Promise.race([
+      figma.importStyleByKeyAsync(styleKey),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('color style timeout')), 8000)),
+    ]);
+    if (imported && imported.id) {
+      styleCache.set(styleKey, imported.id); // cache for future use
+      if (target === 'fill') node.fillStyleId = imported.id;
+      else if (target === 'stroke') node.strokeStyleId = imported.id;
+      return true;
+    }
+  } catch (e) { /* import failed or timed out */ }
+  return false;
 }
 
 function hexToRgb(hex) {
@@ -148,20 +192,57 @@ async function loadFont(weight) {
 async function handleInsertComponent(params) {
   let component = null;
 
-  // 1. Try by local node ID first (same-file components)
-  const localNode = figma.getNodeById(params.nodeId);
-  if (localNode && (localNode.type === 'COMPONENT' || localNode.type === 'COMPONENT_SET')) {
-    component = localNode.type === 'COMPONENT_SET'
-      ? (localNode.defaultVariant || localNode.children[0])
-      : localNode;
+  // Import timeout — prevents indefinite hangs when Figma API is unresponsive.
+  // Normal imports complete in <2s. 15s is generous but bounded.
+  const IMPORT_TIMEOUT_MS = 15000;
+
+  function withTimeout(promise, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} timed out after ${IMPORT_TIMEOUT_MS / 1000}s`)), IMPORT_TIMEOUT_MS)
+      ),
+    ]);
   }
 
-  // 2. Try library import using the component key resolved by the bridge
+  // 1. Try by local node ID first (same-file components)
+  if (params.nodeId) {
+    const localNode = figma.getNodeById(params.nodeId);
+    if (localNode && (localNode.type === 'COMPONENT' || localNode.type === 'COMPONENT_SET')) {
+      component = localNode.type === 'COMPONENT_SET'
+        ? (localNode.defaultVariant || localNode.children[0])
+        : localNode;
+    }
+  }
+
+  // 2. Try library import using the component key resolved by the bridge.
+  //    Race both import methods in parallel — the key may be a COMPONENT or COMPONENT_SET key.
+  //    Each attempt is individually time-bounded so a hung API call cannot block the build.
   if (!component && params.componentKey) {
+    let importError = null;
     try {
-      component = await figma.importComponentByKeyAsync(params.componentKey);
-    } catch (_) {
-      // Library import failed — fall through to local scan
+      // Try component import first (most common)
+      component = await withTimeout(
+        figma.importComponentByKeyAsync(params.componentKey),
+        'importComponentByKeyAsync'
+      );
+    } catch (e1) {
+      // Component import failed — try as component SET key
+      try {
+        const compSet = await withTimeout(
+          figma.importComponentSetByKeyAsync(params.componentKey),
+          'importComponentSetByKeyAsync'
+        );
+        if (compSet) component = compSet.defaultVariant || compSet.children[0];
+      } catch (e2) {
+        // Both failed — record the errors for diagnostics
+        importError = `Component import: ${e1.message}. Set import: ${e2.message}`;
+      }
+    }
+
+    // If import failed, store error for the final error message
+    if (!component && importError) {
+      params._importError = importError;
     }
   }
 
@@ -187,17 +268,21 @@ async function handleInsertComponent(params) {
   }
 
   if (!component) {
+    const importDetail = params._importError ? ` Import error: ${params._importError}` : '';
     throw new Error(
-      `Component ${params.nodeId} not found locally and no component key was resolved. ` +
-      'Ensure your design system library is enabled in this file (Assets > Team library) and FIGMA_ACCESS_TOKEN is set in bridge .env.'
+      `Component not found (key: ${params.componentKey || 'none'}, nodeId: ${params.nodeId || 'none'}).${importDetail} ` +
+      'Check: (1) DS library is enabled in this file (Assets > Team library), ' +
+      '(2) FIGMA_ACCESS_TOKEN is set in bridge .env, ' +
+      '(3) component is published in the library.'
     );
   }
 
   const instance = component.createInstance();
 
-  if (params.parentNodeId) {
-    const parent = figma.getNodeById(params.parentNodeId);
-    if (!parent || !('appendChild' in parent)) throw new Error(`Parent ${params.parentNodeId} not found or cannot have children`);
+  const instanceParentRef = params.parentNodeId || params.parentId;
+  if (instanceParentRef) {
+    const parent = figma.getNodeById(instanceParentRef);
+    if (!parent || !('appendChild' in parent)) throw new Error(`Parent ${instanceParentRef} not found or cannot have children`);
     parent.appendChild(instance);
   } else {
     figma.currentPage.appendChild(instance);
@@ -226,10 +311,12 @@ async function handleCreateFrame(params) {
   const h = params.height !== undefined ? params.height : 100;
   frame.resize(w, h);
 
-  // Auto-layout
-  if (params.direction && params.direction !== 'NONE') {
-    frame.layoutMode = params.direction;
-    if (params.gap     !== undefined) await applySpacing(frame, 'itemSpacing', params.gap);
+  // Auto-layout — accept both "direction" and "layoutMode" as the mode param
+  const layoutDir = params.direction || params.layoutMode;
+  if (layoutDir && layoutDir !== 'NONE') {
+    frame.layoutMode = layoutDir;
+    if (params.gap !== undefined) await applySpacing(frame, 'itemSpacing', params.gap);
+    else if (params.itemSpacing !== undefined) await applySpacing(frame, 'itemSpacing', params.itemSpacing);
     if (params.padding !== undefined) {
       await applySpacing(frame, 'paddingTop',    params.padding);
       await applySpacing(frame, 'paddingRight',  params.padding);
@@ -246,17 +333,59 @@ async function handleCreateFrame(params) {
     if (params.counterAxisAlignItems)  frame.counterAxisAlignItems  = params.counterAxisAlignItems;
   }
 
-  // Fill
-  if (params.fillNone) {
+  // DS compliance tracking for frame fills and strokes
+  const frameDsCompliance = { fill: 'none', stroke: 'none' };
+
+  // Fill — DS style > DS variable > raw (flagged)
+  if (params.fillNone || (Array.isArray(params.fills) && params.fills.length === 0)) {
     frame.fills = [];
+    frameDsCompliance.fill = 'none';
+  } else if (params.fillStyleKey) {
+    // Apply DS color style by key (imported from library)
+    const applied = await applyColorStyle(frame, 'fill', params.fillStyleKey);
+    frameDsCompliance.fill = applied ? 'ds_style' : 'ds_style_unavailable';
+    if (!applied && Array.isArray(params.fills)) frame.fills = params.fills;
+  } else if (params.fillVariable) {
+    const bound = await applyFill(frame, params.fillVariable);
+    frameDsCompliance.fill = bound ? 'ds_variable' : 'raw_fallback';
+    if (!bound) frameDsCompliance.rawFillReason = 'variable_not_found:' + params.fillVariable;
+  } else if (Array.isArray(params.fills)) {
+    frame.fills = params.fills;
+    frameDsCompliance.fill = 'raw_fallback';
+  } else if (params.fillHex) {
+    await applyFill(frame, null, params.fillHex);
+    frameDsCompliance.fill = 'raw_fallback';
   } else {
     await applyFill(frame, params.fillVariable, params.fillHex);
+    frameDsCompliance.fill = 'none';
   }
 
-  // Stroke
-  if (params.strokeVariable || params.strokeHex) {
-    await applyStroke(frame, params.strokeVariable, params.strokeHex, params.strokeWidth);
+  // Stroke — DS style > DS variable > raw (flagged)
+  if (params.strokeStyleKey) {
+    const applied = await applyColorStyle(frame, 'stroke', params.strokeStyleKey);
+    frameDsCompliance.stroke = applied ? 'ds_style' : 'ds_style_unavailable';
+    if (!applied) {
+      if (Array.isArray(params.strokes)) { frame.strokes = params.strokes; }
+      if (params.strokeWeight !== undefined) frame.strokeWeight = params.strokeWeight;
+      if (params.strokeAlign) frame.strokeAlign = params.strokeAlign;
+    } else {
+      if (params.strokeWeight !== undefined) frame.strokeWeight = params.strokeWeight;
+      if (params.strokeAlign) frame.strokeAlign = params.strokeAlign;
+    }
+  } else if (params.strokeVariable) {
+    await applyStroke(frame, params.strokeVariable, null, params.strokeWidth || params.strokeWeight);
+    frameDsCompliance.stroke = 'ds_variable';
+  } else if (Array.isArray(params.strokes)) {
+    frame.strokes = params.strokes;
+    if (params.strokeWeight !== undefined) frame.strokeWeight = params.strokeWeight;
+    if (params.strokeAlign) frame.strokeAlign = params.strokeAlign;
+    frameDsCompliance.stroke = 'raw_fallback';
+  } else if (params.strokeHex) {
+    await applyStroke(frame, null, params.strokeHex, params.strokeWidth || params.strokeWeight);
+    frameDsCompliance.stroke = 'raw_fallback';
   }
+
+  // frameDsCompliance stored for return value
 
   // Corner radius — supports variable path string (e.g. "radius-xl") or number
   if (params.cornerRadius !== undefined) await applySpacing(frame, 'cornerRadius', params.cornerRadius);
@@ -265,13 +394,14 @@ async function handleCreateFrame(params) {
   if (params.clipsContent !== undefined) frame.clipsContent = params.clipsContent;
 
   // Add to parent first — layoutAlign/layoutGrow only take effect inside an auto-layout parent
-  if (params.parentNodeId) {
-    let parent = figma.getNodeById(params.parentNodeId);
+  const parentRef = params.parentNodeId || params.parentId;
+  if (parentRef) {
+    let parent = figma.getNodeById(parentRef);
     // If getNodeById fails, try searching the current page children (handles sections)
     if (!parent) {
-      parent = figma.currentPage.children.find(n => n.id === params.parentNodeId) || null;
+      parent = figma.currentPage.children.find(n => n.id === parentRef) || null;
     }
-    if (!parent) throw new Error(`Parent ${params.parentNodeId} not found`);
+    if (!parent) throw new Error(`Parent ${parentRef} not found`);
     try {
       parent.appendChild(frame);
     } catch(e) {
@@ -289,10 +419,27 @@ async function handleCreateFrame(params) {
   // Layout sizing within parent (must be set AFTER appendChild)
   applyLayoutSizing(frame, params);
 
+  // Auto-fill: children of auto-layout parents should fill the parent's cross-axis by default.
+  // In product UI, sections fill the container width. Skip only if explicit layoutAlign was set.
+  if (parentRef && !params.layoutAlign) {
+    try {
+      // Modern Figma API: layoutSizingHorizontal/Vertical = 'FILL' makes child fill parent
+      const parentNode = figma.getNodeById(parentRef);
+      if (parentNode && parentNode.layoutMode === 'VERTICAL') {
+        frame.layoutSizingHorizontal = 'FILL';
+      } else if (parentNode && parentNode.layoutMode === 'HORIZONTAL') {
+        frame.layoutSizingVertical = 'FILL';
+      }
+    } catch (_) {
+      // Fallback for older API
+      frame.layoutAlign = 'STRETCH';
+    }
+  }
+
   if (params.x !== undefined) frame.x = params.x;
   if (params.y !== undefined) frame.y = params.y;
 
-  return { nodeId: frame.id, name: frame.name };
+  return { nodeId: frame.id, name: frame.name, dsCompliance: frameDsCompliance };
 }
 
 async function handleCreateText(params) {
@@ -300,25 +447,67 @@ async function handleCreateText(params) {
   await loadFont(weight);
 
   const text = figma.createText();
+  // Must set fontName before characters (Figma requires a loaded font to set text)
   text.fontName = { family: 'Inter', style: FONT_STYLES[weight] || 'Regular' };
   text.characters = params.text !== undefined ? params.text : '';
 
-  if (params.fontSize)   text.fontSize   = params.fontSize;
-  if (params.lineHeight) text.lineHeight = { value: params.lineHeight, unit: 'PIXELS' };
+  // DS compliance tracking
+  const dsCompliance = { textStyle: 'unresolved', fill: 'unresolved' };
+
+  // Typography: try DS text style. If it succeeds, it overrides raw font properties.
+  // Apply AFTER characters are set. The style import sets fontName/fontSize/lineHeight
+  // from the DS definition, replacing the raw values set above.
+  let styleApplied = false;
+  if (params.textStyleId) {
+    styleApplied = await applyTextStyle(text, params.textStyleId);
+    dsCompliance.textStyle = styleApplied ? 'ds_style' : 'style_failed';
+    if (!styleApplied) dsCompliance.failedStyleId = params.textStyleId;
+  }
+
+  if (!styleApplied) {
+    // Raw fallback — apply raw properties only when DS style is not available
+    if (params.fontSize) text.fontSize = params.fontSize;
+    if (params.lineHeight) text.lineHeight = { value: params.lineHeight, unit: 'PIXELS' };
+    dsCompliance.textStyle = params.textStyleId ? 'style_failed' : 'raw_fallback';
+    dsCompliance.rawFontSize = params.fontSize || null;
+    dsCompliance.rawFontWeight = weight;
+  }
+
   if (params.textAlignHorizontal) text.textAlignHorizontal = params.textAlignHorizontal;
 
-  await applyFill(text, params.fillVariable, params.fillHex);
+  // Fill: DS style > DS variable > raw (flagged)
+  if (params.fillStyleKey) {
+    const applied = await applyColorStyle(text, 'fill', params.fillStyleKey);
+    dsCompliance.fill = applied ? 'ds_style' : 'ds_style_unavailable';
+    if (!applied && Array.isArray(params.fills)) text.fills = params.fills;
+  } else if (params.fillVariable) {
+    const bound = await applyFill(text, params.fillVariable);
+    dsCompliance.fill = bound ? 'ds_variable' : 'raw_fallback';
+    if (!bound) dsCompliance.rawFillReason = 'variable_not_found:' + params.fillVariable;
+  } else if (Array.isArray(params.fills)) {
+    text.fills = params.fills;
+    dsCompliance.fill = 'raw_fallback';
+  } else if (params.fillHex) {
+    await applyFill(text, null, params.fillHex);
+    dsCompliance.fill = 'raw_fallback';
+  } else {
+    // No fill param provided — Figma default black fill applies. This is raw, not DS compliant.
+    dsCompliance.fill = 'raw_fallback';
+    dsCompliance.rawFillReason = 'no_fill_param_provided';
+  }
 
-  if (params.textStyleId) await applyTextStyle(text, params.textStyleId);
+  // Store compliance for return (can't set custom props on Figma nodes)
+  const textDsCompliance = dsCompliance;
 
   if (params.width) {
     text.textAutoResize = 'HEIGHT';
     text.resize(params.width, text.height);
   }
 
-  if (params.parentNodeId) {
-    const parent = figma.getNodeById(params.parentNodeId);
-    if (!parent || !('appendChild' in parent)) throw new Error(`Parent ${params.parentNodeId} not found`);
+  const textParentRef = params.parentNodeId || params.parentId;
+  if (textParentRef) {
+    const parent = figma.getNodeById(textParentRef);
+    if (!parent || !('appendChild' in parent)) throw new Error(`Parent ${textParentRef} not found`);
     parent.appendChild(text);
   } else {
     figma.currentPage.appendChild(text);
@@ -327,10 +516,24 @@ async function handleCreateText(params) {
   // layoutAlign/layoutGrow must be set AFTER appendChild
   applyLayoutSizing(text, params);
 
+  // Auto-fill + wrap: text in auto-layout parents should fill cross-axis and wrap.
+  // Skip if explicit width was set or explicit layoutAlign was provided.
+  if (textParentRef && !params.width && !params.layoutAlign) {
+    try {
+      const parentNode = figma.getNodeById(textParentRef);
+      if (parentNode && parentNode.layoutMode === 'VERTICAL') {
+        text.layoutSizingHorizontal = 'FILL';
+      }
+    } catch (_) {
+      text.layoutAlign = 'STRETCH';
+    }
+    text.textAutoResize = 'HEIGHT';
+  }
+
   if (params.x !== undefined) text.x = params.x;
   if (params.y !== undefined) text.y = params.y;
 
-  return { nodeId: text.id };
+  return { nodeId: text.id, dsCompliance: textDsCompliance };
 }
 
 async function handleCreateRectangle(params) {
@@ -350,9 +553,10 @@ async function handleCreateRectangle(params) {
 
   if (params.cornerRadius !== undefined) rect.cornerRadius = params.cornerRadius;
 
-  if (params.parentNodeId) {
-    const parent = figma.getNodeById(params.parentNodeId);
-    if (!parent || !('appendChild' in parent)) throw new Error(`Parent ${params.parentNodeId} not found`);
+  const rectParentRef = params.parentNodeId || params.parentId;
+  if (rectParentRef) {
+    const parent = figma.getNodeById(rectParentRef);
+    if (!parent || !('appendChild' in parent)) throw new Error(`Parent ${rectParentRef} not found`);
     parent.appendChild(rect);
   } else {
     figma.currentPage.appendChild(rect);
@@ -1331,19 +1535,34 @@ function arcToBezier(cx, cy, R, a0, a1) {
 
 // Apply a text style by its full style ID (e.g. "S:abc123,7649:603") or key.
 // Imports from library if not yet local.
-async function applyTextStyle(node, styleId) {
-  if (!styleId) return;
-  try {
-    // Direct assignment works when style is already in the document
-    node.textStyleId = styleId;
-  } catch (_) {
-    // Try importing via key (extract hash before the comma)
-    const key = styleId.replace(/^S:/, '').split(',')[0];
+async function applyTextStyle(node, styleIdOrKey) {
+  if (!styleIdOrKey) return false;
+
+  // Strategy 1: If it looks like a Figma style ID (contains ":" or starts with "S:"), assign directly
+  if (styleIdOrKey.includes(':') || styleIdOrKey.startsWith('S:')) {
     try {
-      const imported = await figma.importStyleByKeyAsync(key);
-      if (imported) node.textStyleId = imported.id;
-    } catch (e2) { /* best-effort */ }
+      node.textStyleId = styleIdOrKey;
+      return true;
+    } catch (_) { /* not a valid style ID — try as key */ }
   }
+
+  // Strategy 2: Treat as a style key — import from library then assign
+  // Time-bounded to prevent hanging when Figma API is slow
+  const key = styleIdOrKey.replace(/^S:/, '').split(',')[0];
+  try {
+    const imported = await Promise.race([
+      figma.importStyleByKeyAsync(key),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('style import timeout')), 8000)),
+    ]);
+    if (imported && imported.id) {
+      node.textStyleId = imported.id;
+      return true;
+    }
+  } catch (e) {
+    // Import failed or timed out — fall through to raw
+  }
+
+  return false;
 }
 
 async function handleDonutChart(params) {
@@ -1787,9 +2006,42 @@ async function handleSetPrototypeStart(params) {
   return { ok: true, nodeId: node.id, name: node.name };
 }
 
+// Preload DS styles — imports a batch of style keys sequentially and caches their IDs.
+// Call ONCE at the start of a build to avoid import queue congestion during rendering.
+async function handlePreloadStyles(params) {
+  const keys = params.keys || [];
+  const results = {};
+  let loaded = 0;
+  let failed = 0;
+
+  for (const key of keys) {
+    if (styleCache.has(key)) { results[key] = 'cached'; loaded++; continue; }
+    try {
+      const imported = await Promise.race([
+        figma.importStyleByKeyAsync(key),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
+      ]);
+      if (imported && imported.id) {
+        styleCache.set(key, imported.id);
+        results[key] = 'loaded';
+        loaded++;
+      } else {
+        results[key] = 'not_found';
+        failed++;
+      }
+    } catch (e) {
+      results[key] = e.message || 'error';
+      failed++;
+    }
+  }
+
+  return { loaded, failed, total: keys.length, results };
+}
+
 // ---------------------------------------------------------------------------
 
 const HANDLERS = {
+  preload_styles:     handlePreloadStyles,
   insert_component:   handleInsertComponent,
   debug_variables:    handleDebugVariables,
   debug_components:   handleDebugComponents,
