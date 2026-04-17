@@ -19,22 +19,20 @@
 // DIRECTION DETECTION
 // ═══════════════════════════════════════════════════════════════════════════
 
-// CSS class patterns that indicate horizontal layout (flex-row, inline, grid-row)
+// CSS class and inline style patterns that indicate horizontal layout.
+// Generic patterns only — no product-specific class names.
 const HORIZONTAL_PATTERNS = [
+  // Explicit CSS layout declarations
   /flex-row|flex.*row|inline-flex/,
-  /nav-links|nav-right|nav-left/,
-  /filter-bar|filter-btn|filter-toggle|filter-search|source-pills/,
-  /stat-cards|stat-card/,
-  /header-top|footer-bottom|footer-grid/,
-  /pag-controls/,
+  /d-flex/,                          // Bootstrap
+  // Tailwind horizontal utilities
+  /\bflex\b(?!.*col)/,              // "flex" without "col" (Tailwind flex-row is default)
+  /\bgrid-cols-/,                    // Tailwind grid columns
+  // Generic semantic patterns (common across many projects)
   /btn-|button/,
   /chip|pill|tag-row|tags-row|badge-row/,
-  /sidebar-link|sidebar-logo|workspace-chip/,
-  /model-row|table-row/,
-  /inner$/,
-  /actions|cta-row|hero-actions/,
-  /credits-row|credit-row/,
-  /two-col/,
+  /actions|cta-row/,
+  /table-row/,
 ];
 
 // Tags that are inherently horizontal
@@ -50,13 +48,28 @@ const VERTICAL_TAGS = new Set(['ul', 'ol', 'table', 'tbody', 'section', 'article
 function detectDirection(node) {
   const cls = (node.attributes?.class || '').toLowerCase();
   const tag = node.tag?.toLowerCase();
+  const style = (node.attributes?.style || '').replace(/\s/g, '').toLowerCase();
 
-  // Check horizontal patterns in class names
+  // 1. Inline style is the strongest signal (works for any framework)
+  if (style.includes('display:flex') || style.includes('display:inline-flex')) {
+    if (style.includes('flex-direction:column')) return 'VERTICAL';
+    return 'HORIZONTAL'; // flex default is row
+  }
+  if (style.includes('display:grid')) {
+    if (style.includes('grid-template-columns')) return 'HORIZONTAL';
+    return 'VERTICAL';
+  }
+
+  // 2. Tailwind explicit direction classes
+  if (/\bflex-col\b|\bflex-column\b/.test(cls)) return 'VERTICAL';
+  if (/\bflex-row\b/.test(cls)) return 'HORIZONTAL';
+
+  // 3. Generic class patterns
   for (const pattern of HORIZONTAL_PATTERNS) {
     if (pattern.test(cls)) return 'HORIZONTAL';
   }
 
-  // Check tag-based direction
+  // 4. Tag-based direction
   if (HORIZONTAL_TAGS.has(tag)) return 'HORIZONTAL';
   if (VERTICAL_TAGS.has(tag)) return 'VERTICAL';
 
