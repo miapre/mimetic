@@ -638,6 +638,49 @@ function makeDecision(resolved, validation, intent, semanticResult) {
  * @param {Array} dsInventory — DS component inventory
  * @returns {Object} resolution result with decision and full trace
  */
+/**
+ * Attempt warm-cache resolution from ds-knowledge.json patterns.
+ * Returns a cached match if found with sufficient confidence, or null.
+ * The caller MUST validate the cached component against the live DS (Rule 34).
+ *
+ * @param {Object} node — parsed HTML node
+ * @param {Array} cachedPatterns — from ds-knowledge.json (active patterns only)
+ * @returns {Object|null} cached resolution trace, or null if no cache hit
+ */
+export function resolveFromCache(node, cachedPatterns) {
+  if (!cachedPatterns || cachedPatterns.length === 0) return null;
+
+  const intent = detectIntent(node);
+  const signature = `${intent.tag}.${(intent.semantics || []).join('.')}`;
+
+  // Find matching pattern by signature or pattern_key
+  const match = cachedPatterns.find(p =>
+    p.valid_until === null &&
+    (p.confidence ?? 0) >= CACHE_CONFIDENCE_THRESHOLD &&
+    (p.signature === signature || p.pattern_key === signature || p.pattern_key === intent.tag)
+  );
+
+  if (!match) return null;
+
+  return {
+    intent,
+    cachedMatch: true,
+    patternId: match.pattern_key,
+    component_key: match.component_key,
+    component_name: match.component_name,
+    variant: match.variant,
+    props_mapping: match.props_mapping,
+    configuration_recipe: match.configuration_recipe,
+    confidence: match.confidence,
+    source: match.source,
+    use_count: match.use_count,
+    // Caller must validate before using
+    requiresValidation: true,
+  };
+}
+
+const CACHE_CONFIDENCE_THRESHOLD = 0.8;
+
 export function resolveComponent(node, dsInventory) {
   // Step 1: Intent Detection
   const intent = detectIntent(node);

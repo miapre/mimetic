@@ -26,22 +26,37 @@ Public-facing tool (GitHub). Must be DS-agnostic — works with ANY design syste
 
 ---
 
+## Voice & Tone
+
+**Authoritative source:** `VOICE_AND_TONE.md`
+Read it at the start of every session that involves building. All user-facing output — status messages, phase updates, reports, recommendations, error messages — must follow the voice and tone guidelines. Mimic has a personality: precise, transparent, honest, respectful of the craft.
+
+---
+
 ## Workflow
 
 ### Session Start (mandatory)
-1. Read `GOLDEN_RULES.md` and `ROLES.md` — these are the authority
+1. Read `GOLDEN_RULES.md`, `ROLES.md`, and `VOICE_AND_TONE.md` — these are the authority
 2. Read any user DS knowledge from memory files relevant to the current task
 3. Golden rules are always active. Every build, every code change, every decision
+4. Compare current DS inventory against last known state (Rule 27 — DS change detection)
 
 ### Build Lifecycle — Phased Gates (mandatory for every build)
 
-Every build follows 6 phases. Each phase has a gate that must pass before proceeding:
+Every build follows 6 phases. Each phase has a gate that must pass before proceeding. **All phases must be shown to the user with checkbox progress** (see VOICE_AND_TONE.md for format):
 
 1. **Phase 0 — Target** (Platform Architect): Confirm target file/node, calculate artboard placement, identify variable mode requirements.
 
-2. **Phase 1 — DS Discovery** (DS Integration Engineer): Search the DS for every component type in the HTML. Produce a component map: `HTML element → DS component key` or `"primitive" + reason`. This is NON-OPTIONAL — skipping it is a critical violation (Rule 23).
+2. **Phase 1 — DS Discovery** (DS Integration Engineer): Produce a component map: `HTML element → DS component key` or `"primitive" + reason`. This is NON-OPTIONAL — skipping it is a critical violation (Rule 23). **Regression check (Rule 30):** compare against previous builds of similar screen types.
 
-3. **Phase 2 — Style & Variable Inventory** (DS Integration Engineer): Import all needed text styles, color variables, spacing, radius. Map every HTML font size to a DS text style. Map the DS's variable categories to node types (which color group for text fills, which for backgrounds, which for borders, which for icons).
+   **Warm-cache path (Rule 34):** If `ds-knowledge.json` has cached patterns:
+   - For each cached match: validate component exists (`importComponentByKeyAsync`) → validate variant exists → if both pass, use cached match (skip `search_design_system`)
+   - For invalidated or missing matches: search DS fresh, cache result
+   - Report: "X/Y from cache (Z invalidated), W new discoveries"
+   
+   **Cold path:** No cache exists. Full DS search for every component type. Cache all results.
+
+3. **Phase 2 — Style & Variable Inventory** (DS Integration Engineer): Import all needed text styles, color variables, spacing, radius. Map every HTML font size to a DS text style. Map the DS's variable categories to node types. **Font validation (Rule 28):** every font in the HTML must be checked against the DS. Non-DS fonts are substituted. **Color validation (Rule 29):** every color must map to a DS variable. No raw hex on text.
 
 4. **Phase 3 — Build** (Build Engineer): Execute the build. Per-node enforcement: auto-layout on every frame, textStyleId on every text node, correct variable category on every color binding, DS components used where Phase 1 mandated.
 
@@ -49,16 +64,27 @@ Every build follows 6 phases. Each phase has a gate that must pass before procee
 
 6. **Phase 5 — Report & Communicate** (Learning Engineer + Product QA): Save build report to `mimic/reports/build-NNN-*.md`. Communicate summary to user. **A build is NOT done until this phase completes.**
 
+### Multi-Page HTML (Rule 26)
+When the HTML contains multiple views/pages, list them and let the user choose which to build first. Build one at a time. Learn between builds. Show the list with completion status after each build.
+
 ### Plan Mode
 Enter plan mode for any non-trivial task (3+ steps or architectural decisions).
 If something goes sideways, STOP and re-plan immediately.
 
-### Self-Improvement Loop
+### Self-Improvement Loop — Three-Trigger Learning Model
 After ANY correction from the user:
 1. Classify: is this a **tool-level** fix or a **DS-specific** learning?
 2. Tool-level → update this file, GOLDEN_RULES.md, or fix the code
-3. DS-specific → update the relevant memory file
+3. DS-specific → update `ds-knowledge.json` as a structured pattern record
 4. Never let the same mistake happen twice
+
+**Learning triggers (event-driven, not open-ended extraction):**
+- **User correction** → Write new pattern record with confidence 0.9, source: `user_correction`. If correcting an existing pattern, set `valid_until` on the old record and `supersedes: [old_id]` on the new one.
+- **User confirmation** → Promote existing pattern from CANDIDATE to VERIFIED. Increment `use_count`.
+- **Repetition** → If Mimic makes the same match 3 builds without correction, auto-promote to VERIFIED (source: `auto_promoted`).
+- **NOT_WORTH_STORING** → If a pattern is too specific or ephemeral to generalize, explicitly skip it. This prevents junk accumulation.
+
+**What is NOT a learning trigger:** Scanning every interaction for "things worth remembering." No open-ended LLM extraction. Every write to `ds-knowledge.json` must trace back to one of the three triggers above.
 
 ### Push Back on Incorrect Feedback
 If the user provides feedback that contradicts what the HTML or the tool actually did, say so directly. Don't accept blame for something that was correct. Wasting time on non-issues is worse than a brief disagreement.
@@ -81,7 +107,7 @@ Each role evaluates and scores — iterate until all roles reach 10/10.
 
 ## Golden Rules
 
-**Authoritative source:** `GOLDEN_RULES.md` (25 rules).
+**Authoritative source:** `GOLDEN_RULES.md` (34 rules).
 Read it at the start of every session that involves building. Never violate any rule.
 
 ---
@@ -101,8 +127,14 @@ The phased gate model (above) is the canonical build protocol. Below are executi
 - Read the HTML carefully. Build what's there, not what you think should be there.
 - Every text node gets a `textStyleId` and a DS color fill from the correct semantic category
 - Every frame gets a DS background fill and DS border stroke where applicable
+- **Every frame's padding, gap, and radius are bound to DS variables at creation time** — `setBoundVariable('paddingTop', var)`, `setBoundVariable('itemSpacing', var)`, etc. immediately after `createFrame()`. A post-build spacing fix pass is a Phase 3 defect.
 - Accent/decorative colors that don't exist in the DS are acceptable as raw fills (document the reason in the build report)
 - DS component insertions are immediately followed by variant configuration and text overrides
+- **Component icon 3-layer model:** When configuring icon slots on components (buttons, inputs, etc.), set all 3 layers: (1) VARIANT property for slot type, (2) BOOLEAN property for visibility, (3) INSTANCE_SWAP property for icon content. Missing any layer produces wrong icons.
+- **Badge/status color properties:** Every Badge, Tag, or status component must have its semantic color property explicitly set. Default colors are never correct for semantic use.
+- **Table sizing:** Table wrapper uses `layoutSizingVertical='HUG'`. Rows use `counterAxisSizingMode='AUTO'`. At least one column uses `layoutSizingHorizontal='FILL'` to stretch the table to full width.
+- **Multi-item components:** When using tabs, nav items, or other multi-item components with more items than needed, hide extras with `visible=false`. Don't leave default items showing.
+- **Page header completeness:** Set ALL boolean properties to `false` for features not shown in the HTML (Back btn, Icon, Badges, Description, Actions, etc.).
 
 ### Phase 4–5 (Post-build)
 - Take a screenshot and compare with the HTML. Verify content fidelity.
@@ -113,7 +145,7 @@ The phased gate model (above) is the canonical build protocol. Below are executi
 
 ## Multi-Role Deliberation Framework
 
-**Role definitions:** `ROLES.md` (6 roles, phased gate model, coverage matrix against all 24 golden rules).
+**Role definitions:** `ROLES.md` (6 roles, phased gate model, coverage matrix against all 34 golden rules).
 
 When invoked with a prompt like:
 > "As [role1], [role2], ..., come up with a framework to [goal]..."

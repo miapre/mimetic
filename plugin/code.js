@@ -16,6 +16,15 @@ figma.showUI(__html__, { visible: true, width: 120, height: 28 });
 let variableCache = null; // Map<name, Variable>
 const styleCache = new Map(); // Map<styleKey, figmaStyleId> — preloaded DS styles
 
+// Session defaults — set once per build via set_session_defaults instruction.
+// These get applied automatically when no explicit value is provided.
+// DS-agnostic: the orchestrator discovers the right keys from the DS knowledge layer.
+var sessionDefaults = {
+  textFillStyleKey: null,   // Applied to text when no fillStyleKey/fillVariable/fills provided
+  frameFillStyleKey: null,  // NOT auto-applied — frames often have no fill intentionally
+  strokeStyleKey: null,     // NOT auto-applied
+};
+
 async function getVariableByPath(path) {
   if (!variableCache) {
     const vars = await figma.variables.getLocalVariablesAsync();
@@ -490,8 +499,13 @@ async function handleCreateText(params) {
   } else if (params.fillHex) {
     await applyFill(text, null, params.fillHex);
     dsCompliance.fill = 'raw_fallback';
+  } else if (sessionDefaults.textFillStyleKey) {
+    // No explicit fill — apply session default (text-primary from DS)
+    var defaultApplied = await applyColorStyle(text, 'fill', sessionDefaults.textFillStyleKey);
+    dsCompliance.fill = defaultApplied ? 'ds_session_default' : 'raw_fallback';
+    if (!defaultApplied) dsCompliance.rawFillReason = 'session_default_failed';
   } else {
-    // No fill param provided — Figma default black fill applies. This is raw, not DS compliant.
+    // No fill param and no session default — Figma default black. Raw, not DS compliant.
     dsCompliance.fill = 'raw_fallback';
     dsCompliance.rawFillReason = 'no_fill_param_provided';
   }
@@ -720,8 +734,70 @@ function handleSetVariant(params) {
   const node = figma.getNodeById(params.nodeId);
   if (!node) throw new Error(`Node ${params.nodeId} not found`);
   if (typeof node.setProperties !== 'function') throw new Error(`Node ${params.nodeId} does not support setProperties`);
-  node.setProperties({ [params.propertyName]: params.value });
-  return { ok: true };
+
+  // Support both single-property and batch mode
+  // Single: { property: "Size", value: "sm" }
+  // Batch:  { properties: { "Size": "sm", "Hierarchy": "Link", "Icon leading": false } }
+  var propsToSet = {};
+
+  if (params.properties && typeof params.properties === 'object') {
+    // Batch mode — set multiple properties at once (required for VARIANT combos)
+    for (var pName in params.properties) {
+      if (params.properties.hasOwnProperty(pName)) {
+        propsToSet[pName] = params.properties[pName];
+      }
+    }
+  } else {
+    // Single property mode
+    var propName = params.propertyName || params.property;
+    if (!propName) throw new Error('No property name provided (use "property" or "propertyName", or "properties" for batch)');
+    propsToSet[propName] = params.value;
+  }
+
+  // Resolve each property name to its actual key (with emoji prefix / #nodeId suffix)
+  var allProps = node.componentProperties || {};
+  var resolvedProps = {};
+  var report = [];
+
+  for (var requestedName in propsToSet) {
+    if (!propsToSet.hasOwnProperty(requestedName)) continue;
+    var val = propsToSet[requestedName];
+    var actualKey = null;
+
+    // Try exact match first
+    if (allProps[requestedName] !== undefined) {
+      actualKey = requestedName;
+    } else {
+      // Fuzzy match: strip emoji prefix and #nodeId suffix
+      for (var key in allProps) {
+        if (!allProps.hasOwnProperty(key)) continue;
+        var clean = key.replace(/^[^\w]*\s*/, '').replace(/#\d+.*$/, '').trim();
+        if (clean === requestedName) {
+          actualKey = key;
+          break;
+        }
+      }
+    }
+
+    if (!actualKey) {
+      throw new Error('Property "' + requestedName + '" not found. Available: ' + Object.keys(allProps).join(', '));
+    }
+
+    // Coerce value based on property type
+    var propDef = allProps[actualKey];
+    if (propDef && propDef.type === 'BOOLEAN') {
+      // Ensure actual boolean — JSON bridge may send string "true"/"false"
+      if (val === 'true' || val === true) val = true;
+      else if (val === 'false' || val === false) val = false;
+    }
+
+    resolvedProps[actualKey] = val;
+    report.push({ requested: requestedName, resolved: actualKey, type: propDef ? propDef.type : 'unknown', value: val });
+  }
+
+  // Apply all resolved properties in one call
+  node.setProperties(resolvedProps);
+  return { ok: true, applied: report };
 }
 
 // Set layer visibility on any node.
@@ -731,6 +807,24 @@ function handleSetVisibility(params) {
   if (!node) throw new Error(`Node ${params.nodeId} not found`);
   node.visible = params.visible;
   return { ok: true };
+}
+
+// Set session-level defaults for DS compliance.
+// Called once at build start after preload_styles. DS-agnostic — the orchestrator
+// discovers the right keys from the DS knowledge layer and passes them here.
+// params: { textFillStyleKey?: string }
+async function handleSetSessionDefaults(params) {
+  if (params.textFillStyleKey) {
+    // Preload the style so it's available in the cache
+    try {
+      var imported = await figma.importStyleByKeyAsync(params.textFillStyleKey);
+      styleCache.set(params.textFillStyleKey, imported.id);
+      sessionDefaults.textFillStyleKey = params.textFillStyleKey;
+    } catch (e) {
+      return { ok: false, error: 'Failed to import textFillStyleKey: ' + e.message };
+    }
+  }
+  return { ok: true, sessionDefaults: sessionDefaults };
 }
 
 // Replace an existing node with a new component instance at the same position in its parent.
@@ -2082,6 +2176,7 @@ const HANDLERS = {
   get_pages:              handleGetPages,
   change_page:            handleChangePage,
   batch:                  handleBatch,
+  set_session_defaults:   handleSetSessionDefaults,
 };
 
 figma.ui.onmessage = async msg => {

@@ -14,7 +14,32 @@
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { detectInteractive } from './intent-resolver.js';
+
+/**
+ * Detect if a text string looks like an interactive element (button, link).
+ * Returns intent object or null. DS-agnostic — pattern-based on text content.
+ */
+function detectInteractive(text, context = {}) {
+  if (!text) return null;
+  var t = text.trim();
+  // Arrow suffix → link
+  if (t.endsWith('\u2192') || t.endsWith('\u203A') || t.endsWith('\u00BB')) {
+    return { type: 'action', role: 'secondary', variant: 'link', confidence: 0.9 };
+  }
+  // Common action verbs
+  if (t.match(/^(View|See|Browse|Copy|Download|Share|Edit|Delete|Remove|Dismiss)\b/i)) {
+    return { type: 'action', role: 'secondary', variant: 'link', confidence: 0.8 };
+  }
+  // Short text that looks like a button label
+  if (t.length <= 25 && t.match(/^(Copy|Save|Submit|Cancel|Confirm|Apply|Close|Undo|Retry)$/i)) {
+    return { type: 'action', role: 'secondary', variant: 'secondary', confidence: 0.85 };
+  }
+  // CTA-like text
+  if (t.match(/^(Get started|Try|Start|Create|Run|Import|Install|Connect|Enable)/i)) {
+    return { type: 'action', role: 'primary', variant: 'primary', confidence: 0.8 };
+  }
+  return null;
+}
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = resolve(__dir, '..', 'learning', 'RESOLUTION_RULES.json');

@@ -30,42 +30,202 @@ const BRIDGE_URL = process.env.BRIDGE_URL || 'http://127.0.0.1:3055';
 const __dir = dirname(fileURLToPath(import.meta.url));
 const KNOWLEDGE_PATH = process.env.KNOWLEDGE_PATH || resolve(__dir, 'ds-knowledge.json');
 
-const KNOWLEDGE_VERSION = 1;
+const KNOWLEDGE_VERSION = 2;
 const VERIFIED_THRESHOLD = 3; // use_count required for CANDIDATE → VERIFIED promotion
+const CONFIDENCE_CORRECTION = 0.9;
+const CONFIDENCE_AUTO_INFERRED = 0.5;
+const CONFIDENCE_AUTO_PROMOTED = 0.8;
+const CONFIDENCE_CACHE_THRESHOLD = 0.8; // Minimum confidence for warm-cache use
+const CONFIDENCE_EXPIRE_THRESHOLD = 0.3; // Below this after 5 builds → auto-expire
+const EXPIRE_BUILD_COUNT = 5;
+
+// Migrate V1 pattern to V2 format (additive, non-breaking)
+function migratePatternV1toV2(p) {
+  return {
+    ...p,
+    confidence:           p.confidence ?? (p.state === 'VERIFIED' ? CONFIDENCE_AUTO_PROMOTED : CONFIDENCE_AUTO_INFERRED),
+    source:               p.source ?? (p.correction_count > 0 ? 'user_correction' : 'auto_inferred'),
+    valid_until:          p.valid_until ?? null,
+    supersedes:           p.supersedes ?? [],
+    configuration_recipe: p.configuration_recipe ?? null,
+    variant:              p.variant ?? null,
+    props_mapping:        p.props_mapping ?? null,
+    signature:            p.signature ?? p.pattern_key,
+    scope:                p.scope ?? 'project',
+    examples:             p.examples ?? [],
+    last_validated:       p.last_validated ?? null,
+  };
+}
 
 function loadKnowledge() {
   if (!existsSync(KNOWLEDGE_PATH)) {
-    return { version: KNOWLEDGE_VERSION, patterns: [], explicit_rules: [], updated: null };
+    return {
+      version: KNOWLEDGE_VERSION,
+      patterns: [],
+      explicit_rules: [],
+      gaps: {},
+      catalog: { componentSets: [], styles: [], variables: [], last_refreshed: null },
+      meta: { schema_version: KNOWLEDGE_VERSION, total_patterns: 0, verified_patterns: 0 },
+      updated: null,
+    };
   }
   try {
     const data = JSON.parse(readFileSync(KNOWLEDGE_PATH, 'utf8'));
-    // Migrate: older knowledge files may not have explicit_rules
+
+    // Migrate V1 → V2
+    if (!data.version || data.version < 2) {
+      data.version = KNOWLEDGE_VERSION;
+      // Migrate patterns
+      if (Array.isArray(data.patterns)) {
+        data.patterns = data.patterns.map(migratePatternV1toV2);
+      }
+      // Ensure new sections exist
+      if (!data.gaps) data.gaps = {};
+      if (!data.catalog) data.catalog = { componentSets: [], styles: [], variables: [], last_refreshed: null };
+      if (!data.meta) data.meta = { schema_version: KNOWLEDGE_VERSION, total_patterns: 0, verified_patterns: 0 };
+    }
+
+    // Ensure required arrays/objects exist regardless of version
     if (!Array.isArray(data.explicit_rules)) data.explicit_rules = [];
+    if (!Array.isArray(data.patterns)) data.patterns = [];
+    if (!data.gaps) data.gaps = {};
+    if (!data.catalog) data.catalog = { componentSets: [], styles: [], variables: [], last_refreshed: null };
+
+    // Update meta counts
+    data.meta = data.meta || {};
+    data.meta.schema_version = KNOWLEDGE_VERSION;
+    data.meta.total_patterns = data.patterns.filter(p => !p.valid_until).length;
+    data.meta.verified_patterns = data.patterns.filter(p => p.state === 'VERIFIED' && !p.valid_until).length;
+
     return data;
   } catch {
-    // Corrupted file — back it up before any write overwrites it
     try { renameSync(KNOWLEDGE_PATH, KNOWLEDGE_PATH + '.bak'); } catch { /* ignore */ }
-    return { version: KNOWLEDGE_VERSION, patterns: [], explicit_rules: [], updated: null };
+    return {
+      version: KNOWLEDGE_VERSION,
+      patterns: [],
+      explicit_rules: [],
+      gaps: {},
+      catalog: { componentSets: [], styles: [], variables: [], last_refreshed: null },
+      meta: { schema_version: KNOWLEDGE_VERSION, total_patterns: 0, verified_patterns: 0 },
+      updated: null,
+    };
   }
 }
 
 function saveKnowledge(knowledge) {
   knowledge.updated = new Date().toISOString();
+  knowledge.version = KNOWLEDGE_VERSION;
+  // Update meta counts before save
+  knowledge.meta = knowledge.meta || {};
+  knowledge.meta.schema_version = KNOWLEDGE_VERSION;
+  knowledge.meta.total_patterns = knowledge.patterns.filter(p => !p.valid_until).length;
+  knowledge.meta.verified_patterns = knowledge.patterns.filter(p => p.state === 'VERIFIED' && !p.valid_until).length;
   writeFileSync(KNOWLEDGE_PATH, JSON.stringify(knowledge, null, 2), 'utf8');
+}
+
+// ---------------------------------------------------------------------------
+// V2 Knowledge operations — Pattern lifecycle
+// ---------------------------------------------------------------------------
+
+// Invalidate a pattern (cache miss — component removed or variant changed)
+function invalidatePattern(knowledge, patternKey, reason) {
+  const entry = knowledge.patterns.find(p => p.pattern_key === patternKey && !p.valid_until);
+  if (entry) {
+    entry.valid_until = new Date().toISOString();
+    entry.notes = (entry.notes || '') + ` [Invalidated: ${reason}]`;
+  }
+}
+
+// Supersede a pattern with a new one (user correction)
+function supersedePattern(knowledge, oldPatternKey, newPattern) {
+  // Invalidate old
+  const oldEntry = knowledge.patterns.find(p => p.pattern_key === oldPatternKey && !p.valid_until);
+  const oldId = oldEntry ? (oldEntry.id || oldEntry.pattern_key) : null;
+  if (oldEntry) {
+    oldEntry.valid_until = new Date().toISOString();
+  }
+  // Create new with supersedes reference
+  const newEntry = {
+    pattern_key:          newPattern.pattern_key || oldPatternKey,
+    component_key:        newPattern.component_key,
+    component_name:       newPattern.component_name ?? null,
+    state:                'CANDIDATE',
+    use_count:            1,
+    correction_count:     0,
+    last_used:            new Date().toISOString(),
+    dismissed_conflicts:  [],
+    notes:                newPattern.notes ?? null,
+    // V2 fields
+    confidence:           newPattern.confidence ?? CONFIDENCE_CORRECTION,
+    source:               newPattern.source ?? 'user_correction',
+    valid_until:          null,
+    supersedes:           oldId ? [oldId] : [],
+    configuration_recipe: newPattern.configuration_recipe ?? null,
+    variant:              newPattern.variant ?? null,
+    props_mapping:        newPattern.props_mapping ?? null,
+    signature:            newPattern.signature ?? newPattern.pattern_key,
+    scope:                newPattern.scope ?? 'project',
+    examples:             newPattern.examples ?? [],
+    last_validated:       new Date().toISOString(),
+  };
+  knowledge.patterns.push(newEntry);
+  return newEntry;
+}
+
+// Track a DS gap
+function trackGap(knowledge, gapId, description, recommendation, buildId) {
+  if (!knowledge.gaps) knowledge.gaps = {};
+  const existing = knowledge.gaps[gapId];
+  if (existing) {
+    existing.affected_elements = (existing.affected_elements || 0) + 1;
+    if (!existing.builds_affected.includes(buildId)) {
+      existing.builds_affected.push(buildId);
+    }
+  } else {
+    knowledge.gaps[gapId] = {
+      id: gapId,
+      description,
+      affected_elements: 1,
+      first_seen: new Date().toISOString(),
+      builds_affected: [buildId],
+      recommendation,
+      resolved: false,
+    };
+  }
+}
+
+// Mark a gap as resolved (DS now has the component)
+function resolveGap(knowledge, gapId) {
+  if (knowledge.gaps && knowledge.gaps[gapId]) {
+    knowledge.gaps[gapId].resolved = true;
+  }
+}
+
+// Update catalog (DS inventory cache)
+function updateCatalog(knowledge, catalog) {
+  knowledge.catalog = {
+    ...catalog,
+    last_refreshed: new Date().toISOString(),
+  };
 }
 
 // Merge an array of incoming pattern updates into the knowledge file.
 // Handles: upsert, use_count increment, CANDIDATE→VERIFIED promotion,
 // correction_count increment, state override, dismissed_conflicts merge.
+// V2: also handles confidence, source, valid_until, supersedes, configuration_recipe,
+// variant, props_mapping, signature, scope, examples, last_validated.
 function applyPatternUpdates(knowledge, updates) {
   for (const update of updates) {
     const { pattern_key } = update;
     if (!pattern_key) continue;
 
-    const idx = knowledge.patterns.findIndex(p => p.pattern_key === pattern_key);
+    // Only match currently-valid patterns (valid_until === null)
+    const idx = knowledge.patterns.findIndex(
+      p => p.pattern_key === pattern_key && !p.valid_until
+    );
 
     if (idx === -1) {
-      // New entry
+      // New entry — V2 schema
       knowledge.patterns.push({
         pattern_key,
         component_key:        update.component_key ?? null,
@@ -76,6 +236,18 @@ function applyPatternUpdates(knowledge, updates) {
         last_used:            new Date().toISOString(),
         dismissed_conflicts:  update.dismissed_conflicts ?? [],
         notes:                update.notes ?? null,
+        // V2 fields
+        confidence:           update.confidence ?? CONFIDENCE_AUTO_INFERRED,
+        source:               update.source ?? 'auto_inferred',
+        valid_until:          null,
+        supersedes:           update.supersedes ?? [],
+        configuration_recipe: update.configuration_recipe ?? null,
+        variant:              update.variant ?? null,
+        props_mapping:        update.props_mapping ?? null,
+        signature:            update.signature ?? pattern_key,
+        scope:                update.scope ?? 'project',
+        examples:             update.examples ?? [],
+        last_validated:       update.last_validated ?? null,
       });
     } else {
       const entry = knowledge.patterns[idx];
@@ -89,17 +261,32 @@ function applyPatternUpdates(knowledge, updates) {
         entry.last_used = new Date().toISOString();
       }
 
-      // Increment correction_count if requested
+      // Increment correction_count if requested — V2: also supersede
       if (update.increment_correction) {
         entry.correction_count = (entry.correction_count ?? 0) + 1;
-        // Correction demotes VERIFIED → CANDIDATE
+        // Correction demotes VERIFIED → CANDIDATE and reduces confidence
         if (entry.state === 'VERIFIED') entry.state = 'CANDIDATE';
+        entry.confidence = Math.max((entry.confidence ?? 0.5) - 0.2, 0.1);
       }
 
       // Update component binding if provided
       if (update.component_key)  entry.component_key  = update.component_key;
       if (update.component_name) entry.component_name = update.component_name;
       if (update.notes !== undefined) entry.notes = update.notes;
+
+      // V2 field updates
+      if (update.confidence !== undefined)           entry.confidence = update.confidence;
+      if (update.source)                             entry.source = update.source;
+      if (update.configuration_recipe !== undefined) entry.configuration_recipe = update.configuration_recipe;
+      if (update.variant !== undefined)              entry.variant = update.variant;
+      if (update.props_mapping !== undefined)        entry.props_mapping = update.props_mapping;
+      if (update.last_validated)                     entry.last_validated = update.last_validated;
+      if (update.signature)                          entry.signature = update.signature;
+
+      // Append examples if provided
+      if (Array.isArray(update.examples)) {
+        entry.examples = [...(entry.examples ?? []), ...update.examples].slice(-10); // keep last 10
+      }
 
       // Merge dismissed_conflicts
       if (Array.isArray(update.dismissed_conflicts)) {
@@ -115,6 +302,17 @@ function applyPatternUpdates(knowledge, updates) {
         entry.correction_count === 0
       ) {
         entry.state = 'VERIFIED';
+        entry.confidence = Math.max(entry.confidence ?? 0.5, CONFIDENCE_AUTO_PROMOTED);
+        entry.source = entry.source === 'auto_inferred' ? 'auto_promoted' : entry.source;
+      }
+
+      // Auto-expire: low confidence after many builds
+      if (
+        (entry.confidence ?? 0.5) < CONFIDENCE_EXPIRE_THRESHOLD &&
+        entry.use_count >= EXPIRE_BUILD_COUNT
+      ) {
+        entry.valid_until = new Date().toISOString();
+        entry.notes = (entry.notes || '') + ' [Auto-expired: low confidence after ' + entry.use_count + ' builds]';
       }
     }
   }
@@ -292,10 +490,9 @@ const TOOLS = [
     name: 'mimic_status',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      'Check Mimic AI readiness. Returns the status of all required connections: ' +
-      'bridge running, plugin connected, DS knowledge available, knowledge pattern counts. ' +
-      'Call this at the start of a session to understand what is and is not configured. ' +
-      'If first_run is true, guide the user through connecting their DS before building.',
+      'Check Mimic AI readiness — the reviewer for your design system. Returns bridge status, ' +
+      'plugin connection, DS knowledge (patterns, recipes, gaps, catalog freshness), and ' +
+      'learning progress. Call at session start. If first_run is true, guide DS connection.',
     inputSchema: { type: 'object', properties: {} },
   },
 
@@ -1209,23 +1406,47 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         bridgeRunning = r.ok;
       } catch { /* bridge not running */ }
 
-      const patternCount = knowledge.patterns.length;
-      const verifiedCount = knowledge.patterns.filter(p => p.state === 'VERIFIED').length;
+      const activePatterns = knowledge.patterns.filter(p => !p.valid_until);
+      const patternCount = activePatterns.length;
+      const verifiedCount = activePatterns.filter(p => p.state === 'VERIFIED').length;
+      const invalidatedCount = knowledge.patterns.filter(p => p.valid_until).length;
       const ruleCount = knowledge.explicit_rules.length;
+      const gapCount = Object.values(knowledge.gaps || {}).filter(g => !g.resolved).length;
+      const catalogAge = knowledge.catalog?.last_refreshed
+        ? Math.round((Date.now() - new Date(knowledge.catalog.last_refreshed).getTime()) / (1000 * 60 * 60))
+        : null;
+      const recipesCount = activePatterns.filter(p => p.configuration_recipe).length;
 
       result = {
         bridge_running: bridgeRunning,
         bridge_url: BRIDGE_URL,
         ds_knowledge_file: hasDsKnowledge,
         learning_knowledge_file: hasKnowledge,
-        patterns: { total: patternCount, verified: verifiedCount },
+        schema_version: knowledge.version || 1,
+        patterns: {
+          total: patternCount,
+          verified: verifiedCount,
+          invalidated: invalidatedCount,
+          with_recipes: recipesCount,
+          by_source: {
+            user_correction: activePatterns.filter(p => p.source === 'user_correction').length,
+            auto_inferred: activePatterns.filter(p => p.source === 'auto_inferred').length,
+            auto_promoted: activePatterns.filter(p => p.source === 'auto_promoted').length,
+          },
+        },
         explicit_rules: ruleCount,
+        ds_gaps: gapCount,
+        catalog: {
+          component_sets: knowledge.catalog?.componentSets?.length || 0,
+          age_hours: catalogAge,
+          stale: catalogAge !== null && catalogAge > 168, // >7 days
+        },
         first_run: !hasDsKnowledge && patternCount === 0,
         message: !hasDsKnowledge
           ? 'No DS knowledge found. Run mimic_discover_ds with your DS library file key to get started.'
           : !bridgeRunning
             ? 'DS knowledge loaded but bridge is not running. Start the bridge and Figma plugin.'
-            : 'Ready to build.',
+            : `Ready. ${patternCount} patterns (${verifiedCount} verified, ${recipesCount} recipes). ${gapCount} DS gaps tracked.`,
       };
 
     } else if (name === 'mimic_pipeline_resolve') {

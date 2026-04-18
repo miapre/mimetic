@@ -17,6 +17,12 @@ internal/builds/
 # Archive — preserved locally, not published
 internal/_archive/
 
+# Backups — local safety nets, not source
+internal/backups/
+
+# Research — contains DS-specific keys, user paths, deliberation docs
+internal/research/
+
 # DS knowledge cache (generated, large)
 internal/ds-knowledge/
 
@@ -24,6 +30,7 @@ internal/ds-knowledge/
 mimic/builds/
 mimic/knowledge/
 mimic/reports/
+mimic/config/
 
 # Design assets — local only
 Design/

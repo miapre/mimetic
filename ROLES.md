@@ -63,15 +63,23 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 - Every frame uses hug or fill — no fixed heights on content frames
 - Every text node has `textStyleId` applied — no raw fontName/fontSize
 - Every color binding uses the correct semantic variable category
+- Every frame's padding, gap, and radius are bound to DS spacing/radius variables at creation time — no raw px values
 - DS components used where Phase 1 component map requires them
+- Every Badge instance has its semantic color property explicitly set (no default colors on semantic elements)
+- Table sizing: wrapper HUGs vertically, rows HUG height, at least one column FILLs horizontally
 - No collapsed frames, no orphaned nodes, no overlapping children
 
 **Phase 3 Component Configuration Checklist (run for EVERY DS component inserted):**
 - [ ] Variant matches HTML visual appearance (correct color, size, state) — verified against Phase 1 variant mapping
 - [ ] Correct component set (e.g., Button not Button destructive)
-- [ ] All text content overrides set to match HTML exactly
+- [ ] All text content overrides set to match HTML exactly — targeted by `node.name`, never by index
+- [ ] No placeholder text remains ("Label", "Olivia Rhye", default avatar names, default badge text)
+- [ ] Icon slots configured using 3-layer model: (1) variant for slot type, (2) boolean for visibility, (3) instance swap for icon content
 - [ ] Icon slots: hidden if HTML has no icon, swapped to correct DS icon if HTML has icon
-- [ ] No text characters (→, ▶, ✓, ←) substituting for icons
+- [ ] No text characters (→, ▶, ✓, ←, ✎) substituting for icons — use placeholder box if DS icon unavailable
+- [ ] Semantic color properties set on every instance (Badge Color, Alert Type, etc.) to match HTML intent
+- [ ] All unused boolean feature toggles explicitly set to `false` (e.g., Page header: Back btn, Badges, Description, Actions)
+- [ ] Multi-item components: extras hidden with `visible=false` (tabs, nav items, etc.)
 - [ ] Component width fits within parent content area (FILL or constrained)
 
 **Post-QA fix target: 0.** Phase 3 is clean when Phase 4 finds zero issues. Every post-QA fix is tracked as a Phase 3 defect.
@@ -93,6 +101,10 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 **Phase 4 gate:**
 - Take a screenshot and compare with HTML rendering
 - Content is verbatim — no shortening, paraphrasing, or "improving"
+- No placeholder text in any component instance ("Label", "Olivia Rhye", default content = Phase 3 defect)
+- Badge colors match HTML semantic intent (status badges = semantic colors, framework badges = neutral, tag badges = colored)
+- Table fills available parent width (at least one column uses FILL horizontal)
+- No raw px spacing visible — all padding/gap/radius bound to DS variables
 - Structure and order match HTML
 - Layout directions correct (horizontal where HTML uses flex-row, vertical for flex-column)
 - Nothing added that isn't in the HTML
@@ -104,10 +116,11 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Owns:** Phase 1 (DS Discovery) + Phase 2 (Inventory) — the bridge between raw HTML and the user's design system.
 
-**Golden rules:** 2 (DS first), 3 (Safe fallback), 4 (No fake usage), 12 (Component config), 18 (DS as truth), 23 (Mandatory discovery)
+**Golden rules:** 2 (DS first), 3 (Safe fallback), 4 (No fake usage), 12 (Component config), 18 (DS as truth), 23 (Mandatory discovery), 27 (DS change detection), 28 (No non-DS fonts), 29 (Zero raw hex), 30 (Regression check), 34 (Cache ≠ authority)
 
 **Phase 1 gate — DS Discovery (mandatory, before any build):**
-- Search the DS for every component type in the HTML: buttons, tabs, badges, table cells, pagination, dropdowns, inputs, page headers, navigation, cards, avatars
+- **Warm-cache path (Rule 34):** If `ds-knowledge.json` has cached patterns, validate each against the live DS: `importComponentByKeyAsync(key)` must succeed AND the target variant must still exist in the component set. Invalidate stale entries. Report: "X/Y validated, Z invalidated."
+- **Cold/fresh path:** Search the DS for every component type in the HTML: buttons, tabs, badges, table cells, pagination, dropdowns, inputs, page headers, navigation, cards, avatars
 - Produce a component map: `HTML element → DS component key` or `"primitive" + reason`
 - **Variant mapping:** For each DS component in the map, document the exact variant that matches the HTML element's visual appearance. Format: `"Get started" → Button (sm, Primary, Default) from Buttons/Button set — blue fill, matches HTML`. This prevents picking variants from wrong component sets (e.g., Button destructive instead of Button).
 - **Verify component set:** When the DS has multiple component sets with identical variant names (Button, Button destructive, Button success), always verify the component set name, not just the variant name.
@@ -141,18 +154,26 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 **Phase 5 gate — Build Report (mandatory):**
 - Report saved to `mimic/reports/build-NNN-*.md`
 - Report includes: metadata, section inventory, DS component audit, issue log, classification, recommendations
+- **Rules used table:** every component traced to its pattern rule (ID, source, confidence, builds survived)
+- **Cache status:** matches validated, invalidated, new discoveries, recipes saved
+- **Pattern-learned notification:** terminal output listing new patterns saved, promotions, supersessions (see VOICE_AND_TONE.md)
+- **DS gaps (cumulative):** maintained across builds in `ds-knowledge.json`, surfaced in every report
 - **Execution metrics section:** total use_figma calls, get_screenshot calls, get_metadata calls, total tool calls, post-QA fix count, Phase 3 defect rate (fixes / sections)
+- **Spacing compliance:** X/Y frames bound to DS spacing variables (0 raw px = compliant)
+- **Badge color compliance:** X/Y Badge instances with semantic color set (0 default colors = compliant)
 - Every finding classified as DS-specific or tool-specific
-- DS-specific findings → user memory files
+- DS-specific findings → `ds-knowledge.json` as structured pattern records (three-trigger model)
 - Tool-specific findings → golden rules or code changes
 - **Recommendation specificity:** each recommendation must include gap description, number of elements affected, and a concrete suggestion
 - Cross-build comparison: if this screen was built before, note improvements and regressions
-- **Memory persistence trail:** report must end with "Persisted to: [list of memory files created/updated]"
+- **Memory persistence trail:** report must end with "Persisted to: [list of files created/updated]"
 
-**Knowledge management:**
-- After corrections from the user, classify and persist immediately
-- Recognize patterns across builds (same fallback repeating = recommendation)
-- When the DS changes, revalidate learnings
+**Knowledge management — Three-Trigger Model:**
+- **User correction** → write pattern record (confidence 0.9, source: user_correction). Supersede old record if exists.
+- **User confirmation** → promote pattern to VERIFIED. Increment use_count.
+- **3 uncorrected builds** → auto-promote to VERIFIED (source: auto_promoted).
+- **NOT_WORTH_STORING** → explicitly skip ephemeral patterns to prevent junk.
+- When the DS changes, revalidate cached patterns (Rule 34 enforcement)
 
 ---
 
@@ -219,6 +240,16 @@ Full report: [path].
 | 22. Minimal calls | | **P** | | | | **S** |
 | 23. DS discovery | | | | **P** | | |
 | 24. Build report | | | | | **P** | **P** |
+| 25. Charts built | | **P** | | | | |
+| 26. Multi-page HTML | **P** | | | | | **S** |
+| 27. DS change detection | | | | **P** | **S** | |
+| 28. No non-DS fonts | | | **S** | **P** | | |
+| 29. Zero raw hex text | | | **S** | **P** | | |
+| 30. Regression check | | | **S** | **P** | | |
+| 31. Never delete artboards | **P** | | | | | |
+| 32. Component inspection | | **P** | | **S** | | |
+| 33. Recipe persistence | | **P** | | | **P** | |
+| 34. Cache ≠ authority | **P** | **S** | **S** | **P** | | |
 
 **P** = Primary owner. **S** = Secondary (supports enforcement).
 Every rule has at least one primary owner. No gaps.

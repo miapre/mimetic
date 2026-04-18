@@ -274,14 +274,17 @@ function generateRecommendations(knowledge) {
 
   const recommendations = [];
 
-  // Missing component recommendations — from repeated fallbacks
+  // Missing component recommendations — questions + evidence (V2 format)
   for (const [type, data] of Object.entries(knowledge.fallbacks)) {
     if (data.count >= FALLBACK_THRESHOLD) {
       recommendations.push({
         type: 'MISSING_COMPONENT',
-        description: `Element type "${type}" has fallen back ${data.count} times. The DS may be missing a component for this pattern.`,
+        question: `Should your DS include a component for "${type}"?`,
+        evidence: `${data.count} elements across builds used primitives — the pattern is consistent.`,
         evidenceCount: data.count,
         lastSeen: data.lastSeen,
+        // V1 compat
+        description: `Should your DS include a component for "${type}"? (${data.count} elements, all primitives)`,
       });
     }
   }
@@ -291,19 +294,23 @@ function generateRecommendations(knowledge) {
     if (pattern.occurrences >= UNRESOLVED_THRESHOLD) {
       recommendations.push({
         type: 'UNRESOLVED_PATTERN',
-        description: `Pattern "${pattern.signature}" has been unresolved ${pattern.occurrences} times across builds. Consider adding a DS mapping or correction.`,
+        question: `Should "${pattern.signature}" be mapped to a DS component?`,
+        evidence: `Appeared ${pattern.occurrences} times with no match. A correction or new component would eliminate the fallback.`,
         evidenceCount: pattern.occurrences,
+        description: `Should "${pattern.signature}" be mapped? (${pattern.occurrences} occurrences, no match)`,
       });
     }
   }
 
-  // Underperforming component recommendations — low success ratio
+  // Underperforming component recommendations
   for (const [key, data] of Object.entries(knowledge.components)) {
     if (data.usageCount >= 5 && data.successfulMatches / data.usageCount < 0.5) {
       recommendations.push({
         type: 'LOW_CONFIDENCE_COMPONENT',
-        description: `Component "${data.name}" (${key}) has been used ${data.usageCount} times but only ${data.successfulMatches} with high confidence. Resolution may be unreliable.`,
+        question: `Is "${data.name}" the right match for its pattern?`,
+        evidence: `Used ${data.usageCount} times but only ${data.successfulMatches} matched well. The mapping may need a correction.`,
         evidenceCount: data.usageCount,
+        description: `Is "${data.name}" correct? (${data.successfulMatches}/${data.usageCount} high-confidence matches)`,
       });
     }
   }
@@ -413,6 +420,14 @@ export function recordBuild(summary) {
     if (!existsSync(reportDateDir)) mkdirSync(reportDateDir, { recursive: true });
     const reportPath = resolve(reportDateDir, `${localTimeFile(now)}.md`);
 
+    // V2: Pattern learning summary
+    const patternsLearned = summary.patternsLearned || [];
+    const patternsUsedFromCache = summary.patternsUsedFromCache || 0;
+    const patternsInvalidated = summary.patternsInvalidated || 0;
+    const patternsNew = summary.patternsNew || 0;
+    const recipesNew = summary.recipesNew || 0;
+    const dsGaps = summary.dsGaps || [];
+
     const report = [
       `# Build Summary`,
       ``,
@@ -429,6 +444,24 @@ export function recordBuild(summary) {
       `| Total elements | ${(summary.dsComponents || 0) + (summary.primitives || 0)} |`,
       ``,
       summary.componentNames?.length ? `**DS components used:** ${summary.componentNames.join(', ')}` : null,
+      ``,
+      `## Cache Status`,
+      ``,
+      `| Metric | Value |`,
+      `|---|---|`,
+      `| From cache (validated) | ${patternsUsedFromCache} |`,
+      `| Invalidated (DS changed) | ${patternsInvalidated} |`,
+      `| New discoveries | ${patternsNew} |`,
+      `| Recipes saved | ${recipesNew} |`,
+      ``,
+      patternsLearned.length > 0 ? `## Patterns Learned\n` : null,
+      ...patternsLearned.map(p => `- \`${p.signature}\` → ${p.component_name} (${p.source}, confidence ${p.confidence})`),
+      patternsLearned.length > 0 ? `` : null,
+      dsGaps.length > 0 ? `## DS Gaps (cumulative)\n` : null,
+      dsGaps.length > 0 ? `| Gap | Elements | Recommendation |` : null,
+      dsGaps.length > 0 ? `|---|---|---|` : null,
+      ...dsGaps.map(g => `| ${g.description} | ${g.affected_elements} | ${g.recommendation} |`),
+      dsGaps.length > 0 ? `` : null,
       ``,
       `## DS Compliance`,
       ``,
