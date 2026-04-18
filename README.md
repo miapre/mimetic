@@ -11,7 +11,7 @@ Mimic translates HTML into Figma using your published components and tokens. It 
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode&logoColor=white)](vscode:mcp/install?%7B%22name%22%3A%22mimic-ai%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40miapre%2Fmimic-ai%22%5D%7D)
 [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_MCP-24bfa5?logo=visualstudiocode&logoColor=white)](vscode-insiders:mcp/install?%7B%22name%22%3A%22mimic-ai%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40miapre%2Fmimic-ai%22%5D%7D)
 
-> **Not a Figma product.** Independent, open-source MCP server. Built for Claude Code.
+> **Not a Figma product.** Independent, open-source MCP server. Works with any MCP client.
 
 ---
 
@@ -77,7 +77,105 @@ In Figma: Plugins → Development → Mimic AI → Run. Badge shows **● ready*
 **4. Enable your DS library** in the target file:
 Assets panel → Team library → toggle your DS **on**.
 
-**Ready.** Ask Claude to build something. Include a Figma link or describe the target.
+**Ready.** Ask your AI assistant to build something. Include a Figma link or describe the target.
+
+---
+
+## Works with any MCP client
+
+Mimic speaks standard MCP over stdio. Add it to your client's config:
+
+<details>
+<summary><strong>Claude Code</strong></summary>
+
+The install script registers Mimic automatically. Or add manually to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "mimic-ai": {
+      "command": "npx",
+      "args": ["-y", "@miapre/mimic-ai"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Cursor</strong></summary>
+
+Add to `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json` for global):
+
+```json
+{
+  "mcpServers": {
+    "mimic-ai": {
+      "command": "npx",
+      "args": ["-y", "@miapre/mimic-ai"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>VS Code (Copilot Chat)</strong></summary>
+
+Click the badge at the top of this README, or add to your VS Code settings:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "mimic-ai": {
+        "command": "npx",
+        "args": ["-y", "@miapre/mimic-ai"]
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Windsurf</strong></summary>
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "mimic-ai": {
+      "command": "npx",
+      "args": ["-y", "@miapre/mimic-ai"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>JetBrains (IntelliJ, WebStorm, etc.)</strong></summary>
+
+Settings → Tools → AI Assistant → MCP Servers → Add:
+
+```json
+{
+  "mimic-ai": {
+    "command": "npx",
+    "args": ["-y", "@miapre/mimic-ai"]
+  }
+}
+```
+
+</details>
+
+All clients need the bridge running (`npm run bridge`) and the Figma plugin active. The MCP config just connects your AI assistant to Mimic's tool server.
 
 ---
 
