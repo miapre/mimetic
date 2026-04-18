@@ -1,6 +1,6 @@
-# ds-knowledge.json — Schema Reference
+# ds-knowledge.json — Schema Reference (V2)
 
-The knowledge file (`ds-knowledge.json`) is the persistence layer for Mimic AI's learning system. It lives in the root of your `mimic-ai` installation and is updated automatically after every successful build. This file is plain JSON — you can inspect, edit, and share it freely.
+The knowledge file (`ds-knowledge.json`) is Mimic AI's persistent learning layer. It lives in your `mimic-ai` installation root and is updated automatically after every build. Plain JSON — inspect, edit, share freely.
 
 ---
 
@@ -8,72 +8,165 @@ The knowledge file (`ds-knowledge.json`) is the persistence layer for Mimic AI's
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "patterns": [...],
   "explicit_rules": [...],
-  "updated": "2026-04-13T12:00:00.000Z"
+  "gaps": {...},
+  "catalog": {...},
+  "meta": {
+    "schema_version": 2,
+    "total_patterns": 12,
+    "verified_patterns": 8
+  },
+  "updated": "2026-04-18T02:00:00.000Z"
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `version` | number | Schema version. Always `1` for this release. |
-| `patterns` | array | Component mappings — what HTML pattern maps to what DS component. |
-| `explicit_rules` | array | DS structural rules — gaps, substitutions, and conventions learned over time. |
-| `updated` | ISO 8601 string | Timestamp of the last write. Set automatically — do not edit manually. |
+| `version` | number | Schema version. Current: `2`. V1 files are auto-migrated on load. |
+| `patterns` | array | Component mappings — HTML pattern → DS component. |
+| `explicit_rules` | array | DS structural rules — gaps, substitutions, conventions. |
+| `gaps` | object | DS gap tracker — components your DS is missing, accumulated across builds. |
+| `catalog` | object | Cached DS inventory for warm-cache builds. |
+| `meta` | object | Counts and diagnostics. |
+| `updated` | ISO 8601 | Last write timestamp. Set automatically. |
 
 ---
 
-## Pattern entry
+## Pattern entry (V2)
 
-Each entry in `patterns` records one HTML pattern → DS component mapping.
+Each entry records one HTML pattern → DS component mapping with provenance, confidence, and an optional configuration recipe.
 
 ```json
 {
-  "pattern_key": "metric/kpi",
-  "component_key": "3iUvHvO7znmQ...",
-  "component_name": "MetricCard",
+  "pattern_key": "form/button-primary",
+  "component_key": "aa5d038...",
+  "component_name": "Buttons/Button",
   "state": "VERIFIED",
   "use_count": 5,
   "correction_count": 0,
-  "last_used": "2026-04-13T12:00:00.000Z",
-  "aliases": ["KPI tile", "revenue-card", "kpi-metric"],
+  "last_used": "2026-04-18T02:00:00.000Z",
   "dismissed_conflicts": [],
-  "notes": null
+  "notes": null,
+  "confidence": 0.9,
+  "source": "user_correction",
+  "valid_until": null,
+  "supersedes": [],
+  "configuration_recipe": {
+    "text_overrides": { "Text": "{from_html}" },
+    "hidden_slots": ["Icon leading"],
+    "badge_colors": {}
+  },
+  "variant": "Size=md, Hierarchy=Primary, Icon=Default, State=Default",
+  "props_mapping": { "Hierarchy": "Primary" },
+  "signature": "button.cta",
+  "scope": "project",
+  "examples": [{ "html_snippet": "<button class='cta'>Get started</button>" }],
+  "last_validated": "2026-04-18T02:00:00.000Z"
 }
 ```
 
+### V2 fields
+
 | Field | Type | Description |
 |---|---|---|
-| `pattern_key` | string | Pattern taxonomy key (e.g. `metric/kpi`, `nav/top-bar`). See [pattern key taxonomy](#pattern-key-taxonomy). |
-| `component_key` | string | The published Figma component key hash used to insert this component. Permanent — survives renames. |
-| `component_name` | string | Human-readable name for inspection. Does not affect behavior. |
-| `state` | enum | `CANDIDATE`, `VERIFIED`, `REJECTED`, or `EXPIRED`. See [pattern states](#pattern-states). |
-| `use_count` | number | How many times this mapping was used. Auto-incremented each run. |
-| `correction_count` | number | How many times the user corrected this mapping. A correction demotes `VERIFIED` → `CANDIDATE`. |
-| `last_used` | ISO 8601 string | Timestamp of the last run that used this entry. |
-| `aliases` | array of strings | Exact HTML labels that previously triggered this mapping — class names, element text content, or semantic role text. Added automatically by Phase 7 via `add_alias`. Used in Phase 3 step 0.5 for deterministic matching before LLM classification runs. Safe to edit manually: add known synonyms your HTML uses, or remove incorrect ones. |
-| `dismissed_conflicts` | array of strings | Component keys the user has acknowledged as not a conflict. |
-| `notes` | string or null | Free-text annotation. Safe to edit manually. |
+| `confidence` | float | 0.0–1.0. User corrections: 0.9. Auto-inferred: 0.5. Auto-promoted: 0.8. |
+| `source` | enum | `user_correction`, `user_confirmation`, `auto_inferred`, `auto_promoted` |
+| `valid_until` | ISO 8601 or null | Null = active. Set when superseded or invalidated (DS changed). |
+| `supersedes` | array | IDs of patterns this one replaces. Enables audit trail. |
+| `configuration_recipe` | object or null | Full configuration replay: text overrides by node name, hidden slots, badge colors. Eliminates component re-inspection on warm builds. |
+| `variant` | string or null | Exact variant name string for the component. |
+| `props_mapping` | object or null | Properties to set via `setProperties()`. |
+| `signature` | string | HTML pattern signature — tag + classes + key attributes. |
+| `scope` | enum | `project`, `user`, `global`. Scopes cascade: project → user → global. |
+| `examples` | array | HTML snippets and build references. Kept to last 10. |
+| `last_validated` | ISO 8601 or null | When the component key was last verified against the live DS. |
+
+### Confidence thresholds
+
+| Threshold | Meaning |
+|---|---|
+| ≥ 0.8 | Eligible for warm-cache use (skip DS search, validate key only) |
+| ≥ 0.5 | Used if no better match, shown in reports |
+| < 0.3 after 5 builds | Auto-expires (valid_until set) |
 
 ### Pattern states
 
-| State | Meaning | Effect on next run |
-|---|---|---|
-| `CANDIDATE` | Used 1–2 times with no corrections, or use_count reset by correction. | DS lookup runs but stored `component_key` is used as the expected answer. |
-| `VERIFIED` | Used ≥ 3 times with `correction_count = 0`. | DS lookup is skipped entirely — `component_key` is used directly. This is the main performance gain. |
-| `REJECTED` | User explicitly marked this mapping as wrong. | Never used. DS lookup runs and finds the component from scratch. |
-| `EXPIRED` | Component key is no longer valid (e.g. component deleted from the library). | Treated as a new pattern. |
+| State | Effect |
+|---|---|
+| `CANDIDATE` | DS lookup runs. Cached key is the expected answer. |
+| `VERIFIED` | DS lookup skipped. Key validated via import, then used directly. |
+| `REJECTED` | Never used. Fresh DS search runs. |
+| `EXPIRED` | Component key no longer valid. Treated as new pattern. |
 
-**Promotion is automatic:** when `use_count` reaches 3 and `correction_count` is 0, the MCP promotes the entry to `VERIFIED` on the next write.
+**Promotion:** `use_count` ≥ 3 with `correction_count` = 0 → auto-promote to VERIFIED, confidence raised to 0.8.
 
-**Demotion on correction:** when the user tells Claude a component was wrong, `correction_count` is incremented and the state is demoted from `VERIFIED` to `CANDIDATE`.
+**Demotion:** User correction → `correction_count` incremented, VERIFIED → CANDIDATE, confidence reduced.
+
+**Invalidation:** If `importComponentByKeyAsync(key)` fails or the target variant no longer exists, `valid_until` is set and the pattern is re-discovered from the live DS. The DS is always the source of truth — cache is acceleration, never authority.
+
+---
+
+## Configuration recipes
+
+A recipe records how a component was correctly configured. On warm builds, Mimic replays the recipe instead of re-inspecting the component's internal structure.
+
+```json
+{
+  "text_overrides": { "Text": "{from_html}", "Supporting text": "{from_html}" },
+  "hidden_slots": ["Icon leading", "Description"],
+  "badge_colors": { "Badge": "Success" },
+  "boolean_props": { "Back btn": false, "Badges": false }
+}
+```
+
+Recipes are invalidated when the component or variant changes in the DS.
+
+---
+
+## Gap tracker
+
+Tracks DS components that are missing — elements Mimic builds as primitives because no component exists.
+
+```json
+{
+  "status_badge": {
+    "id": "status_badge",
+    "description": "No DS component for status badges with semantic color variants",
+    "affected_elements": 6,
+    "first_seen": "2026-04-17",
+    "builds_affected": ["build-004", "build-005"],
+    "recommendation": "Add a Badge component with Error, Warning, Active, Pending colors",
+    "resolved": false
+  }
+}
+```
+
+When a new DS component fills the gap, `resolved` is set to `true` and Mimic surfaces it: "Your DS now has [component]. Using it where I previously used primitives."
+
+---
+
+## Catalog
+
+Cached DS inventory from searches. Used for warm-cache Phase 1.
+
+```json
+{
+  "componentSets": [
+    { "key": "...", "name": "Buttons/Button", "description": "...", "variants": [...] }
+  ],
+  "last_refreshed": "2026-04-18T02:00:00.000Z"
+}
+```
+
+Refreshed when the DS file's `lastModified` is newer than `last_refreshed`, or after 7 days.
 
 ---
 
 ## Explicit rule entry
 
-Each entry in `explicit_rules` records a structural DS insight: a gap (no component exists for a pattern), a substitution (a different component is being used as a stand-in), or a convention (a DS usage rule that should always be applied).
+Unchanged from V1. Records DS structural insights: gaps, substitutions, conventions.
 
 ```json
 {
@@ -82,82 +175,41 @@ Each entry in `explicit_rules` records a structural DS insight: a gap (no compon
   "state": "active",
   "substitution_key": "xyz789...",
   "substitution_name": "Badge",
-  "reason": "No chip component in DS — Badge used as nearest semantic equivalent",
+  "reason": "No chip component in DS — Badge used as nearest equivalent",
   "seen_count": 4,
   "first_seen": "2026-03-01T09:00:00.000Z",
-  "last_seen": "2026-04-13T12:00:00.000Z",
+  "last_seen": "2026-04-18T02:00:00.000Z",
   "dismissed": false,
   "notes": null
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `rule_key` | string | Same taxonomy key as pattern entries. Must match `category/name` format. |
-| `type` | enum | `gap`, `substitution`, or `convention`. See [rule types](#rule-types). |
-| `state` | enum | `active` or `resolved`. See [rule states](#rule-states). |
-| `substitution_key` | string or null | Component key used as a stand-in when type is `substitution`. |
-| `substitution_name` | string or null | Human-readable name of the substitution component. |
-| `reason` | string or null | Why this rule exists. Written by Claude during gap detection. Safe to edit. |
-| `seen_count` | number | How many runs encountered this pattern with no DS component. Drives escalation to a DS recommendation. |
-| `first_seen` | ISO 8601 string | When this gap was first detected. |
-| `last_seen` | ISO 8601 string | When this gap was most recently encountered. |
-| `dismissed` | boolean | If `true`, this rule is excluded from all future DS recommendations. Set to `true` if you have decided to leave the gap unresolved. |
-| `notes` | string or null | Free-text annotation. Safe to edit. |
-
-### Rule types
-
 | Type | Meaning |
 |---|---|
-| `gap` | No DS component exists for this pattern. Mimic AI builds from primitives or uses a substitution. |
-| `substitution` | No exact DS match exists, but a structurally similar component is being used instead. The `substitution_key` field holds the component used. |
-| `convention` | A DS usage rule discovered during a run (e.g. "always use the 'filled' variant for primary buttons, never 'solid'"). Applied automatically on future runs. |
-
-### Rule states
-
-| State | Meaning |
-|---|---|
-| `active` | Rule is in effect. Applied on every run. |
-| `resolved` | The DS situation changed (e.g. a component was added). On the next run, Mimic AI runs a fresh DS search for this pattern instead of applying the rule. If a component is found, the pattern gets a new `patterns` entry. If still not found, the rule returns to `active`. |
+| `gap` | No DS component exists. Built from primitives or substitution. |
+| `substitution` | Similar component used as stand-in. |
+| `convention` | DS usage rule (e.g. "always use filled variant for primary buttons"). |
 
 ---
 
-## DS recommendations
+## V1 → V2 migration
 
-When `seen_count` reaches 3 for a `gap` or `substitution` rule, Mimic AI surfaces it as a DS recommendation in the run report and the Phase 8 learning summary. This means the pattern appeared in 3 separate builds with no DS component — a strong signal that the DS may benefit from adding one.
+Automatic on first load. V1 patterns get defaults:
+- `confidence`: 0.8 (VERIFIED) or 0.5 (CANDIDATE)
+- `source`: `user_correction` (if correction_count > 0) or `auto_inferred`
+- `valid_until`: null
+- All other V2 fields: null or empty
 
-To permanently suppress a recommendation you have acknowledged and decided not to act on, set `"dismissed": true` on the rule entry.
+No data is lost. V1 files continue to work — they are upgraded transparently.
 
 ---
 
 ## Manual edits
 
-The knowledge file is safe to edit manually. Common reasons:
+Safe to edit. Common operations:
 
-- **Demote a VERIFIED entry you know is wrong:** set `"state": "CANDIDATE"` and `"correction_count": 1`.
-- **Remove a bad entry entirely:** delete the object from the `patterns` array.
-- **Inject a known component key:** add a `patterns` entry with `"state": "VERIFIED"` and the correct `component_key`. Mimic AI will use it on the next run without any DS lookup.
-- **Seed aliases for faster matching:** add known HTML labels to the `aliases` array of any entry. For example, if your team's HTML always uses `class="kpi-tile"` for metric cards, add `"kpi-tile"` to the `metric/kpi` entry's aliases. On the next run, that node resolves instantly with zero reads and no LLM classification.
-- **Dismiss a gap recommendation:** set `"dismissed": true` on the rule entry.
-- **Reset a gap's seen count after adding the missing component to your DS:** set `"seen_count": 0` and `"state": "resolved"` on the rule entry. On the next run, Mimic AI searches the DS fresh and, if it finds the new component, creates a pattern entry.
-- **Share knowledge across a team:** the file is plain JSON — commit it to your repository. Team members who pull it start with your accumulated mappings already in place.
-
----
-
-## Pattern key taxonomy
-
-Pattern keys follow the format `category/name`. Keys must come from the canonical taxonomy defined in `docs/mimic-ai.md` (Pattern key taxonomy section). Common examples:
-
-| Key | Meaning |
-|---|---|
-| `nav/top-bar` | Horizontal top navigation bar |
-| `nav/sidebar` | Vertical sidebar |
-| `metric/kpi` | KPI card |
-| `card/content` | General content card |
-| `table/row` | Data table row |
-| `form/button-primary` | Primary action button |
-| `label/badge` | Status or count badge |
-| `chart/bar` | Bar chart |
-| `layout/page-header` | Page-level header section |
-
-Do not invent keys outside the taxonomy — mismatched keys produce `key_warnings` in the write response and must be corrected immediately.
+- **Inject a known mapping:** Add a pattern with `"state": "VERIFIED"`, `"confidence": 0.9`, and the correct `component_key`. Used on next build without DS lookup.
+- **Add a configuration recipe:** Save the exact text overrides, hidden slots, and badge colors. Eliminates component inspection.
+- **Dismiss a gap:** Set `"resolved": true` on the gap entry, or `"dismissed": true` on the explicit rule.
+- **Reset after DS update:** Set `"valid_until": now` on stale patterns. Mimic re-discovers on next build.
+- **Share across a team:** Commit `ds-knowledge.json` to your repo. Team members start with your accumulated knowledge.
