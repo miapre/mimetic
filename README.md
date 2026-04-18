@@ -11,7 +11,7 @@ Mimic translates HTML into Figma using your published components and tokens. It 
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode&logoColor=white)](vscode:mcp/install?%7B%22name%22%3A%22mimic-ai%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40miapre%2Fmimic-ai%22%5D%7D)
 [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_MCP-24bfa5?logo=visualstudiocode&logoColor=white)](vscode-insiders:mcp/install?%7B%22name%22%3A%22mimic-ai%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40miapre%2Fmimic-ai%22%5D%7D)
 
-> **Not a Figma product.** Independent, open-source MCP server. Works with any MCP client.
+> **Not a Figma product.** Independent, open-source MCP server. Works with any MCP client — Claude Code, Cursor, VS Code, Windsurf, JetBrains.
 
 ---
 
@@ -21,21 +21,21 @@ Mimic translates HTML into Figma using your published components and tokens. It 
 
 ## How it learns
 
-Mimic maintains `ds-knowledge.json` — a local file that records how HTML patterns map to your DS components. Every build loads it, uses what's cached, and writes back what it discovered.
+Mimic keeps a local file (`ds-knowledge.json`) that records how HTML patterns map to your design system components. Each build loads what it knows, uses the cache, and saves what it discovered.
 
 | Build | What happens | DS lookups |
 |---|---|---|
-| **1st** | Inspects library for unknown patterns. Caches every mapping. | 3–5 |
-| **3rd** | Patterns used 3× without correction auto-promote to VERIFIED. | 1–2 |
-| **10th+** | All patterns verified. Variable IDs cached. Builds are nearly free. | 0–1 |
+| **1st** | Scans your library for matching components. Caches every mapping it finds. | 3–5 |
+| **3rd** | Patterns used 3 times without correction are promoted to VERIFIED — no more lookups for those. | 1–2 |
+| **10th+** | Everything verified. Variable IDs cached. Builds are nearly free. | 0–1 |
 
-**Your corrections teach it.** Tell Claude *"That's wrong — use Button/Primary, and remember it."* The mapping updates with high confidence and applies on every future build.
+**Your corrections teach it.** If Mimic picks the wrong component, tell it: *"That's wrong — use Button/Primary, and remember it."* The mapping updates immediately and applies on every future build.
 
-**Your DS evolves, Mimic notices.** New components, removed components, variant changes — detected at the start of every build. Stale cache entries are invalidated and re-discovered from the live DS.
+**Your DS evolves, Mimic notices.** New components, removed components, variant changes — detected at the start of every build. Stale cache entries are invalidated and re-discovered from the live DS. The design system is always the source of truth, never the cache.
 
-**Every build reports what it learned.** Patterns saved, patterns promoted, DS searches skipped, and gaps detected. Gap reports surface what your DS is missing — Mimic doubles as a DS audit tool.
+**Every build reports what it learned.** Patterns saved, patterns promoted, searches skipped, and gaps detected. Gap reports surface what your DS is missing — Mimic doubles as a design system audit tool.
 
-**The knowledge is yours.** Inspectable JSON on your machine. Nothing is sent anywhere.
+**The knowledge is yours.** Inspectable JSON on your machine. Nothing is sent anywhere. Share the file with your team if you want everyone to start with the same learned mappings.
 
 ---
 
@@ -57,33 +57,56 @@ Mimic maintains `ds-knowledge.json` — a local file that records how HTML patte
 
 ## Quick start
 
-> **Requires:** Node.js v20.6+, Figma desktop (not browser), Figma Professional plan or above (free plan can't publish libraries or bind variables).
+> **Before you begin:** You need [Node.js](https://nodejs.org/) v20.6 or later, the [Figma desktop app](https://www.figma.com/downloads/) (the browser version won't work), and a **Figma Professional plan or above** (the free plan can't publish component libraries, which Mimic needs).
 
-**1. Install:**
+### Step 1 — Install Mimic
+
+Open a terminal (on Mac: search for "Terminal" in Spotlight) and paste this command:
+
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/miapre/mimic-ai/main/install.sh)
 ```
-Clones the repo, installs dependencies, saves your Figma token, registers the MCP.
 
-**2. Install the Figma plugin:**
-Figma desktop → Plugins → Development → Import plugin from manifest → select `~/mimic-ai/plugin/manifest.json`
+The script downloads Mimic, installs what it needs, asks for your Figma token, and registers the tool. It takes about a minute.
 
-**3. Each session:**
+### Step 2 — Install the Figma plugin
+
+1. Open **Figma desktop**
+2. Go to **Plugins → Development → Import plugin from manifest…**
+3. Find the `mimic-ai` folder the script just created (usually in your home folder: `~/mimic-ai/plugin/`) and select `manifest.json`
+4. The plugin now appears under **Plugins → Development → Mimic AI**
+
+### Step 3 — Start Mimic (do this each session)
+
+Open a terminal and paste this:
+
 ```bash
-cd ~/mimic-ai && npm run bridge   # keep open
+cd ~/mimic-ai && npm run bridge
 ```
-In Figma: Plugins → Development → Mimic AI → Run. Badge shows **● ready**.
 
-**4. Enable your DS library** in the target file:
-Assets panel → Team library → toggle your DS **on**.
+Keep this terminal window open — it's the connection between your AI assistant and Figma.
 
-**Ready.** Ask your AI assistant to build something. Include a Figma link or describe the target.
+Then in **Figma desktop:** go to **Plugins → Development → Mimic AI → Run**. You'll see a small badge that says **● ready** — that means the connection is live.
+
+### Step 4 — Enable your design system
+
+Open the Figma file where you want to build. Then:
+
+1. Click the **book icon** in the left sidebar (Assets panel)
+2. Click the **library icon** at the top (looks like a grid of squares)
+3. Find your design system in the list and **toggle it on**
+
+You only need to do this once per file. Without it, Mimic can't find your components.
+
+### You're ready
+
+Ask your AI assistant to build something. Include a Figma link to the file and page, or describe where you want the output.
 
 ---
 
 ## Works with any MCP client
 
-Mimic speaks standard MCP over stdio. Add it to your client's config:
+Mimic uses MCP (Model Context Protocol), the open standard that connects AI assistants to external tools. Add it to your client's config:
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -124,7 +147,7 @@ Add to `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json` for glob
 <details>
 <summary><strong>VS Code (Copilot Chat)</strong></summary>
 
-Click the badge at the top of this README, or add to your VS Code settings:
+Click the VS Code install badge at the top of this README, or add to your VS Code settings:
 
 ```json
 {
@@ -175,7 +198,7 @@ Settings → Tools → AI Assistant → MCP Servers → Add:
 
 </details>
 
-All clients need the bridge running (`npm run bridge`) and the Figma plugin active. The MCP config just connects your AI assistant to Mimic's tool server.
+Regardless of which client you use, you still need the bridge running (Step 3) and the Figma plugin active. The config above just tells your AI assistant where to find Mimic's tools.
 
 ---
 
@@ -183,24 +206,30 @@ All clients need the bridge running (`npm run bridge`) and the Figma plugin acti
 <summary><strong>Figma setup details</strong></summary>
 
 ### Desktop app required
-The browser version doesn't work. The bridge connects to the plugin via WebSocket, which requires the desktop app. [Download](https://www.figma.com/downloads/)
+The browser version of Figma won't work — the bridge connects to the plugin over a local network connection that only the desktop app supports. [Download Figma desktop](https://www.figma.com/downloads/)
 
 ### Personal Access Token
-The bridge uses this to resolve published component keys via the Figma REST API.
+The bridge needs a Figma token to look up your published component keys. Think of it as a password that lets Mimic read (not write) your library metadata.
 
-1. Figma desktop → Profile → Settings → Personal access tokens
-2. Generate new token (read access is sufficient)
-3. Copy immediately — shown only once
-4. Paste when the install script asks
+1. Open Figma desktop → click your **profile picture** (top-left) → **Settings**
+2. Scroll to **Personal access tokens** → **Generate new token**
+3. Name it something like `mimic-ai`, set read access
+4. **Copy the token immediately** — Figma only shows it once
+5. Paste it when the install script asks
 
-### Publish your library
-Your DS must be a separate Figma file, published as a library. Assets panel → Team library → Publish. Re-publish after any component updates.
+### Publish your design system
+Your components and tokens need to be in a **separate Figma file**, published as a team library. If you haven't done this:
 
-### Enable in target file
-Publishing makes the library available. Enabling makes it accessible in a specific file. Assets panel → Team library → toggle on. Once per file.
+1. Open your design system file
+2. Click the **book icon** → **library icon** → **Publish**
 
-### Plan requirement
-Publishing libraries and using variables requires **Professional plan or above**. The free plan can create frames and text, but not insert components or bind tokens — the core features.
+Re-publish after adding or updating components — otherwise Mimic won't see the changes.
+
+### Enable the library in your target file
+Publishing makes the library available to your team. Enabling makes it usable in a specific file. You only need to do this once per file: Assets panel → Team library icon → toggle your DS on.
+
+### Figma plan
+Publishing component libraries and using design tokens (variables) requires a **Professional plan or above**. The free plan lets Mimic create basic frames and text, but it can't insert components or bind tokens — which is the whole point.
 
 </details>
 
@@ -209,31 +238,31 @@ Publishing libraries and using variables requires **Professional plan or above**
 ## How it works
 
 ```
-Claude Code → MCP server (mcp.js) → Bridge (bridge.js) → Figma Plugin → Canvas
+Your AI assistant → Mimic MCP server → Bridge → Figma Plugin → Your Figma file
 ```
 
-**Writes are unlimited.** Every frame, component, and token binding uses Figma's plugin channel — no rate limit.
+**Writes are unlimited.** Every frame Mimic creates, every component it inserts, every token it binds — these go through Figma's plugin channel, which has no rate limit.
 
-**Reads are limited.** Library inspection and design context draw from a daily quota (200 Professional, 600 Enterprise). Mimic minimizes reads, caches aggressively, and stops if the budget would be exceeded mid-build.
+**Reads are limited.** Inspecting library components and reading design context draw from a daily quota (200 on Professional, 600 on Enterprise). Mimic minimizes reads, caches aggressively, and stops if the budget would be exceeded mid-build.
 
-All variable bindings are real. Nodes use your actual design token variables — update a token in your library, re-publish, and the nodes update.
+All token bindings are real — nodes use your actual design system variables. Update a token in your library, re-publish, and the Figma nodes update automatically.
 
 ---
 
 ## Governance
 
-Every build follows 6 phases — each owned by a role that acts as a quality gate. 34 rules govern every decision.
+Every build follows 6 phases, each owned by a role that acts as a quality gate. 34 rules govern every decision.
 
 | Phase | Owner | Gate |
 |---|---|---|
 | **0. Target** | Platform Architect | File, page, artboard placement confirmed |
-| **1. Discovery** | DS Integration Engineer | Component map: every HTML element → DS component or primitive + reason |
+| **1. Discovery** | DS Integration Engineer | Component map: every HTML element → DS component or primitive with reason |
 | **2. Inventory** | DS Integration Engineer | All text styles, color variables, spacing tokens imported |
 | **3. Build** | Build Engineer | Per-node: auto-layout, DS text style, DS color variable, DS spacing variable, component fully configured |
 | **4. QA** | Design QA | Screenshot comparison, content fidelity, no placeholder text, no raw values |
 | **5. Report** | Learning Engineer + Product QA | Build report, patterns learned, DS gaps, provenance |
 
-See [`GOLDEN_RULES.md`](GOLDEN_RULES.md), [`ROLES.md`](ROLES.md), and [`VOICE_AND_TONE.md`](VOICE_AND_TONE.md).
+Full specification: [`GOLDEN_RULES.md`](GOLDEN_RULES.md), [`ROLES.md`](ROLES.md), [`VOICE_AND_TONE.md`](VOICE_AND_TONE.md).
 
 ---
 
@@ -306,11 +335,11 @@ See [`GOLDEN_RULES.md`](GOLDEN_RULES.md), [`ROLES.md`](ROLES.md), and [`VOICE_AN
 ## Project structure
 
 ```
-mcp.js              — MCP server, exposes tools to Claude
-bridge.js           — HTTP/WebSocket bridge to Figma plugin
+mcp.js              — MCP server, exposes tools to your AI assistant
+bridge.js           — Local bridge between the MCP server and Figma plugin
 plugin/
-  code.js           — Figma plugin sandbox
-  ui.html           — Plugin UI, WebSocket relay
+  code.js           — Figma plugin (runs inside Figma's sandbox)
+  ui.html           — Plugin UI and connection indicator
   manifest.json     — Plugin manifest
 
 internal/
@@ -321,12 +350,12 @@ internal/
   parsing/          — HTML parsing
   ds-knowledge/     — DS inventory extraction
 
-CLAUDE.md           — Build protocol, phased lifecycle
+CLAUDE.md           — Build protocol and phased lifecycle
 GOLDEN_RULES.md     — 34 rules governing every build
 ROLES.md            — 6 roles operating as build gates
 VOICE_AND_TONE.md   — Identity, voice principles, output formats
 docs/
-  GUIDE.md          — Setup guide, DS structure, build patterns
+  GUIDE.md          — Full setup guide, DS structure, build patterns
   knowledge-schema.md — Knowledge file schema reference
 ```
 
@@ -334,19 +363,19 @@ docs/
 
 ## Privacy
 
-Runs entirely on your machine. No design data, component names, token values, or HTML content is sent to any external server. The only outbound call is to the Figma REST API to resolve published component keys — the same call Figma's own plugins make.
+Runs entirely on your machine. No design data, component names, token values, or HTML content is sent to any external server. The only outbound call is to the Figma REST API to look up published component keys — the same call Figma's own plugins make.
 
 ---
 
 ## Troubleshooting
 
-**"Figma plugin is not connected"** → Figma desktop → Plugins → Development → Mimic AI → Run.
+**"Figma plugin is not connected"** → Open Figma desktop → Plugins → Development → Mimic AI → Run.
 
-**"Library import failed"** → DS library not enabled in target file. Assets → Team library → toggle on.
+**"Library import failed"** → Your design system isn't enabled in the target file. Open the Assets panel → Team library → toggle it on.
 
-**"No component key"** → Component not published. DS file → Assets → Team library → Publish.
+**"No component key"** → The component isn't published. Open your DS file → Assets → Team library → Publish.
 
-**"object is not extensible"** → Frame-only property on a text node. See [docs/GUIDE.md](docs/GUIDE.md#troubleshooting).
+**"object is not extensible"** → A frame-only property was applied to a text node. See [docs/GUIDE.md](docs/GUIDE.md#troubleshooting) for details.
 
 ---
 
