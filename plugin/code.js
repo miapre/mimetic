@@ -23,6 +23,7 @@ var sessionDefaults = {
   textFillStyleKey: null,   // Applied to text when no fillStyleKey/fillVariable/fills provided
   frameFillStyleKey: null,  // NOT auto-applied — frames often have no fill intentionally
   strokeStyleKey: null,     // NOT auto-applied
+  fontFamily: 'Inter',      // Default font family — overridden via set_session_defaults
 };
 
 async function getVariableByPath(path) {
@@ -42,16 +43,23 @@ async function getVariableByPath(path) {
         for (const col of collections) {
           const libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
           for (const lv of libVars) {
-            if (lv.name === path) {
+            // Match exact name, or match after stripping parenthetical suffixes
+            // e.g., "Colors/Text/text-primary (900)" matches query "Colors/Text/text-primary (900)"
+            // AND "Colors/Text/text-primary" matches "Colors/Text/text-primary (900)"
+            const nameBase = lv.name.replace(/\s*\([^)]*\)\s*$/, '');
+            const pathBase = path.replace(/\s*\([^)]*\)\s*$/, '');
+            if (lv.name === path || nameBase === path || lv.name === pathBase || nameBase === pathBase) {
               const imported = await figma.variables.importVariableByKeyAsync(lv.key);
               variableCache.set(path, imported);
+              // Also cache the base name so future lookups without parenthetical work
+              if (nameBase !== path) variableCache.set(nameBase, imported);
               return imported;
             }
           }
         }
         return null;
       })(),
-      new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
+      new Promise((resolve) => setTimeout(() => resolve(null), 30000)),
     ]);
     if (result) return result;
   } catch (_) {
@@ -141,7 +149,7 @@ async function applyColorStyle(node, target, styleKey) {
   try {
     const imported = await Promise.race([
       figma.importStyleByKeyAsync(styleKey),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('color style timeout')), 8000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('color style timeout')), 20000)),
     ]);
     if (imported && imported.id) {
       styleCache.set(styleKey, imported.id); // cache for future use
@@ -182,7 +190,9 @@ function findTextNode(root, name) {
   return null;
 }
 
-// Pre-load Inter font weights used by the design system.
+// Font weight → style mapping. Works for Inter and most standard font families.
+// Fonts with non-standard style names (e.g., "SemiBold" vs "Semi Bold") may need
+// the DS to use text styles instead of raw font weights.
 const FONT_STYLES = {
   400: 'Regular',
   500: 'Medium',
@@ -191,7 +201,8 @@ const FONT_STYLES = {
 };
 
 async function loadFont(weight) {
-  await figma.loadFontAsync({ family: 'Inter', style: FONT_STYLES[weight] || 'Regular' });
+  var family = 'Inter';
+  await figma.loadFontAsync({ family: family, style: FONT_STYLES[weight] || 'Regular' });
 }
 
 // ---------------------------------------------------------------------------
@@ -202,8 +213,9 @@ async function handleInsertComponent(params) {
   let component = null;
 
   // Import timeout — prevents indefinite hangs when Figma API is unresponsive.
-  // Normal imports complete in <2s. 15s is generous but bounded.
-  const IMPORT_TIMEOUT_MS = 15000;
+  // Normal imports complete in <2s. Cold start with large libraries (3+ DSs enabled)
+  // can take 30-45s on first import. 60s covers the worst case.
+  const IMPORT_TIMEOUT_MS = 60000;
 
   function withTimeout(promise, label) {
     return Promise.race([
@@ -229,25 +241,50 @@ async function handleInsertComponent(params) {
   //    Each attempt is individually time-bounded so a hung API call cannot block the build.
   if (!component && params.componentKey) {
     let importError = null;
+
+    // Progressive notifications so the user never sees a silent hang (Product QA requirement)
+    const notify5 = setTimeout(() => {
+      figma.notify('Importing from library — first load may take a moment...', { timeout: 10000 });
+    }, 5000);
+    const notify15 = setTimeout(() => {
+      figma.notify('Still importing — large libraries take longer on first run.', { timeout: 15000 });
+    }, 15000);
+    const notify30 = setTimeout(() => {
+      figma.notify('This is taking longer than usual. If this persists, check that the library is published and enabled.', { timeout: 20000 });
+    }, 30000);
+
+    // Race both import methods in parallel — whichever resolves first wins.
+    // This keeps total import time to max(60s) instead of 60s + 60s sequential.
     try {
-      // Try component import first (most common)
-      component = await withTimeout(
-        figma.importComponentByKeyAsync(params.componentKey),
-        'importComponentByKeyAsync'
+      var raceResult = await withTimeout(
+        new Promise(function(resolve, reject) {
+          var settled = false;
+          // Attempt 1: import as individual component
+          figma.importComponentByKeyAsync(params.componentKey).then(function(comp) {
+            if (!settled) { settled = true; resolve({ type: 'component', value: comp }); }
+          }).catch(function() {});
+          // Attempt 2: import as component set
+          figma.importComponentSetByKeyAsync(params.componentKey).then(function(compSet) {
+            if (!settled) { settled = true; resolve({ type: 'set', value: compSet }); }
+          }).catch(function() {});
+          // If neither resolves, the withTimeout wrapper will reject
+          setTimeout(function() { if (!settled) reject(new Error('neither import resolved')); }, 55000);
+        }),
+        'parallel component import'
       );
-    } catch (e1) {
-      // Component import failed — try as component SET key
-      try {
-        const compSet = await withTimeout(
-          figma.importComponentSetByKeyAsync(params.componentKey),
-          'importComponentSetByKeyAsync'
-        );
-        if (compSet) component = compSet.defaultVariant || compSet.children[0];
-      } catch (e2) {
-        // Both failed — record the errors for diagnostics
-        importError = `Component import: ${e1.message}. Set import: ${e2.message}`;
+      if (raceResult.type === 'component') {
+        component = raceResult.value;
+      } else if (raceResult.type === 'set' && raceResult.value) {
+        component = raceResult.value.defaultVariant || raceResult.value.children[0];
       }
+    } catch (e) {
+      importError = 'Component import: ' + e.message;
     }
+
+    // Clear all pending notifications
+    clearTimeout(notify5);
+    clearTimeout(notify15);
+    clearTimeout(notify30);
 
     // If import failed, store error for the final error message
     if (!component && importError) {
@@ -297,7 +334,23 @@ async function handleInsertComponent(params) {
     figma.currentPage.appendChild(instance);
   }
 
+  // Defensive: when inserted into an auto-layout parent, set the component to HUG
+  // on both axes so it sizes to content, not its default fixed dimensions.
+  // Without this, fixed-width components in horizontal rows overlap when their
+  // combined widths exceed the parent. The orchestrator can override with explicit
+  // width/layoutSizingHorizontal params after insertion. (Rule 35/36)
+  if (instanceParentRef) {
+    const parentNode = figma.getNodeById(instanceParentRef);
+    if (parentNode && parentNode.layoutMode && parentNode.layoutMode !== 'NONE') {
+      try {
+        instance.layoutSizingHorizontal = 'HUG';
+        instance.layoutSizingVertical = 'HUG';
+      } catch (_) { /* some instances may not support layout sizing */ }
+    }
+  }
+
   // Layout sizing within parent (must be set AFTER appendChild)
+  // Explicit params override the HUG defaults above.
   applyLayoutSizing(instance, params);
 
   if (params.x !== undefined) instance.x = params.x;
@@ -336,8 +389,10 @@ async function handleCreateFrame(params) {
     if (params.paddingRight  !== undefined) await applySpacing(frame, 'paddingRight',  params.paddingRight);
     if (params.paddingBottom !== undefined) await applySpacing(frame, 'paddingBottom', params.paddingBottom);
     if (params.paddingLeft   !== undefined) await applySpacing(frame, 'paddingLeft',   params.paddingLeft);
-    if (params.primaryAxisSizingMode)  frame.primaryAxisSizingMode  = params.primaryAxisSizingMode;
-    if (params.counterAxisSizingMode)  frame.counterAxisSizingMode  = params.counterAxisSizingMode;
+    // Default both axes to HUG (AUTO) — Rule 5 says fixed dimensions on content
+    // frames is a violation. Explicit params override these defaults.
+    frame.primaryAxisSizingMode  = params.primaryAxisSizingMode  || 'AUTO';
+    frame.counterAxisSizingMode  = params.counterAxisSizingMode  || 'AUTO';
     if (params.primaryAxisAlignItems)  frame.primaryAxisAlignItems  = params.primaryAxisAlignItems;
     if (params.counterAxisAlignItems)  frame.counterAxisAlignItems  = params.counterAxisAlignItems;
   }
@@ -823,6 +878,9 @@ async function handleSetSessionDefaults(params) {
     } catch (e) {
       return { ok: false, error: 'Failed to import textFillStyleKey: ' + e.message };
     }
+  }
+  if (params.fontFamily) {
+    sessionDefaults.fontFamily = params.fontFamily;
   }
   return { ok: true, sessionDefaults: sessionDefaults };
 }
@@ -1646,7 +1704,7 @@ async function applyTextStyle(node, styleIdOrKey) {
   try {
     const imported = await Promise.race([
       figma.importStyleByKeyAsync(key),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('style import timeout')), 8000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('style import timeout')), 20000)),
     ]);
     if (imported && imported.id) {
       node.textStyleId = imported.id;
@@ -2102,6 +2160,8 @@ async function handleSetPrototypeStart(params) {
 
 // Preload DS styles — imports a batch of style keys sequentially and caches their IDs.
 // Call ONCE at the start of a build to avoid import queue congestion during rendering.
+// Sequential is safe — the bridge timeout for preload_styles is set high enough (300s)
+// to accommodate large batches on cold start.
 async function handlePreloadStyles(params) {
   const keys = params.keys || [];
   const results = {};
@@ -2113,7 +2173,7 @@ async function handlePreloadStyles(params) {
     try {
       const imported = await Promise.race([
         figma.importStyleByKeyAsync(key),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
+        new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 30000); }),
       ]);
       if (imported && imported.id) {
         styleCache.set(key, imported.id);
@@ -2132,10 +2192,59 @@ async function handlePreloadStyles(params) {
   return { loaded, failed, total: keys.length, results };
 }
 
+// Preload DS variables — walks library collections once and imports all variables
+// matching the given path prefixes. Call at build start alongside preload_styles
+// to warm the variable cache and avoid per-path timeouts during build.
+// params: { prefixes: ["Colors", "spacing", "radius"] }
+async function handlePreloadVariables(params) {
+  const prefixes = params.prefixes || [];
+  const matchAll = prefixes.length === 0;
+  let loaded = 0;
+  let failed = 0;
+  let collectionsWalked = 0;
+
+  try {
+    const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+    for (const col of collections) {
+      collectionsWalked++;
+      let libVars;
+      try {
+        libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
+      } catch (_) { continue; }
+
+      for (const lv of libVars) {
+        // Skip if already cached
+        if (variableCache && variableCache.has(lv.name)) continue;
+
+        // Check prefix match
+        const matches = matchAll || prefixes.some(p => lv.name.startsWith(p));
+        if (!matches) continue;
+
+        try {
+          const imported = await figma.variables.importVariableByKeyAsync(lv.key);
+          if (!variableCache) {
+            const vars = await figma.variables.getLocalVariablesAsync();
+            variableCache = new Map(vars.map(v => [v.name, v]));
+          }
+          variableCache.set(lv.name, imported);
+          loaded++;
+        } catch (_) {
+          failed++;
+        }
+      }
+    }
+  } catch (e) {
+    return { loaded, failed, total: loaded + failed, collectionsWalked, error: e.message };
+  }
+
+  return { loaded, failed, total: loaded + failed, collectionsWalked };
+}
+
 // ---------------------------------------------------------------------------
 
 const HANDLERS = {
   preload_styles:     handlePreloadStyles,
+  preload_variables:  handlePreloadVariables,
   insert_component:   handleInsertComponent,
   debug_variables:    handleDebugVariables,
   debug_components:   handleDebugComponents,

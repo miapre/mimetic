@@ -3,6 +3,13 @@
   "mcpName": "io.github.miapre/mimic-ai",
   "version": "1.1.4",
   "description": "Mimic AI — MCP server that translates HTML into Figma using your design system's real components and tokens",
+  "author": "miapre",
+  "license": "MIT",
+  "homepage": "https://github.com/miapre/mimic-ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miapre/mimic-ai.git"
+  },
   "type": "module",
   "scripts": {
     "bridge": "node --env-file=.env bridge.js",

@@ -301,3 +301,24 @@ Before using any cached match:
 A stale cache entry that silently resolves to the wrong component is the most dangerous failure mode. Validation costs one API call per unique component type — negligible compared to the cost of a wrong build.
 
 This rule takes absolute precedence over Rule 22 (efficiency). Correctness is never traded for speed.
+
+## 35. Sequential component imports
+
+Component imports (`insert_component`) must be called **one at a time, sequentially**. Never send multiple insert_component calls in parallel — the Figma plugin is single-threaded and concurrent imports queue internally. If the queue depth exceeds the bridge timeout, all pending imports fail and the plugin's import pipeline jams (requires plugin restart to clear).
+
+**Safe pattern:** import → wait for response → import next.
+**Unsafe pattern:** fire 6 imports simultaneously → all timeout → plugin jammed.
+
+This applies to any operation that triggers `importComponentByKeyAsync` or `importComponentSetByKeyAsync` in the plugin. Style preloading (`preload_styles`) uses controlled concurrency internally and is safe to call with large batches.
+
+## 36. No overlapping components
+
+DS components inserted into auto-layout parents must never overlap. The plugin automatically sets inserted components to HUG on both axes (sizing to their content, not their default fixed dimensions). This prevents the most common overlap scenario: multiple fixed-width components in a horizontal row whose combined widths exceed the parent.
+
+After insertion, the orchestrator must set explicit widths where the layout requires it:
+- **Table rows:** Set the primary data column (usually Name) to `layoutSizingHorizontal: FILL`. Other columns to fixed widths matching the header cell widths.
+- **Button groups / form actions:** Leave as HUG (buttons size to their text content).
+- **Filter bars:** Use a spacer frame with `layoutGrow: 1` to push elements apart.
+
+If a component appears clipped or collapsed after insertion, check that HUG is appropriate for that component. Some components (e.g., Table header cell, Table filters) may need explicit width or FILL to render correctly.
+

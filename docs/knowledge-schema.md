@@ -212,4 +212,4 @@ Safe to edit. Common operations:
 - **Add a configuration recipe:** Save the exact text overrides, hidden slots, and badge colors. Eliminates component inspection.
 - **Dismiss a gap:** Set `"resolved": true` on the gap entry, or `"dismissed": true` on the explicit rule.
 - **Reset after DS update:** Set `"valid_until": now` on stale patterns. Mimic re-discovers on next build.
-- **Share across a team:** Commit `ds-knowledge.json` to your repo. Team members start with your accumulated knowledge.
+- **Share across a team:** Copy `ds-knowledge.json` into your team's shared repo or Slack channel. Team members place it at the root of their Mimic installation to start with your accumulated knowledge. Note: the file is gitignored by default in the Mimic repo itself — this is about sharing it in *your project's* repo if you choose to.

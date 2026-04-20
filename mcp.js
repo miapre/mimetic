@@ -1129,18 +1129,45 @@ const TOOLS = [
   },
 
   {
+    name: 'figma_preload_variables',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description:
+      'Batch import DS variables into the plugin cache. ' +
+      'Call at build start alongside preload_styles. Walks all library collections once and imports ' +
+      'variables matching the given path prefixes (e.g., "Colors", "spacing", "radius"). ' +
+      'Without preloading, each variable resolves via a full library walk with a 30-second timeout.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prefixes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Variable path prefixes to import (e.g., ["Colors", "spacing", "radius"]). Empty array imports all.',
+        },
+      },
+      required: ['prefixes'],
+    },
+  },
+
+  {
     name: 'figma_set_session_defaults',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       'Set session-level defaults for DS compliance. Call once at build start after preload_styles. ' +
       'textFillStyleKey sets the default fill for all text nodes that have no explicit fill — ' +
-      'prevents raw #000000 black. Pass the DS text-primary color style key.',
+      'prevents raw #000000 black. Pass the DS text-primary color style key. ' +
+      'fontFamily sets the default font family for all text nodes (default: "Inter"). ' +
+      'Set this if your DS uses a different font (e.g., "Roboto", "SF Pro").',
     inputSchema: {
       type: 'object',
       properties: {
         textFillStyleKey: {
           type: 'string',
           description: 'DS color style key for text-primary (default text fill).',
+        },
+        fontFamily: {
+          type: 'string',
+          description: 'Default font family for text nodes (e.g., "Inter", "Roboto", "SF Pro"). Defaults to "Inter" if not set.',
         },
       },
       required: ['textFillStyleKey'],
@@ -1335,6 +1362,7 @@ const TOOLS = [
 // All tools in this set pass params directly to the bridge.
 // The bridge type is derived by stripping the "figma_" prefix.
 const DIRECT_PASS = new Set([
+  'figma_preload_variables',
   'figma_create_frame',
   'figma_create_text',
   'figma_create_rectangle',

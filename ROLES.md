@@ -39,11 +39,15 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 - Variable mode requirements identified and documented (which collection, which mode — e.g., "Colors collection, Light mode")
 - Phase transition confirmation: explicitly state "Phase 0 complete. Proceeding to Phase 1: DS Discovery." This creates a visible paper trail that makes skipping phases visible.
 
-**Always-on boundary check (fires on every file write, not just push):**
-- Before ANY file is written inside the Mimic AI directory, verify: does this content contain DS-specific keys, user paths, or project-specific data? If yes, it MUST go to a gitignored path (`mimic/`, `internal/builds/`, `internal/learning/`). If it's tool-level and generic, it can go in the committed tree.
-- Style keys, component keys, variable keys, user file paths, project names — all belong in user's local knowledge layer, never in committed source.
-- Every golden rule, role definition, and protocol document must pass the "stranger test": would a user with a completely different DS understand this without modification?
-- **Owns `.gitignore`:** Ensures local DS knowledge, build artifacts, and reports never reach GitHub.
+**Always-on boundary check (fires on every file write AND every edit to a committed file):**
+- The **stranger test** applies to ALL content in the committed tree — new files, edits to existing files, and additions to existing files: would a user cloning this repo — with a completely different DS, no relationship to the tool creator — find this content useful and understandable? If not, it does not belong in a committed file.
+- **New files:** apply the stranger test before choosing a path. Internal content → gitignored path. Tool-level content → committed tree.
+- **Edits to committed files:** every addition must pass the stranger test independently. Adding internal content (creator workflows, internal strategy, internal roles, runtime-only references) to a public file is a boundary violation even if the file itself is correctly placed.
+- **DS-specific data** (style keys, component keys, variable keys, user file paths, project names) → gitignored paths (`mimic/`, `internal/builds/`, `internal/learning/`)
+- **Runtime artifacts** (build reports, diagnostics, generated knowledge) → gitignored paths (`mimic/reports/`, `internal/diagnostics/`)
+- **Owns `.gitignore`:** Ensures local knowledge, build artifacts, and runtime data never reach GitHub.
+- **When uncertain, default to gitignored.** It's easier to promote content to the public tree than to retract something that shouldn't have been committed.
+- **Post-edit audit:** After any session that modifies committed files, verify that no internal content was introduced. This catches cases where the boundary check was missed during rapid iteration.
 
 **Ongoing architecture checks:**
 - Is the architecture DS-agnostic? Would this work for a user with a different DS?
