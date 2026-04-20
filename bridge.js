@@ -82,9 +82,11 @@ function nextId() {
 
 // Per-instruction timeout (ms). Component imports may take longer due to library fetching.
 const TIMEOUT_BY_TYPE = {
-  insert_component: 45_000,    // Plugin has internal 15s per attempt × 2 + scan
-  replace_component: 45_000,
-  swap_main_component: 45_000,
+  insert_component: 90_000,     // Plugin has internal 60s per attempt. Bridge must exceed plugin timeout.
+  replace_component: 90_000,
+  swap_main_component: 90_000,
+  preload_styles: 300_000,      // Sequential import of N keys × 30s each. 300s covers ~10 keys on cold start.
+  preload_variables: 300_000,   // Library collection walk + batch import. Can be slow with large DSs.
 };
 const DEFAULT_TIMEOUT = 120_000;
 

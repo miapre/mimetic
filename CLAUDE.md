@@ -22,7 +22,7 @@ Public-facing tool (GitHub). Must be DS-agnostic — works with ANY design syste
 
 **Rule:** If a piece of information only makes sense for one specific DS, it goes in memory, not here.
 
-**File placement rule:** Before creating ANY file, ask: "Would a public GitHub user need this?" If no, it goes in a gitignored path (`mimic/`, `internal/builds/`, `internal/learning/`). If yes, it goes in the committed tree. The Platform Architect owns this check — it must fire on every file creation, not just builds.
+**File placement rule:** Before creating ANY file OR editing ANY committed file, apply the stranger test: "Would a user cloning this repo — with a different DS, no relationship to the creator — find this content useful?" New files with internal content → gitignored path (`mimic/`, `internal/`). Additions to committed files must also pass — adding internal content to a public file is a boundary violation. The Platform Architect owns this check — it fires on every file creation AND every edit to committed files. When uncertain, default to gitignored. After any session that modifies committed files, verify nothing internal was introduced.
 
 ---
 
@@ -107,7 +107,7 @@ Each role evaluates and scores — iterate until all roles reach 10/10.
 
 ## Golden Rules
 
-**Authoritative source:** `GOLDEN_RULES.md` (34 rules).
+**Authoritative source:** `GOLDEN_RULES.md` (36 rules).
 Read it at the start of every session that involves building. Never violate any rule.
 
 ---
@@ -117,7 +117,7 @@ Read it at the start of every session that involves building. Never violate any 
 The phased gate model (above) is the canonical build protocol. Below are execution-level details for each phase.
 
 ### Phase 0–2 (Pre-build)
-1. Discover the target DS: read `ds-knowledge-normalized.json` for available styles, components, variables
+1. Discover the target DS: read the local DS knowledge cache (generated at runtime — see `docs/knowledge-schema.md`) for available styles, components, variables
 2. Search for DS components matching HTML elements (Phase 1). Produce component map.
 3. Import all needed text styles and color variables (Phase 2). Map variable categories to node types.
 4. If using the bridge: call `preload_styles` and `set_session_defaults` for batch efficiency
@@ -145,7 +145,7 @@ The phased gate model (above) is the canonical build protocol. Below are executi
 
 ## Multi-Role Deliberation Framework
 
-**Role definitions:** `ROLES.md` (6 roles, phased gate model, coverage matrix against all 34 golden rules).
+**Role definitions:** `ROLES.md` (6 roles, phased gate model, coverage matrix against all 36 golden rules).
 
 When invoked with a prompt like:
 > "As [role1], [role2], ..., come up with a framework to [goal]..."
@@ -170,11 +170,10 @@ bridge.js       — HTTP/WebSocket bridge between MCP and Figma plugin
 plugin/code.js  — Figma plugin sandbox, executes instructions
 plugin/ui.html  — Plugin UI, WebSocket relay to bridge
 
-internal/
-  ds-knowledge/           — Normalized DS inventory (components, styles, variables)
+internal/                           (committed code — runtime data dirs are gitignored)
   resolution/             — Component insertion, icon resolution
   rendering/              — DS reinterpretation (CSS → DS style mapping), Puppeteer rendering
-  learning/               — Build completion, knowledge persistence
+  learning/               — Build completion, knowledge persistence (*.js committed; *.json/*.md runtime)
   layout/                 — Layout tree building, computed style extraction
   execution/              — Automated pipeline execution (experimental, not canonical)
   parsing/                — HTML parsing

@@ -15,7 +15,7 @@ Mimic translates HTML into Figma using your published components and tokens. It 
 
 ---
 
-<!-- TODO: Demo GIF — screen recording of a real build, ~30–60s, showing DS components being inserted and the learning summary at the end. -->
+*Demo coming soon — a screen recording showing DS components being inserted in real time and the learning summary at the end.*
 
 ---
 
@@ -25,9 +25,9 @@ Mimic keeps a local file (`ds-knowledge.json`) that records how HTML patterns ma
 
 | Build | What happens | DS lookups |
 |---|---|---|
-| **1st** | Scans your library for matching components. Caches every mapping it finds. | 3–5 |
-| **3rd** | Patterns used 3 times without correction are promoted to VERIFIED — no more lookups for those. | 1–2 |
-| **10th+** | Everything verified. Variable IDs cached. Builds are nearly free. | 0–1 |
+| **1st** | Scans your library for matching components. Caches every mapping it finds. | Depends on DS size and screen complexity |
+| **3rd** | Patterns used 3 times without correction are promoted to VERIFIED — skipped on future builds. | Fewer — verified patterns skip lookup |
+| **10th+** | Most patterns verified. Variable IDs cached. Builds are nearly instant. | New patterns only |
 
 **Your corrections teach it.** If Mimic picks the wrong component, tell it: *"That's wrong — use Button/Primary, and remember it."* The mapping updates immediately and applies on every future build.
 
@@ -88,6 +88,8 @@ Keep this terminal window open — it's the connection between your AI assistant
 
 Then in **Figma desktop:** go to **Plugins → Development → Mimic AI → Run**. You'll see a small badge that says **● ready** — that means the connection is live.
 
+**Verify the connection.** Ask your AI assistant: *"Check mimic status."* You should see bridge connected, plugin running, and your DS libraries listed. If anything is missing, fix it before building.
+
 ### Step 4 — Enable your design system
 
 Open the Figma file where you want to build. Then:
@@ -106,7 +108,7 @@ Ask your AI assistant to build something. Include a Figma link to the file and p
 
 ## Works with any MCP client
 
-Mimic uses MCP (Model Context Protocol), the open standard that connects AI assistants to external tools. Add it to your client's config:
+Mimic uses MCP (Model Context Protocol), the open standard that connects AI assistants to external tools. The build protocol, voice, and learning pipeline are optimized for **Claude Code** — other MCP clients can create and edit Figma, but may not follow the full governance lifecycle or produce learning reports. Add it to your client's config:
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -251,7 +253,7 @@ All token bindings are real — nodes use your actual design system variables. U
 
 ## Governance
 
-Every build follows 6 phases, each owned by a role that acts as a quality gate. 34 rules govern every decision.
+Every build follows 6 phases, each owned by a role that acts as a quality gate. 36 rules govern every decision.
 
 | Phase | Owner | Gate |
 |---|---|---|
@@ -346,12 +348,11 @@ internal/
   rendering/        — URL rendering, input resolution
   resolution/       — Component matching, icon resolution
   layout/           — Layout tree builder, direction detection
-  learning/         — Build reports, knowledge persistence
+  learning/         — Build completion, knowledge persistence
   parsing/          — HTML parsing
-  ds-knowledge/     — DS inventory extraction
 
 CLAUDE.md           — Build protocol and phased lifecycle
-GOLDEN_RULES.md     — 34 rules governing every build
+GOLDEN_RULES.md     — 36 rules governing every build
 ROLES.md            — 6 roles operating as build gates
 VOICE_AND_TONE.md   — Identity, voice principles, output formats
 docs/
@@ -369,13 +370,23 @@ Runs entirely on your machine. No design data, component names, token values, or
 
 ## Troubleshooting
 
-**"Figma plugin is not connected"** → Open Figma desktop → Plugins → Development → Mimic AI → Run.
+**"Figma plugin is not connected"** → Open Figma desktop → Plugins → Development → Mimic AI → Run. The plugin runs per file — if you switch to a different Figma file, you need to run the plugin again in that file.
 
 **"Library import failed"** → Your design system isn't enabled in the target file. Open the Assets panel → Team library → toggle it on.
 
 **"No component key"** → The component isn't published. Open your DS file → Assets → Team library → Publish.
 
 **"object is not extensible"** → A frame-only property was applied to a text node. See [docs/GUIDE.md](docs/GUIDE.md#troubleshooting) for details.
+
+---
+
+## Known constraints
+
+- **Figma Professional plan required.** The free plan can't publish component libraries, which Mimic needs to import your DS components.
+- **Community libraries have limited support.** Components from community libraries (ones you didn't publish yourself, like Material 3 Design Kit) may fail to import. For best results, use a team library you own.
+- **First-build font caching.** If text styles don't apply on the very first build, it's because Figma hasn't cached the font data yet. Re-run the build — the second attempt will succeed.
+- **npx mode doesn't support library imports.** The one-click `npx -y @miapre/mimic-ai` install doesn't set a `FIGMA_ACCESS_TOKEN`, which is needed for importing components from team libraries. Use the full installer script for team library support.
+- **Governance is Claude-optimized.** The 36 rules, phased lifecycle, and learning reports are followed by Claude Code. Other MCP clients will have the tools but may not follow the protocol unless their LLM is instructed to read `CLAUDE.md`.
 
 ---
 

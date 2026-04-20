@@ -707,13 +707,13 @@ Example:
 
 ### 7.2 What happens
 
-1. Claude checks memory for variable names, component keys, and layout rules
-2. Claude writes a Python build script
-3. Claude executes the script — each function call sends one instruction to the bridge
-4. The bridge forwards the instruction to the Figma plugin
-5. The plugin creates the element, binds the variables, and returns the new node ID
-6. Claude uses that ID as the parent for the next element
-7. You watch the page build in real time in Figma
+1. Claude reads your DS knowledge (`mimic_ai_knowledge_read`) for cached patterns and learned rules
+2. Claude calls MCP tools directly — `figma_create_frame`, `figma_insert_component`, `figma_create_text`, etc.
+3. Each tool call sends one instruction to the bridge, which forwards it to the Figma plugin
+4. The plugin creates the element, binds DS variables, and returns the new node ID
+5. Claude uses that ID as the parent for the next element
+6. You watch the page build in real time in Figma
+7. After the build, Claude writes what it learned (`mimic_ai_knowledge_write`)
 
 ---
 
@@ -759,9 +759,9 @@ Claude will use the Figma MCP to read your library and return a structured list 
 
 ---
 
-## The build script pattern
+## The bridge HTTP API (advanced)
 
-Every build script Claude generates follows this same structure:
+The standard path is to let your AI assistant call MCP tools directly. But if you want to script builds manually (e.g., for automation or testing), the bridge exposes a simple HTTP API. Here's the pattern:
 
 ```python
 import urllib.request, urllib.error, json
@@ -799,7 +799,7 @@ def INS(nid, parent, key=None, **kw):
 
 ## Rules that prevent broken layouts
 
-These patterns were discovered through iteration. Skipping them causes collapsed sections, invisible elements, or components with no content.
+These patterns apply whether you're using MCP tools or the HTTP API. Skipping them causes collapsed sections, invisible elements, or components with no content.
 
 ### Always use spacing tokens, never numbers
 

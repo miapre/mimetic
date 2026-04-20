@@ -8,6 +8,6 @@
   "permissions": ["teamlibrary"],
   "networkAccess": {
     "allowedDomains": ["*"],
-    "reasoning": "Connects to the local Mimic AI bridge server to receive design instructions from Claude Code."
+    "reasoning": "Connects to the local Mimic AI bridge server (default port 3055) to receive design instructions."
   }
 }

@@ -23,6 +23,12 @@ internal/backups/
 # Research — contains DS-specific keys, user paths, deliberation docs
 internal/research/
 
+# Diagnostics — runtime debugging output
+internal/diagnostics/
+
+# Internal marketing strategy — creator-only, not for end users
+internal/marketing/
+
 # DS knowledge cache (generated, large)
 internal/ds-knowledge/
 
