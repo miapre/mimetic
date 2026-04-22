@@ -4,6 +4,8 @@
 
 Mimic transforms HTML into Figma using the user's design system.
 
+**DS-agnostic mandate:** The tool code must NEVER contain hardcoded references to any specific design system — no font families, no hex colors, no component names, no variable paths from any particular DS (LayerLens, Untitled UI, Material UI, or any other). All DS-specific values must come from the user's DS at runtime via discovery, preloading, or session defaults. If a fallback is needed (e.g., chart labels when no DS context is provided), use neutral values (grays: #212121, #757575, #F7F7F7) that don't assume any brand palette. The Platform Architect must audit code for DS-specific leaks after every session that modifies plugin/bridge/MCP code.
+
 ## 2. Design system first
 
 Always use design system components when a correct match exists. A mandatory DS discovery step must precede every build. Search the DS for all component types present in the HTML (buttons, tabs, badges, tables, inputs, pagination, page headers, etc.). Produce a component map before creating any frame.
@@ -19,6 +21,8 @@ If no valid component exists, build with primitives using ONLY DS variables:
 - Radius: via DS radius variables (bound at creation time, same as spacing)
 
 Never raw values. During DS Discovery (Rule 23), produce a variable category map that documents which variable group applies to which node type. Enforce it per-node during build.
+
+**Component-only DS exception:** Some libraries ship components but no published variables or text styles. When Phase 2 discovers zero tokens, the build proceeds using all available DS components — these carry their own internal styles and will render correctly. Elements built from scratch (text, frames, dividers) will use raw values since no tokens exist to bind to. This is not a Rule 3 violation — the DS simply doesn't provide tokens. The build report must include a **Token gap** section explaining: the library has no published design tokens (variables or styles); adding color, spacing, and radius variable collections would enable full token binding on future builds and unlock mode support (light/dark). Frame this as a DS maturity recommendation, not a build failure.
 
 ## 4. No fake usage
 
@@ -199,11 +203,19 @@ If post-QA fixes were applied, state them transparently. A build without a repor
 
 ## 25. Charts are built, not placeholders
 
-When the HTML contains charts (bar, line, scatter, donut, radar, etc.), Mimic must build them in Figma — not placeholders. Prioritize chart quality over structural purity:
-- Use DS color variables for all fills and strokes — mandatory, no exceptions
+When the HTML contains charts (bar, line, scatter, donut, radar, etc.), Mimic must build them in Figma — not placeholders.
+
+**Auto-layout applies to charts too.** Charts must be resizable — when the user changes the artboard width, charts should adapt. This means:
+- **Chart containers** (cards, wrappers): auto-layout, FILL horizontal, HUG vertical — same as any other frame.
+- **Bar charts**: HORIZONTAL auto-layout frame with bars using `layoutGrow: 1` to distribute evenly. Bars have FIXED height (the data value) but flexible width.
+- **Label rows**: HORIZONTAL, SPACE_BETWEEN — labels distribute with the bars.
+- **Legends**: VERTICAL auto-layout stack. Each legend item is HORIZONTAL (dot + text).
+- **Donut/pie/scatter geometry** (arcs, dots, paths): these are the ONLY elements that may use absolute positioning (`layoutMode = 'NONE'`). Trigonometric and coordinate math requires it. But they must be inside an auto-layout parent that positions the geometry frame relative to labels and legends.
+
+**DS compliance is mandatory — no exceptions:**
+- Use DS color variables for all fills and strokes
 - Use DS text styles for labels and values
-- Auto-layout is NOT required for charts. Use absolute positioning (`layoutMode = 'NONE'`) for the chart container. Precise coordinate math matters more than auto-layout compliance here.
-- Spacing variables are optional inside charts
+- Use DS spacing variables for padding, gaps, and margins in chart structure
 - Use `createNodeFromSvg()` for complex geometric shapes (polygons, paths) — it produces higher quality output than manual vector paths with resize()
 - After SVG import, traverse child nodes and bind DS color variables
 
@@ -322,3 +334,124 @@ After insertion, the orchestrator must set explicit widths where the layout requ
 
 If a component appears clipped or collapsed after insertion, check that HUG is appropriate for that component. Some components (e.g., Table header cell, Table filters) may need explicit width or FILL to render correctly.
 
+## 37. Hide ALL unused icon slots on EVERY component
+
+After inserting ANY component instance, **scan ALL its boolean properties and set every icon-related one to `false`** unless the HTML explicitly shows an icon in that position. Components ship with icon placeholders visible by default — leaving them produces visible circles or empty frames that break the design.
+
+This is not limited to buttons. It applies to **every component type**: buttons, inputs, badges, nav items, footer links, table cells, tabs, dropdowns, cards, headers, footers — everything. If it's an instance and it has a boolean property with "icon" in the name, it defaults to `false`.
+
+**Implementation:** After every `insert_component` or `createInstance()`, immediately call:
+```
+var props = instance.componentProperties;
+for (var key in props) {
+  if (props[key].type === "BOOLEAN" && key.toLowerCase().includes("icon")) {
+    var update = {};
+    update[key] = false;
+    instance.setProperties(update);
+  }
+}
+```
+
+This must be **automatic and systematic** — not something the builder remembers to do. If the plugin's `handleInsertComponent` can do this automatically, it should.
+
+## 38. Zero raw values — absolute, no exceptions
+
+Every visual property on every node MUST come from the design system. This is not a goal — it is a gate. A build with raw values is a failed build, regardless of how it looks.
+
+**Text:** Every text node MUST have a `textStyleId` from the DS. No raw `fontSize`, `fontWeight`, or `fontName`. If the text style cannot be applied, the build stops — do not proceed with raw fallbacks.
+
+**Colors:** Every fill and stroke MUST use a DS color variable via `fillVariable`/`strokeVariable` or a bound paint. No raw hex values. If a specific color doesn't exist in the DS variable set, use the closest semantic match and flag it in the build report.
+
+**Spacing:** Every `paddingTop`, `paddingBottom`, `paddingLeft`, `paddingRight`, `itemSpacing` MUST be bound to a DS spacing variable via `setBoundVariable()`. No raw pixel numbers.
+
+**Radius:** Every `cornerRadius` MUST be bound to a DS radius variable. No raw pixel numbers.
+
+**Enforcement:** After every build, run a compliance audit: count text nodes without textStyleId, fills without variable binding, spacing without variable binding. If any count > 0, the build is NOT done — fix every violation before reporting to the user.
+
+**If the DS doesn't have a token:** Build the element with the closest available token and add a recommendation: "Your DS doesn't have [X]. Consider adding [specific token] to maintain consistency." This is how Mimic audits the DS — by revealing what's missing.
+
+This rule takes absolute precedence over Rules 22 (efficiency) and 5 (auto-layout). A fast build with raw values is worse than a slow build with full DS compliance.
+
+## 39. Text styles are the only way to style text
+
+If the DS has text styles, **only text styles are to be used**. Never set fontSize, fontWeight, lineHeight, fontName, or letterSpacing as individual properties. Never bind them as individual variables. The text style is the single source of truth for all typography — apply it via `textStyleId` and nothing else.
+
+Figma shows a properly applied text style as "Ag Display xl/Semibold· 60/72" — one reference controlling everything. If instead you see "Inter / Semi Bold / 60 / 72" as separate fields, the text is NOT DS-compliant regardless of whether the values match.
+
+**Setting individual typography properties is only acceptable when the DS has NO text styles at all.** If even one text style exists, all text nodes must use text styles. No exceptions.
+
+This means:
+- Never call `setBoundVariable('fontSize', ...)` or `setBoundVariable('lineHeight', ...)` on text
+- Never call `node.fontName = ...` or `node.fontSize = ...` on text
+- Never detach a text style to "override" one property
+- The ONLY text property you set is `node.textStyleId = styleId`
+- Color fills are separate — those use color variables via `setBoundVariableForPaint`, not the text style
+
+## 40. No default text on any component
+
+After inserting ANY component, **every visible text node must be overridden** to match the HTML content. No component may display its default placeholder text (e.g., "Untitled UI", "Button CTA", "Team members", "My details", "Label", "Badge"). If a default text is visible in the output, the build is broken.
+
+This is not a suggestion — it is a gate. After every `insert_component` call, immediately inspect the component's text layers and set them all. If the component has text you cannot override (deeply nested, read-only), note it as a limitation — but never leave default text showing.
+
+Components that commonly violate this: **Header navigation** (logo, nav links), **Tabs** (tab labels), **Footer** (brand name, column headings, links), **Input fields** (label, placeholder, hint), **Badges** (label text), **Table header cells** (column names).
+
+## 41. Read the HTML before writing any text
+
+Before setting ANY text content on a Figma node, **read the exact text from the HTML source**. Do not write text from memory. Do not paraphrase. Do not "improve" labels. Do not add words that aren't in the HTML.
+
+If the HTML says "Uptime", the Figma text says "Uptime" — not "UPTIME GUARANTEE". If the HTML says "New — Real-time pipelines in beta", the Figma text says exactly that — not "v3.0 — Real-time pipelines now in beta".
+
+This is Rule 6 (HTML content fidelity) made operational: read the source, copy the source, verify against the source. Every text mismatch between HTML and Figma is a build failure.
+
+## 42. No hardcoded line breaks in text
+
+Never insert `\n` (line breaks) into text content unless the HTML source explicitly contains a `<br>` tag. Text wrapping must be controlled by the **container width**, not by embedded newlines.
+
+If the HTML says "The analytics platform that scales with you" as a single line, the Figma text node must contain that exact string without breaks. The frame width determines where it wraps — that is how responsive design works in Figma.
+
+
+## 43. DS-only rule — the foundational constraint
+
+Mimic will ONLY use components or styles/variables from the design system to create everything in the artboard (using auto-layout with hug/fill widths and heights only). If it can't for any reason, it will notify the user and the user will be the one deciding what to do. These exceptions are a BLOCKER.
+
+**Fills:** ONLY DS color variables (bound via `setBoundVariableForPaint`). Never raw hex.
+**Text:** ONLY DS text styles (applied via `textStyleId`). Never raw `fontName`/`fontSize`/`fontWeight`.
+**Spacing:** ONLY DS spacing variables (bound via `setBoundVariable`). Never raw px.
+**Radius:** ONLY DS radius variables (bound via `setBoundVariable`). Never raw px.
+**Strokes:** ONLY DS border variables. Never raw hex.
+**Effects:** ONLY DS effect styles. Never raw shadow values.
+**Components:** ONLY DS library components (via `importComponentByKeyAsync`). Never hand-built recreations.
+**Layout:** ONLY auto-layout with HUG/FILL. Never fixed widths/heights unless the element is the artboard itself.
+
+**If ANY of the above can't be satisfied:** STOP. Return a structured error with `action_required: "user_decision"`. The orchestrator surfaces this to the user. The user decides: use raw fallback (with explicit acknowledgment), skip the element, or fix the DS reference.
+
+**Enforcement:** `dsMode: "strict"` in session defaults (set via `set_session_defaults`). When strict, all tools reject raw values and throw `DS_STRICT_VIOLATION` or `DS_VARIABLE_NOT_FOUND` errors.
+
+**Post-build:** Call `validate_ds_compliance` on the artboard after every build. Any violation found is a build defect.
+
+**Exception: chart data geometry only.** Donut arcs, scatter dots, and line paths require trigonometric/coordinate math — these may use absolute positioning and raw pixel values. Everything else in a chart (containers, bar rows, labels, legends) must use auto-layout and DS variables like any other element. See Rule 25 for the full chart auto-layout protocol.
+
+This rule overrides all other rules. If any rule conflicts with this one, this one wins.
+
+
+## 44. Mandatory stop on unreachable DS
+
+If the target design system's components cannot be imported (library import failures, timeouts, or API errors), the build MUST stop at Phase 1. Building an all-primitive artboard when the DS has published components is a critical violation — it makes Mimic behave as a generic HTML-to-Figma converter, which contradicts the core product identity.
+
+**Stop triggers:**
+- All component imports for the target library fail or time out
+- Phase 1 produces a component map with zero DS components when the library has published components
+- The same tool error occurs 3 times in one build session
+
+**What to do when stopped:**
+1. Save a partial build report explaining what failed
+2. Tell the user which library operations failed and suggest next steps
+3. Do not delete partial output — the user may find it useful
+4. Do not retry the same failed operation more than twice
+
+**What NOT to stop for:**
+- Single component import failure in a build with other successful imports (log and continue)
+- Variant not found but fallback variant exists (use fallback, log)
+- Variable not found but closest semantic match available (use closest, log)
+
+This rule takes absolute precedence over Rule 22 (efficiency). A fast all-primitive build is worse than a stopped build with an honest report. Stopping is a feature, not a failure.

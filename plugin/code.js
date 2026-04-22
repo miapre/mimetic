@@ -21,9 +21,11 @@ const styleCache = new Map(); // Map<styleKey, figmaStyleId> — preloaded DS st
 // DS-agnostic: the orchestrator discovers the right keys from the DS knowledge layer.
 var sessionDefaults = {
   textFillStyleKey: null,   // Applied to text when no fillStyleKey/fillVariable/fills provided
+  textFillVariable: null,   // Alternative to textFillStyleKey — DS variable path for default text fill. Used when DS has variables but no color styles (e.g., community libraries).
   frameFillStyleKey: null,  // NOT auto-applied — frames often have no fill intentionally
   strokeStyleKey: null,     // NOT auto-applied
-  fontFamily: 'Inter',      // Default font family — overridden via set_session_defaults
+  fontFamily: null,          // No default — set via set_session_defaults or auto-detected from first text style import. DS-agnostic: never hardcode a font family.
+  dsMode: 'permissive',     // 'strict' = DS references required, raw values rejected. 'permissive' = raw fallbacks allowed. Set to 'strict' via set_session_defaults when DS is connected.
 };
 
 async function getVariableByPath(path) {
@@ -73,19 +75,36 @@ async function getVariableByPath(path) {
 
 // Apply a spacing value to a node property — accepts either a number (px) or
 // a variable path string (e.g. "spacing-3xl"). Binds the variable when resolved.
+// In strict mode: string paths are required, raw numbers are rejected.
 async function applySpacing(node, prop, value) {
   if (typeof value === 'string') {
     const variable = await getVariableByPath(value);
     if (variable) { node.setBoundVariable(prop, variable); return; }
+    // Variable path not found
+    if (sessionDefaults.dsMode === 'strict') {
+      throw new Error(
+        `DS_VARIABLE_NOT_FOUND: Spacing variable "${value}" not found for property "${prop}". ` +
+        `In strict mode, raw px fallback is not allowed.`
+      );
+    }
     const n = parseFloat(value);
     if (!isNaN(n)) node[prop] = n;
   } else if (typeof value === 'number') {
+    if (sessionDefaults.dsMode === 'strict') {
+      throw new Error(
+        `DS_STRICT_VIOLATION: Raw px value ${value} provided for "${prop}". ` +
+        `In strict mode, spacing must use DS variable paths (e.g., "spacing-3xl"). ` +
+        `Provide a variable path or switch to permissive mode.`
+      );
+    }
     node[prop] = value;
   }
 }
 
-// Apply a fill (solid color) to a node using a variable or a hex fallback.
-// Returns true if DS variable was bound, false otherwise.
+// Apply a fill (solid color) to a node using a DS variable.
+// In strict mode: variable is required, hex fallback is rejected.
+// In permissive mode: hex fallback is allowed (for component-only DSs without tokens).
+// Returns { bound: true/false, method: 'variable'|'raw_fallback'|'none' }
 async function applyFill(node, variablePath, hexFallback) {
   if (variablePath) {
     const variable = await getVariableByPath(variablePath);
@@ -96,18 +115,34 @@ async function applyFill(node, variablePath, hexFallback) {
         variable
       );
       node.fills = [boundPaint];
-      return true;
+      return { bound: true, method: 'variable' };
+    }
+    // Variable path was provided but not found
+    if (sessionDefaults.dsMode === 'strict') {
+      throw new Error(
+        `DS_VARIABLE_NOT_FOUND: Fill variable "${variablePath}" not found. ` +
+        `In strict mode, raw hex fallback is not allowed. ` +
+        `Check the variable path or run discover_ds to refresh.`
+      );
     }
   }
   if (hexFallback) {
+    if (sessionDefaults.dsMode === 'strict' && !variablePath) {
+      throw new Error(
+        `DS_STRICT_VIOLATION: Raw hex fill "${hexFallback}" provided without a variablePath. ` +
+        `In strict mode, all fills must use DS variables. ` +
+        `Provide a variablePath or switch to permissive mode.`
+      );
+    }
     node.fills = [{ type: 'SOLID', color: hexToRgb(hexFallback) }];
-    return false;
+    return { bound: false, method: 'raw_fallback' };
   }
   // Neither provided — leave fills as-is
-  return false;
+  return { bound: false, method: 'none' };
 }
 
-// Apply a stroke to a node using a variable or hex fallback.
+// Apply a stroke to a node using a DS variable.
+// Same strict/permissive behavior as applyFill.
 async function applyStroke(node, variablePath, hexFallback, width) {
   if (variablePath) {
     const variable = await getVariableByPath(variablePath);
@@ -122,8 +157,21 @@ async function applyStroke(node, variablePath, hexFallback, width) {
       node.strokeAlign = 'INSIDE';
       return;
     }
+    // Variable path was provided but not found
+    if (sessionDefaults.dsMode === 'strict') {
+      throw new Error(
+        `DS_VARIABLE_NOT_FOUND: Stroke variable "${variablePath}" not found. ` +
+        `In strict mode, raw hex fallback is not allowed.`
+      );
+    }
   }
   if (hexFallback) {
+    if (sessionDefaults.dsMode === 'strict' && !variablePath) {
+      throw new Error(
+        `DS_STRICT_VIOLATION: Raw hex stroke "${hexFallback}" provided without a variablePath. ` +
+        `In strict mode, all strokes must use DS variables.`
+      );
+    }
     node.strokes = [{ type: 'SOLID', color: hexToRgb(hexFallback) }];
     node.strokeWeight = width !== undefined && width !== null ? width : 1;
     node.strokeAlign = 'INSIDE';
@@ -171,11 +219,22 @@ function hexToRgb(hex) {
 }
 
 // Apply layout sizing to a node within an auto-layout parent.
+// Returns a warning string if layoutGrow is used inside a HUG parent, null otherwise.
 function applyLayoutSizing(node, params) {
-  if (params.layoutGrow !== undefined) node.layoutGrow = params.layoutGrow;
+  var warning = null;
+  if (params.layoutGrow !== undefined) {
+    // Warn if parent uses HUG — layoutGrow distributes remaining space, but HUG has none
+    try {
+      if (node.parent && node.parent.primaryAxisSizingMode === 'AUTO') {
+        warning = 'layoutGrow=' + params.layoutGrow + ' in HUG parent — child may collapse to 0px. Use explicit FIXED widths or switch parent to FIXED sizing.';
+      }
+    } catch (_) {}
+    node.layoutGrow = params.layoutGrow;
+  }
   if (params.layoutAlign)              node.layoutAlign = params.layoutAlign;
   if (params.primaryAxisSizingMode)    node.primaryAxisSizingMode = params.primaryAxisSizingMode;
   if (params.counterAxisSizingMode)    node.counterAxisSizingMode = params.counterAxisSizingMode;
+  return warning;
 }
 
 // Find a text node by name within a subtree.
@@ -201,7 +260,9 @@ const FONT_STYLES = {
 };
 
 async function loadFont(weight) {
-  var family = 'Inter';
+  // Use DS font from session defaults — never hardcode a specific font family.
+  // If no default is set, fall back to 'Inter' as a last resort (Figma ships it).
+  var family = sessionDefaults.fontFamily || 'Inter';
   await figma.loadFontAsync({ family: family, style: FONT_STYLES[weight] || 'Regular' });
 }
 
@@ -278,7 +339,7 @@ async function handleInsertComponent(params) {
         component = raceResult.value.defaultVariant || raceResult.value.children[0];
       }
     } catch (e) {
-      importError = 'Component import: ' + e.message;
+      importError = 'Component import failed: ' + e.message + '. This can happen with community libraries — Figma\'s API may not support importing components from community-published files. Verify: (1) the library is a team/org library, not a community file, (2) it is published and enabled in this file.';
     }
 
     // Clear all pending notifications
@@ -349,9 +410,23 @@ async function handleInsertComponent(params) {
     }
   }
 
+  // Rule 37: Auto-hide all icon slots on every component instance.
+  // Components ship with icon placeholders visible by default.
+  // Unless the orchestrator explicitly enables an icon, all icon booleans default to false.
+  try {
+    const props = instance.componentProperties;
+    for (const key in props) {
+      if (props[key].type === 'BOOLEAN' && key.toLowerCase().includes('icon')) {
+        const update = {};
+        update[key] = false;
+        instance.setProperties(update);
+      }
+    }
+  } catch (_) { /* some instances may not support setProperties */ }
+
   // Layout sizing within parent (must be set AFTER appendChild)
   // Explicit params override the HUG defaults above.
-  applyLayoutSizing(instance, params);
+  var layoutWarning = applyLayoutSizing(instance, params);
 
   if (params.x !== undefined) instance.x = params.x;
   if (params.y !== undefined) instance.y = params.y;
@@ -361,25 +436,48 @@ async function handleInsertComponent(params) {
     instance.resize(params.width, instance.height);
   }
 
-  return { nodeId: instance.id, name: instance.name };
+  // Role warnings: check for default text still showing (Rule 40)
+  const warnings = [];
+  const defaultTexts = ['Button CTA', 'Label', 'Text', 'Title', 'Badge', 'Heading', 'Description',
+    'Team members', 'Untitled', 'My details', 'Enter your email'];
+  try {
+    const visibleTexts = instance.findAll(n => n.type === 'TEXT' && n.visible);
+    for (const t of visibleTexts) {
+      if (defaultTexts.includes(t.characters)) {
+        warnings.push(`Default text "${t.characters}" still showing — override with HTML content (Rule 40)`);
+      }
+    }
+  } catch (_) {}
+  if (layoutWarning) warnings.push(layoutWarning);
+
+  return { nodeId: instance.id, name: instance.name, warnings: warnings.length > 0 ? warnings : undefined };
 }
 
 async function handleCreateFrame(params) {
   const frame = figma.createFrame();
   frame.name = params.name || 'Frame';
 
-  // Size
-  const w = params.width !== undefined ? params.width : 100;
-  const h = params.height !== undefined ? params.height : 100;
+  // Size — coerce to numbers (MCP serialization may send strings)
+  const w = params.width !== undefined ? Number(params.width) : 100;
+  const h = params.height !== undefined ? Number(params.height) : 100;
   frame.resize(w, h);
 
   // Auto-layout — accept both "direction" and "layoutMode" as the mode param
   const layoutDir = params.direction || params.layoutMode;
   if (layoutDir && layoutDir !== 'NONE') {
     frame.layoutMode = layoutDir;
-    if (params.gap !== undefined) await applySpacing(frame, 'itemSpacing', params.gap);
+    // Gap — prefer gapVariable (DS bound), fall back to gap param (handled by applySpacing strict/permissive)
+    if (params.gapVariable) await applySpacing(frame, 'itemSpacing', params.gapVariable);
+    else if (params.gap !== undefined) await applySpacing(frame, 'itemSpacing', params.gap);
     else if (params.itemSpacing !== undefined) await applySpacing(frame, 'itemSpacing', params.itemSpacing);
-    if (params.padding !== undefined) {
+
+    // Padding — prefer paddingVariable (DS bound, all 4 sides), then per-side, then uniform padding
+    if (params.paddingVariable) {
+      await applySpacing(frame, 'paddingTop',    params.paddingVariable);
+      await applySpacing(frame, 'paddingRight',  params.paddingVariable);
+      await applySpacing(frame, 'paddingBottom', params.paddingVariable);
+      await applySpacing(frame, 'paddingLeft',   params.paddingVariable);
+    } else if (params.padding !== undefined) {
       await applySpacing(frame, 'paddingTop',    params.padding);
       await applySpacing(frame, 'paddingRight',  params.padding);
       await applySpacing(frame, 'paddingBottom', params.padding);
@@ -410,17 +508,19 @@ async function handleCreateFrame(params) {
     frameDsCompliance.fill = applied ? 'ds_style' : 'ds_style_unavailable';
     if (!applied && Array.isArray(params.fills)) frame.fills = params.fills;
   } else if (params.fillVariable) {
-    const bound = await applyFill(frame, params.fillVariable);
-    frameDsCompliance.fill = bound ? 'ds_variable' : 'raw_fallback';
-    if (!bound) frameDsCompliance.rawFillReason = 'variable_not_found:' + params.fillVariable;
+    const result = await applyFill(frame, params.fillVariable);
+    frameDsCompliance.fill = result.bound ? 'ds_variable' : 'raw_fallback';
+    if (!result.bound) frameDsCompliance.rawFillReason = 'variable_not_found:' + params.fillVariable;
   } else if (Array.isArray(params.fills)) {
+    if (sessionDefaults.dsMode === 'strict') {
+      throw new Error('DS_STRICT_VIOLATION: Raw fills array provided without a fillVariable. In strict mode, all fills must use DS variables.');
+    }
     frame.fills = params.fills;
     frameDsCompliance.fill = 'raw_fallback';
   } else if (params.fillHex) {
     await applyFill(frame, null, params.fillHex);
     frameDsCompliance.fill = 'raw_fallback';
   } else {
-    await applyFill(frame, params.fillVariable, params.fillHex);
     frameDsCompliance.fill = 'none';
   }
 
@@ -451,8 +551,9 @@ async function handleCreateFrame(params) {
 
   // frameDsCompliance stored for return value
 
-  // Corner radius — supports variable path string (e.g. "radius-xl") or number
-  if (params.cornerRadius !== undefined) await applySpacing(frame, 'cornerRadius', params.cornerRadius);
+  // Corner radius — prefer cornerRadiusVariable (DS bound), fall back to cornerRadius (strict/permissive)
+  if (params.cornerRadiusVariable) await applySpacing(frame, 'cornerRadius', params.cornerRadiusVariable);
+  else if (params.cornerRadius !== undefined) await applySpacing(frame, 'cornerRadius', params.cornerRadius);
 
   // Clip content
   if (params.clipsContent !== undefined) frame.clipsContent = params.clipsContent;
@@ -481,13 +582,25 @@ async function handleCreateFrame(params) {
   }
 
   // Layout sizing within parent (must be set AFTER appendChild)
-  applyLayoutSizing(frame, params);
+  var layoutWarning = applyLayoutSizing(frame, params);
 
-  // Auto-fill: children of auto-layout parents should fill the parent's cross-axis by default.
-  // In product UI, sections fill the container width. Skip only if explicit layoutAlign was set.
-  if (parentRef && !params.layoutAlign) {
+  // Fix: direction=NONE frames in auto-layout parents default to STRETCH (Figma behavior).
+  // Override to INHERIT unless explicitly requested, preventing unwanted stretching.
+  if (parentRef && (!layoutDir || layoutDir === 'NONE') && !params.layoutAlign) {
     try {
-      // Modern Figma API: layoutSizingHorizontal/Vertical = 'FILL' makes child fill parent
+      const parentNode = figma.getNodeById(parentRef);
+      if (parentNode && parentNode.layoutMode && parentNode.layoutMode !== 'NONE') {
+        frame.layoutAlign = 'INHERIT';
+      }
+    } catch (_) {}
+  }
+
+  // Layout alignment within parent.
+  // Previously this auto-filled the cross-axis for ALL frames, causing badges, buttons,
+  // and other HUG-content frames to stretch to full parent width. Now: only FILL when
+  // explicitly requested via layoutAlign=STRETCH. Otherwise inherit parent alignment.
+  if (parentRef && params.layoutAlign === 'STRETCH') {
+    try {
       const parentNode = figma.getNodeById(parentRef);
       if (parentNode && parentNode.layoutMode === 'VERTICAL') {
         frame.layoutSizingHorizontal = 'FILL';
@@ -495,47 +608,119 @@ async function handleCreateFrame(params) {
         frame.layoutSizingVertical = 'FILL';
       }
     } catch (_) {
-      // Fallback for older API
       frame.layoutAlign = 'STRETCH';
     }
+  } else if (parentRef && params.layoutAlign && params.layoutAlign !== 'STRETCH') {
+    // Explicit non-STRETCH alignment (MIN, CENTER, MAX, INHERIT)
+    frame.layoutAlign = params.layoutAlign;
   }
+  // When layoutAlign is omitted: frame inherits parent's counterAxisAlignItems (Figma default)
 
   if (params.x !== undefined) frame.x = params.x;
   if (params.y !== undefined) frame.y = params.y;
 
-  return { nodeId: frame.id, name: frame.name, dsCompliance: frameDsCompliance };
+  // Role warnings: flag DS compliance issues inline
+  const frameWarnings = [];
+  if (frameDsCompliance.fill === 'raw_fallback') {
+    frameWarnings.push('Frame fill is raw hex — Rule 38 violation. Use fillVariable with a DS color variable.');
+  }
+  if (frameDsCompliance.stroke === 'raw_fallback') {
+    frameWarnings.push('Frame stroke is raw hex — Rule 38 violation. Use strokeVariable with a DS color variable.');
+  }
+  if (layoutWarning) frameWarnings.push(layoutWarning);
+
+  return { nodeId: frame.id, name: frame.name, dsCompliance: frameDsCompliance, warnings: frameWarnings.length > 0 ? frameWarnings : undefined };
 }
 
 async function handleCreateText(params) {
   const weight = params.fontWeight !== undefined ? params.fontWeight : 400;
-  await loadFont(weight);
-
   const text = figma.createText();
-  // Must set fontName before characters (Figma requires a loaded font to set text)
-  text.fontName = { family: 'Inter', style: FONT_STYLES[weight] || 'Regular' };
-  text.characters = params.text !== undefined ? params.text : '';
 
   // DS compliance tracking
   const dsCompliance = { textStyle: 'unresolved', fill: 'unresolved' };
 
-  // Typography: try DS text style. If it succeeds, it overrides raw font properties.
-  // Apply AFTER characters are set. The style import sets fontName/fontSize/lineHeight
-  // from the DS definition, replacing the raw values set above.
+  // Typography: try DS text style FIRST. The style defines the font — load that font,
+  // not a hardcoded fallback. This is critical for community libraries (e.g., MUI uses
+  // Roboto, not Inter). Only fall back to Inter if no style is provided or import fails.
   let styleApplied = false;
   if (params.textStyleId) {
-    styleApplied = await applyTextStyle(text, params.textStyleId);
+    // Import the style to get its font information
+    var styleKey = params.textStyleId.replace(/^S:/, '').split(',')[0];
+    var importedStyle = null;
+    try {
+      // Check preloaded cache first
+      var cachedId = styleCache.get(params.textStyleId) || styleCache.get(styleKey);
+      if (cachedId) {
+        // Style is cached — apply directly, then load the font it uses
+        try {
+          text.textStyleId = cachedId;
+          // Load the font the style uses (read from the node after style is applied)
+          if (text.fontName && text.fontName !== figma.mixed) {
+            await figma.loadFontAsync(text.fontName);
+          }
+          styleApplied = true;
+        } catch (e) {
+          // Style applied but font load failed — try importing fresh
+          styleApplied = false;
+        }
+      }
+      if (!styleApplied) {
+        importedStyle = await Promise.race([
+          figma.importStyleByKeyAsync(styleKey),
+          new Promise(function(_, reject) { setTimeout(function() { reject(new Error('style import timeout')); }, 20000); }),
+        ]);
+        if (importedStyle && importedStyle.id) {
+          text.textStyleId = importedStyle.id;
+          // Load the font the style specifies
+          if (text.fontName && text.fontName !== figma.mixed) {
+            await figma.loadFontAsync(text.fontName);
+          }
+          styleApplied = true;
+          styleCache.set(params.textStyleId, importedStyle.id);
+          styleCache.set(styleKey, importedStyle.id);
+          // Auto-detect DS font: if no fontFamily is set, learn it from the first successful style import.
+          // This makes the plugin DS-agnostic — it discovers the font from the DS instead of assuming one.
+          if (!sessionDefaults.fontFamily && text.fontName && text.fontName !== figma.mixed) {
+            sessionDefaults.fontFamily = text.fontName.family;
+          }
+        }
+      }
+    } catch (_) { /* style import failed — fall through to raw */ }
     dsCompliance.textStyle = styleApplied ? 'ds_style' : 'style_failed';
     if (!styleApplied) dsCompliance.failedStyleId = params.textStyleId;
   }
 
   if (!styleApplied) {
-    // Raw fallback — apply raw properties only when DS style is not available
+    // No DS style — load fallback font (Inter or session default)
+    var fallbackFamily = sessionDefaults.fontFamily || 'Inter';
+    var fallbackStyle = FONT_STYLES[weight] || 'Regular';
+    await figma.loadFontAsync({ family: fallbackFamily, style: fallbackStyle });
+    text.fontName = { family: fallbackFamily, style: fallbackStyle };
+
+    if (sessionDefaults.dsMode === 'strict' && params.textStyleId) {
+      throw new Error(
+        'DS_TEXT_STYLE_FAILED: Text style "' + params.textStyleId + '" could not be applied. ' +
+        'In strict mode, raw fontName/fontSize fallback is not allowed. ' +
+        'Check the style key or run preload_styles.'
+      );
+    }
+    if (sessionDefaults.dsMode === 'strict' && !params.textStyleId) {
+      throw new Error(
+        'DS_STRICT_VIOLATION: No textStyleId provided for text node. ' +
+        'In strict mode, all text must use DS text styles. ' +
+        'Provide a textStyleId or switch to permissive mode.'
+      );
+    }
+    // Permissive mode — apply raw properties when DS style is not available
     if (params.fontSize) text.fontSize = params.fontSize;
     if (params.lineHeight) text.lineHeight = { value: params.lineHeight, unit: 'PIXELS' };
     dsCompliance.textStyle = params.textStyleId ? 'style_failed' : 'raw_fallback';
     dsCompliance.rawFontSize = params.fontSize || null;
     dsCompliance.rawFontWeight = weight;
   }
+
+  // Set characters AFTER font is loaded (either from style or fallback)
+  text.characters = params.text !== undefined ? params.text : '';
 
   if (params.textAlignHorizontal) text.textAlignHorizontal = params.textAlignHorizontal;
 
@@ -545,20 +730,28 @@ async function handleCreateText(params) {
     dsCompliance.fill = applied ? 'ds_style' : 'ds_style_unavailable';
     if (!applied && Array.isArray(params.fills)) text.fills = params.fills;
   } else if (params.fillVariable) {
-    const bound = await applyFill(text, params.fillVariable);
-    dsCompliance.fill = bound ? 'ds_variable' : 'raw_fallback';
-    if (!bound) dsCompliance.rawFillReason = 'variable_not_found:' + params.fillVariable;
+    const result = await applyFill(text, params.fillVariable);
+    dsCompliance.fill = result.bound ? 'ds_variable' : 'raw_fallback';
+    if (!result.bound) dsCompliance.rawFillReason = 'variable_not_found:' + params.fillVariable;
   } else if (Array.isArray(params.fills)) {
+    if (sessionDefaults.dsMode === 'strict') {
+      throw new Error('DS_STRICT_VIOLATION: Raw fills array on text without fillVariable. In strict mode, all fills must use DS variables.');
+    }
     text.fills = params.fills;
     dsCompliance.fill = 'raw_fallback';
   } else if (params.fillHex) {
     await applyFill(text, null, params.fillHex);
     dsCompliance.fill = 'raw_fallback';
   } else if (sessionDefaults.textFillStyleKey) {
-    // No explicit fill — apply session default (text-primary from DS)
+    // No explicit fill — apply session default via color style
     var defaultApplied = await applyColorStyle(text, 'fill', sessionDefaults.textFillStyleKey);
     dsCompliance.fill = defaultApplied ? 'ds_session_default' : 'raw_fallback';
     if (!defaultApplied) dsCompliance.rawFillReason = 'session_default_failed';
+  } else if (sessionDefaults.textFillVariable) {
+    // No explicit fill — apply session default via DS variable (community library path)
+    var varApplied = await applyFill(text, sessionDefaults.textFillVariable, null);
+    dsCompliance.fill = varApplied ? 'ds_session_default' : 'raw_fallback';
+    if (!varApplied) dsCompliance.rawFillReason = 'session_default_variable_failed';
   } else {
     // No fill param and no session default — Figma default black. Raw, not DS compliant.
     dsCompliance.fill = 'raw_fallback';
@@ -583,7 +776,7 @@ async function handleCreateText(params) {
   }
 
   // layoutAlign/layoutGrow must be set AFTER appendChild
-  applyLayoutSizing(text, params);
+  var layoutWarning = applyLayoutSizing(text, params);
 
   // Auto-fill + wrap: text in auto-layout parents should fill cross-axis and wrap.
   // Skip if explicit width was set or explicit layoutAlign was provided.
@@ -602,13 +795,24 @@ async function handleCreateText(params) {
   if (params.x !== undefined) text.x = params.x;
   if (params.y !== undefined) text.y = params.y;
 
-  return { nodeId: text.id, dsCompliance: textDsCompliance };
+  // Role warnings: flag DS compliance issues inline
+  const textWarnings = [];
+  if (textDsCompliance.textStyle === 'raw_fallback') {
+    textWarnings.push('Text created without DS text style — Rule 39 violation. Use textStyleId instead of fontSize/fontWeight.');
+  }
+  if (textDsCompliance.fill === 'raw_fallback') {
+    textWarnings.push('Text fill is raw hex — Rule 38 violation. Use fillVariable with a DS color variable.');
+  }
+  if (layoutWarning) textWarnings.push(layoutWarning);
+
+  return { nodeId: text.id, dsCompliance: textDsCompliance, warnings: textWarnings.length > 0 ? textWarnings : undefined };
 }
 
 async function handleCreateRectangle(params) {
   const rect = figma.createRectangle();
   rect.name = params.name || 'Rectangle';
-  rect.resize(params.width, params.height);
+  // Coerce width/height to numbers — MCP serialization may send strings
+  rect.resize(Number(params.width) || 100, Number(params.height) || 100);
 
   if (params.fillNone) {
     rect.fills = [];
@@ -620,7 +824,21 @@ async function handleCreateRectangle(params) {
     await applyStroke(rect, params.strokeVariable, params.strokeHex, params.strokeWidth);
   }
 
-  if (params.cornerRadius !== undefined) rect.cornerRadius = params.cornerRadius;
+  // Corner radius — prefer variable path string, fall back to raw number (strict/permissive via applySpacing)
+  if (params.cornerRadiusVariable) {
+    await applySpacing(rect, 'cornerRadius', params.cornerRadiusVariable);
+  } else if (params.cornerRadius !== undefined) {
+    if (typeof params.cornerRadius === 'string') {
+      await applySpacing(rect, 'cornerRadius', params.cornerRadius);
+    } else if (sessionDefaults.dsMode === 'strict') {
+      throw new Error(
+        'DS_STRICT_VIOLATION: Raw cornerRadius ' + params.cornerRadius + ' on rectangle. ' +
+        'In strict mode, use a DS radius variable path (e.g., "Radius/radius-xl").'
+      );
+    } else {
+      rect.cornerRadius = params.cornerRadius;
+    }
+  }
 
   const rectParentRef = params.parentNodeId || params.parentId;
   if (rectParentRef) {
@@ -632,12 +850,57 @@ async function handleCreateRectangle(params) {
   }
 
   // layoutAlign/layoutGrow must be set AFTER appendChild
-  applyLayoutSizing(rect, params);
+  var layoutWarning = applyLayoutSizing(rect, params);
 
   if (params.x !== undefined) rect.x = params.x;
   if (params.y !== undefined) rect.y = params.y;
 
-  return { nodeId: rect.id };
+  var rectWarnings = [];
+  if (layoutWarning) rectWarnings.push(layoutWarning);
+
+  return { nodeId: rect.id, warnings: rectWarnings.length > 0 ? rectWarnings : undefined };
+}
+
+async function handleCreateEllipse(params) {
+  const ellipse = figma.createEllipse();
+  ellipse.name = params.name || 'Ellipse';
+  ellipse.resize(Number(params.width) || 100, Number(params.height) || 100);
+
+  // Arc support — for donut segments, partial circles, etc.
+  if (params.arcData) {
+    ellipse.arcData = {
+      startingAngle: params.arcData.startingAngle || 0,
+      endingAngle: params.arcData.endingAngle || 6.2832,
+      innerRadius: params.arcData.innerRadius || 0,
+    };
+  }
+
+  // Fill
+  if (params.fillNone) {
+    ellipse.fills = [];
+  } else {
+    await applyFill(ellipse, params.fillVariable, params.fillHex);
+  }
+
+  // Stroke
+  if (params.strokeVariable || params.strokeHex) {
+    await applyStroke(ellipse, params.strokeVariable, params.strokeHex, params.strokeWidth);
+  }
+
+  const parentRef = params.parentNodeId || params.parentId;
+  if (parentRef) {
+    const parent = figma.getNodeById(parentRef);
+    if (!parent || !('appendChild' in parent)) throw new Error('Parent ' + parentRef + ' not found');
+    parent.appendChild(ellipse);
+  } else {
+    figma.currentPage.appendChild(ellipse);
+  }
+
+  applyLayoutSizing(ellipse, params);
+  if (params.x !== undefined) ellipse.x = params.x;
+  if (params.y !== undefined) ellipse.y = params.y;
+
+  return { nodeId: ellipse.id };
 }
 
 async function handleSetComponentText(params) {
@@ -696,13 +959,16 @@ async function handleSetLayoutSizing(params) {
   // Enable / change auto-layout mode before setting sizing properties
   if (params.layoutMode !== undefined) node.layoutMode = params.layoutMode;
   if (params.itemSpacing !== undefined) await applySpacing(node, 'itemSpacing', params.itemSpacing);
-  applyLayoutSizing(node, params);
-  // Newer Figma API: FILL / HUG / FIXED per axis (works on instances inside auto-layout)
-  if (params.layoutSizingHorizontal !== undefined && 'layoutSizingHorizontal' in node) {
-    node.layoutSizingHorizontal = params.layoutSizingHorizontal;
+  var layoutWarning = applyLayoutSizing(node, params);
+  // Modern Figma API: layoutSizingHorizontal / layoutSizingVertical
+  // MCP schema sends 'horizontal' and 'vertical' params — map both naming conventions
+  const hSizing = params.horizontal || params.layoutSizingHorizontal;
+  const vSizing = params.vertical   || params.layoutSizingVertical;
+  if (hSizing !== undefined && 'layoutSizingHorizontal' in node) {
+    node.layoutSizingHorizontal = hSizing;
   }
-  if (params.layoutSizingVertical !== undefined && 'layoutSizingVertical' in node) {
-    node.layoutSizingVertical = params.layoutSizingVertical;
+  if (vSizing !== undefined && 'layoutSizingVertical' in node) {
+    node.layoutSizingVertical = vSizing;
   }
   // Padding support (works on frames and auto-layout nodes, including instance overrides)
   if (params.paddingTop    !== undefined) await applySpacing(node, 'paddingTop',    params.paddingTop);
@@ -715,7 +981,7 @@ async function handleSetLayoutSizing(params) {
     const h = params.height !== undefined ? params.height : node.height;
     node.resize(w, h);
   }
-  return { ok: true, width: node.width, height: node.height };
+  return { ok: true, width: node.width, height: node.height, warning: layoutWarning || undefined };
 }
 
 function handleResizeNode(params) {
@@ -777,6 +1043,12 @@ function handleMoveNode(params) {
   const parent = node.parent;
   if (!parent || !('insertChild' in parent)) throw new Error(`Parent of ${params.nodeId} does not support reordering`);
   parent.insertChild(params.index, node);
+  // Force auto-layout reflow by toggling layoutMode (insertChild doesn't always trigger it)
+  if (parent.layoutMode && parent.layoutMode !== 'NONE') {
+    const mode = parent.layoutMode;
+    parent.layoutMode = 'NONE';
+    parent.layoutMode = mode;
+  }
   return { ok: true };
 }
 
@@ -867,10 +1139,10 @@ function handleSetVisibility(params) {
 // Set session-level defaults for DS compliance.
 // Called once at build start after preload_styles. DS-agnostic — the orchestrator
 // discovers the right keys from the DS knowledge layer and passes them here.
-// params: { textFillStyleKey?: string }
+// params: { textFillStyleKey?: string, textFillVariable?: string, fontFamily?: string, dsMode?: string }
 async function handleSetSessionDefaults(params) {
   if (params.textFillStyleKey) {
-    // Preload the style so it's available in the cache
+    // Preload the color style so it's available in the cache
     try {
       var imported = await figma.importStyleByKeyAsync(params.textFillStyleKey);
       styleCache.set(params.textFillStyleKey, imported.id);
@@ -879,10 +1151,218 @@ async function handleSetSessionDefaults(params) {
       return { ok: false, error: 'Failed to import textFillStyleKey: ' + e.message };
     }
   }
+  if (params.textFillVariable) {
+    // DS variable path for default text fill — used when DS has variables but no color styles
+    sessionDefaults.textFillVariable = params.textFillVariable;
+  }
   if (params.fontFamily) {
     sessionDefaults.fontFamily = params.fontFamily;
   }
+  if (params.dsMode === 'strict' || params.dsMode === 'permissive') {
+    sessionDefaults.dsMode = params.dsMode;
+  }
   return { ok: true, sessionDefaults: sessionDefaults };
+}
+
+// Read the resolved values of all local and library variables.
+// Returns { variables: [{name, resolvedType, value, collectionName}] }
+// For COLOR variables, value is a hex string. For FLOAT, value is the number.
+async function handleReadVariableValues(params) {
+  const results = [];
+
+  function rgbToHex(r, g, b) {
+    var toHex = function(c) { return Math.round(c * 255).toString(16).padStart(2, '0'); };
+    return '#' + toHex(r) + toHex(g) + toHex(b);
+  }
+
+  function resolveValue(v, raw, collMap) {
+    if (v.resolvedType === 'COLOR' && typeof raw === 'object' && 'r' in raw) {
+      return rgbToHex(raw.r, raw.g, raw.b);
+    } else if (v.resolvedType === 'FLOAT') {
+      return (typeof raw === 'object' && raw.type === 'VARIABLE_ALIAS') ? 'alias:' + raw.id : raw;
+    } else if (v.resolvedType === 'STRING') {
+      return (typeof raw === 'object' && raw.type === 'VARIABLE_ALIAS') ? 'alias:' + raw.id : raw;
+    }
+    return null;
+  }
+
+  // Strategy 1: Read local variables (works in library files)
+  try {
+    var localVars = await figma.variables.getLocalVariablesAsync();
+    var localCollections = await figma.variables.getLocalVariableCollectionsAsync();
+    var collMap = new Map(localCollections.map(function(c) { return [c.id, c]; }));
+
+    for (var i = 0; i < localVars.length; i++) {
+      var v = localVars[i];
+      var coll = collMap.get(v.variableCollectionId);
+      if (!coll) continue;
+      var firstMode = coll.modes[0];
+      if (!firstMode) continue;
+      var modeId = firstMode.modeId;
+      if (!modeId) continue;
+      var raw = v.valuesByMode[modeId];
+      if (raw === undefined) continue;
+
+      var value = null;
+      if (v.resolvedType === 'COLOR' && typeof raw === 'object' && raw.type === 'VARIABLE_ALIAS') {
+        // Alias — need to resolve. Import the target and read its value.
+        try {
+          var target = await figma.variables.getVariableByIdAsync(raw.id);
+          if (target) {
+            var targetColl = collMap.get(target.variableCollectionId);
+            var targetFirstMode = targetColl && targetColl.modes[0];
+            var targetMode = targetFirstMode ? targetFirstMode.modeId : null;
+            var targetRaw = targetMode ? target.valuesByMode[targetMode] : null;
+            if (targetRaw && typeof targetRaw === 'object' && 'r' in targetRaw) {
+              value = rgbToHex(targetRaw.r, targetRaw.g, targetRaw.b);
+            } else {
+              value = 'alias:' + target.name;
+            }
+          }
+        } catch (_) {
+          value = 'alias:' + raw.id;
+        }
+      } else {
+        value = resolveValue(v, raw, collMap);
+      }
+
+      results.push({
+        name: v.name,
+        resolvedType: v.resolvedType,
+        value: value,
+        collectionName: coll.name,
+        key: v.key || null,
+      });
+    }
+  } catch (e) {
+    // Local variables not available — try library path
+  }
+
+  // Strategy 2: If no local results, try importing library variables and reading their values
+  if (results.length === 0) {
+    try {
+      var collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+      for (var ci = 0; ci < collections.length; ci++) {
+        var col = collections[ci];
+        var libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
+        for (var vi = 0; vi < libVars.length; vi++) {
+          var lv = libVars[vi];
+          try {
+            var imported = await figma.variables.importVariableByKeyAsync(lv.key);
+            // After import, the variable becomes local — we can read its valuesByMode
+            var impColl = null;
+            try {
+              var impCollections = await figma.variables.getLocalVariableCollectionsAsync();
+              for (var k = 0; k < impCollections.length; k++) {
+                if (impCollections[k].id === imported.variableCollectionId) {
+                  impColl = impCollections[k]; break;
+                }
+              }
+            } catch(_) {}
+
+            var impValue = null;
+            if (impColl) {
+              var impFirstMode = impColl.modes[0];
+              var impModeId = impFirstMode ? impFirstMode.modeId : null;
+              var impRaw = impModeId ? imported.valuesByMode[impModeId] : null;
+              // Resolve alias chains (up to 10 levels deep)
+              var depth = 0;
+              while (impRaw && typeof impRaw === 'object' && impRaw.type === 'VARIABLE_ALIAS' && depth < 10) {
+                try {
+                  var aliasTarget = await figma.variables.getVariableByIdAsync(impRaw.id);
+                  if (!aliasTarget) break;
+                  var aliasColl = null;
+                  for (var ac = 0; ac < impCollections.length; ac++) {
+                    if (impCollections[ac].id === aliasTarget.variableCollectionId) { aliasColl = impCollections[ac]; break; }
+                  }
+                  if (!aliasColl) break;
+                  var aliasMode = aliasColl.modes[0] ? aliasColl.modes[0].modeId : null;
+                  impRaw = aliasMode ? aliasTarget.valuesByMode[aliasMode] : null;
+                } catch(_) { break; }
+                depth++;
+              }
+              if (impRaw !== null && impRaw !== undefined) {
+                if (imported.resolvedType === 'COLOR' && typeof impRaw === 'object' && 'r' in impRaw) {
+                  impValue = rgbToHex(impRaw.r, impRaw.g, impRaw.b);
+                } else if (imported.resolvedType === 'FLOAT' && typeof impRaw === 'number') {
+                  impValue = impRaw;
+                } else if (imported.resolvedType === 'STRING' && typeof impRaw === 'string') {
+                  impValue = impRaw;
+                }
+              }
+            }
+
+            results.push({
+              name: lv.name,
+              resolvedType: lv.resolvedType,
+              value: impValue,
+              collectionName: col.name,
+              key: lv.key,
+            });
+          } catch (_) {
+            // Import failed for this variable — skip
+            results.push({
+              name: lv.name,
+              resolvedType: lv.resolvedType,
+              value: null,
+              collectionName: col.name,
+              key: lv.key,
+              error: 'import_failed',
+            });
+          }
+        }
+      }
+    } catch (e) {
+      return { variables: results, error: 'Library variable import failed: ' + e.message };
+    }
+  }
+
+  // If still no resolved values, try the node-binding approach:
+  // Create a temp frame, bind each COLOR variable to its fill, read the resolved RGB
+  var unresolvedColors = [];
+  for (var ui = 0; ui < results.length; ui++) {
+    if (results[ui].value === null && results[ui].resolvedType === 'COLOR') {
+      unresolvedColors.push(ui);
+    }
+  }
+
+  if (unresolvedColors.length > 0) {
+    var tempFrame = figma.createFrame();
+    tempFrame.name = '__temp_color_reader__';
+    tempFrame.resize(1, 1);
+    tempFrame.visible = false;
+
+    for (var ri = 0; ri < unresolvedColors.length; ri++) {
+      var idx = unresolvedColors[ri];
+      var entry = results[idx];
+      try {
+        var varObj = null;
+        if (entry.key) {
+          varObj = await figma.variables.importVariableByKeyAsync(entry.key);
+        }
+        if (varObj) {
+          var boundPaint = figma.variables.setBoundVariableForPaint(
+            { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+            'color',
+            varObj
+          );
+          tempFrame.fills = [boundPaint];
+          // Read the resolved color from the paint
+          var resolvedFills = tempFrame.fills;
+          if (resolvedFills && resolvedFills.length > 0 && resolvedFills[0].color) {
+            var c = resolvedFills[0].color;
+            entry.value = rgbToHex(c.r, c.g, c.b);
+          }
+        }
+      } catch (_) {
+        // Skip this variable
+      }
+    }
+
+    tempFrame.remove();
+  }
+
+  return { variables: results, count: results.length };
 }
 
 // Replace an existing node with a new component instance at the same position in its parent.
@@ -1015,8 +1495,8 @@ async function handleSetNodeFill(params) {
   await walk(node);
   // Fallback: apply directly to node if no vector descendant found
   if (!applied) {
-    if (useStroke && 'strokes' in node) await applyStroke(node, params.variablePath, params.hexFallback);
-    else if (!useStroke && 'fills' in node) await applyFill(node, params.variablePath, params.hexFallback);
+    if (useStroke && 'strokes' in node) { await applyStroke(node, params.variablePath, params.hexFallback); applied = true; }
+    else if (!useStroke && 'fills' in node) { await applyFill(node, params.variablePath, params.hexFallback); applied = true; }
   }
   return { ok: true, applied };
 }
@@ -1064,20 +1544,21 @@ async function handleBatch(params) {
   const operations = params.operations || [];
   const results = [];
   for (const op of operations) {
-    if (!op.type) {
-      results.push({ ok: false, error: 'Missing "type" in batch operation' });
+    var opType = op.type || op.tool;
+    if (!opType) {
+      results.push({ ok: false, error: 'Missing "type" or "tool" in batch operation' });
       continue;
     }
-    const handler = HANDLERS[op.type];
+    const handler = HANDLERS[opType];
     if (!handler) {
-      results.push({ ok: false, error: `Unknown instruction type: "${op.type}"` });
+      results.push({ ok: false, error: `Unknown instruction type: "${opType}"` });
       continue;
     }
     try {
       const result = await handler(op.params || {});
       results.push({ ok: true, result });
     } catch (e) {
-      results.push({ ok: false, error: e.message, type: op.type });
+      results.push({ ok: false, error: e.message, type: opType });
     }
   }
   return results;
@@ -1181,6 +1662,84 @@ async function handleDebugVariables(params) {
 async function handleListTextStyles() {
   const styles = await figma.getLocalTextStylesAsync();
   return { styles: styles.map(s => ({ id: s.id, name: s.name, fontSize: s.fontSize })) };
+}
+
+// Discover ALL library text styles and color styles available to this file.
+// Uses figma.teamLibrary API to enumerate across all enabled libraries.
+// Returns style keys that can be passed to preload_styles / importStyleByKeyAsync.
+async function handleDiscoverLibraryStyles(params) {
+  const nameFilter = params.nameFilter || null;
+  const textStyles = [];
+  const colorStyles = [];
+  const effectStyles = [];
+
+  // Note: figma.teamLibrary does NOT have style enumeration methods
+  // (getAvailableLibraryTextStylesAsync etc. don't exist).
+  // Instead, we enumerate local styles which include any imported library styles.
+  // For library style discovery, use the Figma MCP's search_design_system tool.
+
+  try {
+    const localText = await figma.getLocalTextStylesAsync();
+    for (const s of localText) {
+      if (nameFilter && !s.name.toLowerCase().includes(nameFilter.toLowerCase())) continue;
+      textStyles.push({ id: s.id, name: s.name, key: s.key || null });
+    }
+  } catch (e) { /* no local text styles */ }
+
+  try {
+    const localColor = await figma.getLocalPaintStylesAsync();
+    for (const s of localColor) {
+      if (nameFilter && !s.name.toLowerCase().includes(nameFilter.toLowerCase())) continue;
+      colorStyles.push({ id: s.id, name: s.name, key: s.key || null });
+    }
+  } catch (e) { /* no local color styles */ }
+
+  try {
+    const localEffect = await figma.getLocalEffectStylesAsync();
+    for (const s of localEffect) {
+      if (nameFilter && !s.name.toLowerCase().includes(nameFilter.toLowerCase())) continue;
+      effectStyles.push({ id: s.id, name: s.name, key: s.key || null });
+    }
+  } catch (e) { /* no local effect styles */ }
+
+  return {
+    textStyles: textStyles,
+    colorStyles: colorStyles,
+    effectStyles: effectStyles,
+    counts: { text: textStyles.length, color: colorStyles.length, effect: effectStyles.length },
+    note: "Returns local/imported styles only. For library style discovery, use search_design_system from the Figma MCP.",
+  };
+}
+
+// Discover ALL library variable collections and their variables.
+// Returns variable keys grouped by collection, usable with importVariableByKeyAsync.
+async function handleDiscoverLibraryVariables(params) {
+  const nameFilter = params.nameFilter || null;
+  const collections = [];
+
+  try {
+    const libCollections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+    for (const col of libCollections) {
+      const colData = { key: col.key, name: col.name, libraryName: col.libraryName || null, variables: [] };
+      try {
+        const vars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
+        for (const v of vars) {
+          if (nameFilter && !v.name.toLowerCase().includes(nameFilter.toLowerCase())) continue;
+          colData.variables.push({ key: v.key, name: v.name, resolvedType: v.resolvedType });
+        }
+      } catch (_) {}
+      if (colData.variables.length > 0 || !nameFilter) {
+        collections.push(colData);
+      }
+    }
+  } catch (e) {
+    return { collections: [], error: e.message };
+  }
+
+  return {
+    collections: collections,
+    totalVariables: collections.reduce((sum, c) => sum + c.variables.length, 0),
+  };
 }
 
 // Get the published key of an INSTANCE node's main component
@@ -1343,13 +1902,42 @@ function det(i, seed) {
   return v - Math.floor(v) - 0.5;
 }
 
+// Chart DS context — set by handleCreateChart before delegating to chart-specific handlers.
+// Contains DS variable/style references the chart should use instead of hardcoded values.
+// If null, chart falls back to raw values (permissive mode only).
+// Chart color fallbacks: when DS variables are not provided, use neutral grays.
+// These are intentionally DS-agnostic — no specific DS's color palette is assumed.
+// Neutral dark: #212121 (rgb 0.13), Neutral mid: #757575 (rgb 0.46), Neutral light: #F7F7F7 (rgb 0.97)
+var chartDsContext = null;
+var chartDsBound = { bg: false, radius: false }; // Track what makeChartOuter successfully bound
+
 // Create the outer container frame for a chart (no auto-layout, optional clip)
-function makeChartOuter(name, parentNodeId, w, h) {
+// DS-aware: tries to bind bg fill and corner radius from chartDsContext.
+async function makeChartOuter(name, parentNodeId, w, h) {
   const f = figma.createFrame();
   f.name = name;
   f.resize(w, h);
   f.fills = [];
   f.clipsContent = false;
+  chartDsBound.bg = false;
+  chartDsBound.radius = false;
+
+  // DS: bind background and radius from chart context if available
+  if (chartDsContext) {
+    if (chartDsContext.bgVariable) {
+      try {
+        var bgResult = await applyFill(f, chartDsContext.bgVariable);
+        if (bgResult && bgResult.bound) chartDsBound.bg = true;
+      } catch(_) {}
+    }
+    if (chartDsContext.radiusVariable) {
+      try {
+        await applySpacing(f, 'cornerRadius', chartDsContext.radiusVariable);
+        chartDsBound.radius = true;
+      } catch(_) {}
+    }
+  }
+
   if (parentNodeId) {
     const p = figma.getNodeById(parentNodeId);
     if (p && 'appendChild' in p) {
@@ -1364,23 +1952,53 @@ function makeChartOuter(name, parentNodeId, w, h) {
 }
 
 // Append a 1px grid line rectangle to a frame
-function gridLine(parent, x, y, w, h) {
+// DS-aware: tries to use grid color from chartDsContext.
+async function gridLine(parent, x, y, w, h) {
   const r = figma.createRectangle();
   r.name = 'grid';
   r.resize(Math.max(1, w), Math.max(1, h));
   r.x = x; r.y = y;
-  r.fills = [{ type: 'SOLID', color: { r: 0.906, g: 0.918, b: 0.933 } }];
+  var gridBound = false;
+  if (chartDsContext && chartDsContext.gridVariable) {
+    try {
+      var gridResult = await applyFill(r, chartDsContext.gridVariable);
+      gridBound = gridResult && gridResult.bound;
+    } catch(_) {}
+  }
+  if (!gridBound) {
+    r.fills = [{ type: 'SOLID', color: { r: 0.906, g: 0.918, b: 0.933 } }];
+  }
   r.strokes = [];
   parent.appendChild(r);
 }
 
 // Append a text label at (x, y). align: 'left' | 'center' | 'right'
+// DS-aware: tries to apply text style and fill variable from chartDsContext.
 async function chartLabel(parent, text, x, y, fontSize, colorRGB, align) {
   const node = figma.createText();
-  node.fontName = { family: 'Inter', style: 'Regular' };
+  var fontFamily = (chartDsContext && chartDsContext.fontFamily) || sessionDefaults.fontFamily || 'Inter';
+  node.fontName = { family: fontFamily, style: 'Regular' };
   node.fontSize = fontSize || 11;
   node.characters = String(text);
-  node.fills = [{ type: 'SOLID', color: colorRGB || { r: 0.427, g: 0.467, b: 0.549 } }];
+
+  // DS: try text style and fill variable
+  var fillBound = false;
+  if (chartDsContext && chartDsContext.labelTextStyleId) {
+    try {
+      var styled = await applyTextStyle(node, chartDsContext.labelTextStyleId);
+      if (styled) node.fontSize = fontSize || node.fontSize; // restore chart-specific size if needed
+    } catch(_) {}
+  }
+  if (chartDsContext && chartDsContext.labelFillVariable) {
+    try {
+      var result = await applyFill(node, chartDsContext.labelFillVariable);
+      fillBound = result && result.bound;
+    } catch(_) {}
+  }
+  if (!fillBound) {
+    node.fills = [{ type: 'SOLID', color: colorRGB || { r: 0.46, g: 0.46, b: 0.46 } }];
+  }
+
   parent.appendChild(node);
   const a = align || 'left';
   if (a === 'center') node.x = x - node.width / 2;
@@ -1416,7 +2034,7 @@ async function handleScatterChart(params) {
   const doJitter     = params.jitter   !== false;
   const chartName    = params.name     || 'Scatter Chart';
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
   // Layout constants
   const PAD_L  = 58;
@@ -1443,9 +2061,9 @@ async function handleScatterChart(params) {
   };
 
   // Outer frame
-  const outer = makeChartOuter(chartName, params.parentNodeId, w, h);
-  outer.fills = [{ type: 'SOLID', color: { r: 0.976, g: 0.980, b: 0.984 } }];
-  outer.cornerRadius = 8;
+  const outer = await makeChartOuter(chartName, params.parentNodeId, w, h);
+  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.97, g: 0.97, b: 0.97 } }];
+  if (!chartDsBound.radius) outer.cornerRadius = 8;
 
   // ── Plot clip frame ────────────────────────────────────────────────────────
   const plot = figma.createFrame();
@@ -1459,17 +2077,17 @@ async function handleScatterChart(params) {
 
   // Horizontal grid lines at band boundaries (relative to plot)
   for (let i = 0; i <= nCats; i++) {
-    gridLine(plot, 0, i * bandH, plotW, 1);
+    await gridLine(plot, 0, i * bandH, plotW, 1);
   }
   // Vertical grid lines at x-ticks (relative to plot)
   for (const tick of xTicks) {
-    gridLine(plot, xNorm(tick) * plotW, 0, 1, plotH);
+    await gridLine(plot, xNorm(tick) * plotW, 0, 1, plotH);
   }
 
   // Data dots (relative to plot)
+  var catVars = params.categoryVariables || {};
   for (let i = 0; i < data.length; i++) {
     const pt    = data[i];
-    const color = hexToRgb(categories[pt.category] || '#888888');
     const jx    = doJitter ? det(i, 127.1) * 5 : 0;
     const jy    = doJitter ? det(i, 311.7) * bandH * 0.38 : 0;
     const cx    = Math.min(Math.max(xNorm(pt.x) * plotW + jx, 0), plotW);
@@ -1478,7 +2096,14 @@ async function handleScatterChart(params) {
     dot.resize(dotR, dotR);
     dot.x = cx - dotR / 2;
     dot.y = cy - dotR / 2;
-    dot.fills   = [{ type: 'SOLID', color, opacity: 0.85 }];
+    // DS variable first, then hex fallback
+    var dotVarPath = catVars[pt.category] || null;
+    var dotHex = categories[pt.category] || '#888888';
+    try {
+      await applyFill(dot, dotVarPath, dotHex);
+    } catch(_) {
+      dot.fills = [{ type: 'SOLID', color: hexToRgb(dotHex), opacity: 0.85 }];
+    }
     dot.strokes = [];
     plot.appendChild(dot);
   }
@@ -1500,7 +2125,7 @@ async function handleScatterChart(params) {
   // X-axis label
   if (xLabel) {
     await chartLabel(outer, xLabel, plotX + plotW / 2, h - 18, 12,
-                     { r: 0.063, g: 0.094, b: 0.157 }, 'center');
+                     { r: 0.13, g: 0.13, b: 0.13 }, 'center');
   }
 
   // Legend (top-right, right → left)
@@ -1510,10 +2135,10 @@ async function handleScatterChart(params) {
     const color = hexToRgb(categories[cat] || '#888888');
 
     const ltxt = figma.createText();
-    ltxt.fontName = { family: 'Inter', style: 'Regular' };
+    ltxt.fontName = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     ltxt.fontSize = 11;
     ltxt.characters = cat;
-    ltxt.fills = [{ type: 'SOLID', color: { r: 0.063, g: 0.094, b: 0.157 } }];
+    ltxt.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
     outer.appendChild(ltxt);
     lx -= ltxt.width;
     ltxt.x = lx;
@@ -1555,7 +2180,7 @@ async function handleLineChart(params) {
   const yLabel    = params.yLabel  || '';
   const chartName = params.name    || 'Line Chart';
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
   const PAD_L = 52;
   const PAD_T = 8;
@@ -1571,15 +2196,15 @@ async function handleLineChart(params) {
   const xScale = v => plotX + (v - xDomain[0]) / (xDomain[1] - xDomain[0]) * plotW;
   const yScale = v => plotY + plotH - (v - yDomain[0]) / (yDomain[1] - yDomain[0]) * plotH;
 
-  const outer = makeChartOuter(chartName, params.parentNodeId, w, h);
-  outer.fills = [{ type: 'SOLID', color: { r: 0.976, g: 0.980, b: 0.984 } }];
-  outer.cornerRadius = 8;
+  const outer = await makeChartOuter(chartName, params.parentNodeId, w, h);
+  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.97, g: 0.97, b: 0.97 } }];
+  if (!chartDsBound.radius) outer.cornerRadius = 8;
 
   // Grid lines
-  for (const tick of yTicks) gridLine(outer, plotX, yScale(tick), plotW, 1);
-  for (const tick of xTicks) gridLine(outer, xScale(tick), plotY, 1, plotH);
-  gridLine(outer, plotX, plotY + plotH, plotW, 1); // x-axis baseline
-  gridLine(outer, plotX, plotY, 1, plotH);          // y-axis baseline
+  for (const tick of yTicks) await gridLine(outer, plotX, yScale(tick), plotW, 1);
+  for (const tick of xTicks) await gridLine(outer, xScale(tick), plotY, 1, plotH);
+  await gridLine(outer, plotX, plotY + plotH, plotW, 1); // x-axis baseline
+  await gridLine(outer, plotX, plotY, 1, plotH);          // y-axis baseline
 
   // Axis tick labels
   for (const tick of yTicks) {
@@ -1589,13 +2214,14 @@ async function handleLineChart(params) {
     await chartLabel(outer, String(tick) + xTickSfx, xScale(tick), plotY + plotH + 8, 11, null, 'center');
   }
 
-  if (xLabel) await chartLabel(outer, xLabel, plotX + plotW / 2, h - 18, 12, { r: 0.063, g: 0.094, b: 0.157 }, 'center');
-  if (yLabel) await chartLabel(outer, yLabel, 4, plotY + plotH / 2, 12, { r: 0.063, g: 0.094, b: 0.157 }, 'left');
+  if (xLabel) await chartLabel(outer, xLabel, plotX + plotW / 2, h - 18, 12, { r: 0.13, g: 0.13, b: 0.13 }, 'center');
+  if (yLabel) await chartLabel(outer, yLabel, 4, plotY + plotH / 2, 12, { r: 0.13, g: 0.13, b: 0.13 }, 'left');
 
   // Series
   for (const s of series) {
     if (!s.data || s.data.length < 2) continue;
     const color = hexToRgb(s.color || '#6941C6');
+    var seriesVarPath = s.colorVariable || null;
     const pts   = [...s.data].sort((a, b) => a.x - b.x)
                              .map(pt => ({ px: xScale(pt.x), py: yScale(pt.y) }));
 
@@ -1635,10 +2261,10 @@ async function handleLineChart(params) {
     const s     = series[li];
     const color = hexToRgb(s.color || '#6941C6');
     const ltxt  = figma.createText();
-    ltxt.fontName  = { family: 'Inter', style: 'Regular' };
+    ltxt.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     ltxt.fontSize  = 11;
     ltxt.characters = s.name || '';
-    ltxt.fills = [{ type: 'SOLID', color: { r: 0.063, g: 0.094, b: 0.157 } }];
+    ltxt.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
     outer.appendChild(ltxt);
     lx -= ltxt.width;
     ltxt.x = lx; ltxt.y = 5;
@@ -1725,6 +2351,7 @@ async function handleDonutChart(params) {
   const centerSub   = params.centerSubLabel || '';
   const chartName   = params.name         || 'Donut Chart';
   const noLegend    = params.noLegend     || false;
+  const legendPos   = params.legendPosition || 'right'; // 'right' or 'bottom'
   // Color variables for text (use discovered library variable paths)
   const centerColorVar    = params.centerColorVariable    || null;
   const centerSubColorVar = params.centerSubColorVariable || null;
@@ -1732,16 +2359,26 @@ async function handleDonutChart(params) {
   const centerStyleId    = params.centerTextStyleId    || null;
   const centerSubStyleId = params.centerSubTextStyleId || null;
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-  if (centerLabel) await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
+  if (centerLabel) await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Bold' });
 
   const LEGEND_W = noLegend ? 0 : 160;
+  const LEGEND_H_BELOW = noLegend ? 0 : (data.length * 22 + 20); // height when legend is below
   const PAD = noLegend ? 0 : 20;
-  const totalW = noLegend ? size : size + PAD + LEGEND_W;
-  const totalH = noLegend ? size : size + PAD * 2;
+  var totalW, totalH;
+  if (noLegend) {
+    totalW = size;
+    totalH = size;
+  } else if (legendPos === 'bottom') {
+    totalW = size + PAD * 2;
+    totalH = size + PAD * 2 + LEGEND_H_BELOW;
+  } else {
+    totalW = size + PAD + LEGEND_W;
+    totalH = size + PAD * 2;
+  }
 
-  const outer = makeChartOuter(chartName, params.parentNodeId, totalW, totalH);
-  outer.fills = [];
+  const outer = await makeChartOuter(chartName, params.parentNodeId, totalW, totalH);
+  if (!chartDsBound.bg) outer.fills = [];
   if (params.x !== undefined) outer.x = params.x;
   if (params.y !== undefined) outer.y = params.y;
 
@@ -1788,22 +2425,22 @@ async function handleDonutChart(params) {
   // Center text
   if (centerLabel) {
     const ct = figma.createText();
-    ct.fontName  = { family: 'Inter', style: 'Bold' };
+    ct.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Bold' };
     ct.fontSize  = 22;
     ct.characters = centerLabel;
     await applyTextStyle(ct, centerStyleId);
-    await applyFill(ct, centerColorVar, '#101828');
+    await applyFill(ct, centerColorVar, '#212121');
     outer.appendChild(ct);
     ct.x = cx - ct.width / 2;
     ct.y = cy - ct.height / 2 - (centerSub ? 10 : 0);
 
     if (centerSub) {
       const cs = figma.createText();
-      cs.fontName  = { family: 'Inter', style: 'Regular' };
+      cs.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
       cs.fontSize  = 12;
       cs.characters = centerSub;
       await applyTextStyle(cs, centerSubStyleId);
-      await applyFill(cs, centerSubColorVar, '#667085');
+      await applyFill(cs, centerSubColorVar, '#757575');
       outer.appendChild(cs);
       cs.x = cx - cs.width / 2;
       cs.y = cy + 6;
@@ -1812,8 +2449,14 @@ async function handleDonutChart(params) {
 
   // Legend
   if (!noLegend) {
-  let ly = PAD;
-  const lx = PAD + size + PAD;
+  var ly, lx;
+  if (legendPos === 'bottom') {
+    lx = PAD;
+    ly = PAD + size + PAD;
+  } else {
+    lx = PAD + size + PAD;
+    ly = PAD;
+  }
   for (const seg of data) {
     const pct = Math.round((seg.value / total) * 100);
 
@@ -1825,11 +2468,11 @@ async function handleDonutChart(params) {
     outer.appendChild(dot);
 
     const lbl = figma.createText();
-    lbl.fontName  = { family: 'Inter', style: 'Regular' };
+    lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     lbl.fontSize  = 12;
     lbl.characters = (seg.label || '') + '  ' + pct + '%';
     await applyTextStyle(lbl, params.legendTextStyleId || null);
-    await applyFill(lbl, null, '#101828');
+    await applyFill(lbl, null, '#212121');
     outer.appendChild(lbl);
     lbl.x = lx + 12; lbl.y = ly;
     ly += 22;
@@ -1854,7 +2497,24 @@ async function handleBarChart(params) {
   const w           = params.width   || 800;
   const h           = params.height  || 300;
   const bars        = params.bars    || [];
-  const categories  = params.categories  || {};
+  var   categories  = params.categories  || {};
+
+  // Normalize flat bars → stacked segment format.
+  // MCP sends: [{label, value, color}, ...] (simple bars)
+  // Handler expects: [{label, segments: [{category, value}]}, ...] (stacked bars)
+  var isFlatBars = false;
+  for (var i = 0; i < bars.length; i++) {
+    if (!bars[i].segments) {
+      isFlatBars = true;
+      var barColor = bars[i].color || '#888888';
+      bars[i].segments = [{ category: barColor, value: bars[i].value || 0 }];
+      if (!categories[barColor]) categories[barColor] = barColor;
+    }
+  }
+  // For flat bars: skip the stacked-segment legend (hex codes aren't useful labels).
+  // The bars are self-descriptive via their x-axis labels.
+  // Keep categories for color lookup but suppress the legend.
+  var suppressLegend = isFlatBars;
   const yDomain     = params.yDomain     || [0, 100];
   const yTicks      = params.yTicks      || [];
   const yTickSfx    = params.yTickSuffix !== undefined ? params.yTickSuffix : '';
@@ -1863,142 +2523,322 @@ async function handleBarChart(params) {
   const chartName   = params.name    || 'Bar Chart';
   const annotations = params.annotations || [];
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
-  const PAD_L    = 52;
-  const PAD_T    = 8;
+  const PAD_L    = 52;   // left padding for y-axis labels
   const PAD_R    = 16;
-  const PAD_B    = 36;
-  const LEG_H    = 24;
   const BAR_GAP  = 3;
 
-  const plotX = PAD_L;
-  const plotY = PAD_T + LEG_H;
-  const plotW = w - PAD_L - PAD_R;
-  const plotH = h - PAD_T - LEG_H - PAD_B;
+  const nBars  = bars.length;
+  const yRange = yDomain[1] - yDomain[0];
+  const plotW  = w - PAD_L - PAD_R;
+  const plotH  = h - 80;  // reserve space for legend row + label row + x-axis title
 
-  const nBars     = bars.length;
-  const barGroupW = nBars > 0 ? plotW / nBars : plotW;
-  const barW      = Math.max(4, barGroupW - BAR_GAP);
-  const yRange    = yDomain[1] - yDomain[0];
+  // ── Outer frame: VERTICAL auto-layout ──────────────────────────────────────
+  const outer = await makeChartOuter(chartName, params.parentNodeId, w, h);
+  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.97, g: 0.97, b: 0.97 } }];
+  if (!chartDsBound.radius) outer.cornerRadius = 8;
 
-  const outer = makeChartOuter(chartName, params.parentNodeId, w, h);
-  outer.fills = [{ type: 'SOLID', color: { r: 0.976, g: 0.980, b: 0.984 } }];
-  outer.cornerRadius = 8;
+  // Cleanup on failure: if anything below throws, remove the outer frame so
+  // failed chart attempts don't leave orphaned nodes.
+  try {
+  outer.layoutMode            = 'VERTICAL';
+  outer.primaryAxisAlignItems  = 'MIN';
+  outer.counterAxisAlignItems  = 'MIN';
+  outer.paddingTop    = 8;
+  outer.paddingBottom = 8;
+  outer.paddingLeft   = 0;
+  outer.paddingRight  = PAD_R;
+  outer.itemSpacing   = 4;
+  outer.layoutSizingHorizontal = 'FIXED';
+  outer.layoutSizingVertical   = 'FIXED';
 
-  // Horizontal grid lines at y-ticks
-  for (const tick of yTicks) {
-    const yPos = plotY + plotH - (tick - yDomain[0]) / yRange * plotH;
-    gridLine(outer, plotX, yPos, plotW, 1);
+  // ── Legend row (HORIZONTAL, right-aligned) ─────────────────────────────────
+  const catEntries = Object.entries(categories);
+  if (catEntries.length > 0 && !suppressLegend) {
+    const legendRow = figma.createFrame();
+    legendRow.name = 'legend';
+    legendRow.layoutMode = 'HORIZONTAL';
+    legendRow.primaryAxisAlignItems = 'MAX';   // push items to the right
+    legendRow.counterAxisAlignItems = 'CENTER';
+    legendRow.itemSpacing = 12;
+    legendRow.fills = [];
+    legendRow.layoutSizingVertical   = 'HUG';
+    legendRow.paddingLeft = PAD_L;
+    // Append to outer BEFORE setting FILL (Figma requires auto-layout parent)
+    outer.appendChild(legendRow);
+    legendRow.layoutSizingHorizontal = 'FILL';
+
+    for (const [cat, hex] of catEntries) {
+      const color = hexToRgb(hex);
+      const entry = figma.createFrame();
+      entry.name = 'legend-entry';
+      entry.layoutMode = 'HORIZONTAL';
+      entry.counterAxisAlignItems = 'CENTER';
+      entry.itemSpacing = 4;
+      entry.fills = [];
+      entry.layoutSizingHorizontal = 'HUG';
+      entry.layoutSizingVertical   = 'HUG';
+
+      const sw = figma.createRectangle();
+      sw.resize(10, 10);
+      sw.cornerRadius = 2;
+      sw.fills   = [{ type: 'SOLID', color }];
+      sw.strokes = [];
+      entry.appendChild(sw);
+
+      const ltxt = figma.createText();
+      ltxt.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+      ltxt.fontSize  = 11;
+      ltxt.characters = cat;
+      ltxt.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
+      entry.appendChild(ltxt);
+
+      legendRow.appendChild(entry);
+    }
+    // legendRow already appended above
   }
-  // Baseline
-  gridLine(outer, plotX, plotY + plotH, plotW, 1);
-  gridLine(outer, plotX, plotY, 1, plotH);
 
-  // Y-axis tick labels
-  for (const tick of yTicks) {
-    const yPos = plotY + plotH - (tick - yDomain[0]) / yRange * plotH;
-    await chartLabel(outer, String(tick) + yTickSfx, plotX - 4, yPos - 8, 11, null, 'right');
+  // ── Y-axis label (above the plot area) ─────────────────────────────────────
+  if (yLabel) {
+    const yLabelNode = figma.createText();
+    yLabelNode.fontName = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+    yLabelNode.fontSize = 10;
+    yLabelNode.characters = yLabel;
+    yLabelNode.fills = [{ type: 'SOLID', color: { r: 0.46, g: 0.46, b: 0.46 } }];
+    const yLabelWrap = figma.createFrame();
+    yLabelWrap.name = 'y-label';
+    yLabelWrap.fills = [];
+    yLabelWrap.layoutMode = 'HORIZONTAL';
+    yLabelWrap.paddingLeft = PAD_L;
+    yLabelWrap.layoutSizingVertical   = 'HUG';
+    yLabelWrap.appendChild(yLabelNode);
+    outer.appendChild(yLabelWrap);
+    yLabelWrap.layoutSizingHorizontal = 'FILL';
   }
 
-  // Bars (stacked bottom-to-top)
+  // ── Plot area (absolute positioning for grid + y-labels; contains AL bar row)
+  const plotArea = figma.createFrame();
+  plotArea.name = 'plot-area';
+  plotArea.resize(w - PAD_R, plotH);
+  plotArea.fills = [];
+  plotArea.clipsContent = true;
+  plotArea.layoutSizingVertical   = 'FIXED';
+  outer.appendChild(plotArea);
+  plotArea.layoutSizingHorizontal = 'FILL';
+
+  // Horizontal grid lines at y-ticks (absolute within plot area)
+  for (const tick of yTicks) {
+    const yPos = plotH - (tick - yDomain[0]) / yRange * plotH;
+    await gridLine(plotArea, PAD_L, yPos, plotW, 1);
+  }
+  // Baseline + y-axis line
+  await gridLine(plotArea, PAD_L, plotH, plotW, 1);
+  await gridLine(plotArea, PAD_L, 0, 1, plotH);
+
+  // Y-axis tick labels (absolute within plot area)
+  for (const tick of yTicks) {
+    const yPos = plotH - (tick - yDomain[0]) / yRange * plotH;
+    await chartLabel(plotArea, String(tick) + yTickSfx, PAD_L - 4, yPos - 8, 11, null, 'right');
+  }
+
+  // ── Bar row: HORIZONTAL auto-layout, bottom-aligned ───────────────────────
+  const barRow = figma.createFrame();
+  barRow.name = 'bar-row';
+  barRow.layoutMode = 'HORIZONTAL';
+  barRow.counterAxisAlignItems = 'MAX';   // bottom-align bars
+  barRow.primaryAxisAlignItems = 'MIN';
+  barRow.itemSpacing = BAR_GAP;
+  barRow.fills = [];
+  barRow.resize(plotW, plotH);
+  barRow.x = PAD_L;
+  barRow.y = 0;
+  barRow.layoutSizingHorizontal = 'FIXED';
+  barRow.layoutSizingVertical   = 'FIXED';
+  plotArea.appendChild(barRow);
+
+  // Build bars — each bar column gets layoutGrow: 1
+  var barCatVars = params.categoryVariables || {};
   for (let i = 0; i < nBars; i++) {
     const bar = bars[i];
-    const bx  = plotX + i * barGroupW + BAR_GAP / 2;
-    let cumPx = 0;  // accumulated pixel height from baseline
 
-    for (let si = 0; si < bar.segments.length; si++) {
-      const seg   = bar.segments[si];
-      const color = hexToRgb(categories[seg.category] || '#888888');
-      const segPx = Math.max(0, seg.value / yRange * plotH);
-      if (segPx < 0.5) continue;
+    // Single-segment: just a rectangle with layoutGrow
+    if (bar.segments.length === 1) {
+      const seg    = bar.segments[0];
+      const segHex = categories[seg.category] || '#888888';
+      const segPx  = Math.max(1, seg.value / yRange * plotH);
 
       const rect = figma.createRectangle();
-      rect.name  = seg.category;
-      rect.resize(Math.max(1, barW), Math.max(1, segPx));
-      rect.x = bx;
-      rect.y = plotY + plotH - cumPx - segPx;
-      rect.fills   = [{ type: 'SOLID', color }];
+      rect.name  = bar.label || seg.category;
+      rect.resize(10, Math.max(1, segPx));   // width overridden by layoutGrow
+      rect.layoutGrow = 1;
+      rect.topLeftRadius    = 2;
+      rect.topRightRadius   = 2;
+      rect.bottomLeftRadius = 0;
+      rect.bottomRightRadius= 0;
       rect.strokes = [];
-      // Round top corners on the topmost segment only
-      if (si === bar.segments.length - 1) {
-        rect.topLeftRadius    = 2;
-        rect.topRightRadius   = 2;
-        rect.bottomLeftRadius = 0;
-        rect.bottomRightRadius= 0;
+
+      var barVarPath = barCatVars[seg.category] || null;
+      try {
+        await applyFill(rect, barVarPath, segHex);
+      } catch(_) {
+        rect.fills = [{ type: 'SOLID', color: hexToRgb(segHex) }];
       }
-      outer.appendChild(rect);
-      cumPx += segPx;
+      barRow.appendChild(rect);
+    } else {
+      // Stacked: VERTICAL column, segments bottom-to-top
+      const col = figma.createFrame();
+      col.name = bar.label || ('bar-' + i);
+      col.layoutMode = 'VERTICAL';
+      col.primaryAxisAlignItems = 'MAX';    // stack from bottom
+      col.counterAxisAlignItems = 'STRETCH';
+      col.itemSpacing = 0;
+      col.fills = [];
+      col.layoutGrow = 1;
+      col.layoutSizingVertical = 'HUG';
+
+      // Segments rendered top-to-bottom in the column (last segment on top = first child)
+      for (let si = bar.segments.length - 1; si >= 0; si--) {
+        const seg    = bar.segments[si];
+        const segHex = categories[seg.category] || '#888888';
+        const segPx  = Math.max(0, seg.value / yRange * plotH);
+        if (segPx < 0.5) continue;
+
+        const rect = figma.createRectangle();
+        rect.name  = seg.category;
+        rect.resize(10, Math.max(1, segPx));
+        rect.layoutSizingHorizontal = 'FILL';
+        rect.strokes = [];
+
+        var barVarPath2 = barCatVars[seg.category] || null;
+        try {
+          await applyFill(rect, barVarPath2, segHex);
+        } catch(_) {
+          rect.fills = [{ type: 'SOLID', color: hexToRgb(segHex) }];
+        }
+
+        // Round top corners on the topmost segment (first child = top of stack)
+        if (si === bar.segments.length - 1) {
+          rect.topLeftRadius    = 2;
+          rect.topRightRadius   = 2;
+          rect.bottomLeftRadius = 0;
+          rect.bottomRightRadius= 0;
+        }
+        col.appendChild(rect);
+      }
+      barRow.appendChild(col);
     }
   }
 
-  // X-axis bucket labels (centered under each bar group)
-  for (let i = 0; i < nBars; i++) {
-    const bar     = bars[i];
-    const centerX = plotX + i * barGroupW + barGroupW / 2;
-    await chartLabel(outer, bar.label, centerX, plotY + plotH + 8, 10, null, 'center');
-  }
-
-  // Annotation lines (vertical, e.g. Median, P95)
+  // Annotation lines (absolute within plot area)
   for (const ann of annotations) {
     if (ann.type !== 'vline') continue;
     const bi    = ann.barIndex !== undefined ? ann.barIndex : 0;
-    const ax    = plotX + bi * barGroupW;
-    const color = hexToRgb(ann.color || '#667085');
+    const barGroupW = nBars > 0 ? plotW / nBars : plotW;
+    const ax    = PAD_L + bi * barGroupW;
+    const color = hexToRgb(ann.color || '#757575');
     const line  = figma.createRectangle();
     line.name   = 'annotation-' + (ann.label || 'line');
     line.resize(1, plotH);
     line.x = ax;
-    line.y = plotY;
+    line.y = 0;
     line.fills   = [{ type: 'SOLID', color, opacity: 0.8 }];
     line.strokes = [];
-    outer.appendChild(line);
+    plotArea.appendChild(line);
     if (ann.label) {
-      await chartLabel(outer, ann.label, ax + 3, plotY + 4, 10, color, 'left');
+      await chartLabel(plotArea, ann.label, ax + 3, 4, 10, color, 'left');
     }
   }
 
-  // X-axis title
+  // ── Labels row: HORIZONTAL, SPACE_BETWEEN ─────────────────────────────────
+  if (nBars > 0) {
+    const labelsRow = figma.createFrame();
+    labelsRow.name = 'x-labels';
+    labelsRow.layoutMode = 'HORIZONTAL';
+    labelsRow.primaryAxisAlignItems = 'SPACE_BETWEEN';
+    labelsRow.counterAxisAlignItems = 'MIN';
+    labelsRow.fills = [];
+    labelsRow.paddingLeft  = PAD_L;
+    labelsRow.paddingRight = 0;
+    labelsRow.layoutSizingVertical   = 'HUG';
+    // Append to outer BEFORE setting FILL
+    outer.appendChild(labelsRow);
+    labelsRow.layoutSizingHorizontal = 'FILL';
+
+    // Group consecutive bars under one label. A bar with a non-empty label starts
+    // a new group; bars with empty labels extend the previous group.
+    // Each group gets a wrapper frame with one layoutGrow:1 slot per bar it spans,
+    // because Figma only allows layoutGrow = 0 or 1.
+    var groups = [];
+    for (let i = 0; i < nBars; i++) {
+      if (bars[i].label) {
+        groups.push({ label: bars[i].label, span: 1 });
+      } else if (groups.length > 0) {
+        groups[groups.length - 1].span++;
+      } else {
+        groups.push({ label: '', span: 1 });
+      }
+    }
+    for (const g of groups) {
+      if (g.span === 1) {
+        // Single bar: just a text node with layoutGrow: 1
+        const lbl = figma.createText();
+        lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+        lbl.fontSize  = 10;
+        lbl.characters = g.label;
+        lbl.fills = [{ type: 'SOLID', color: { r: 0.46, g: 0.46, b: 0.46 } }];
+        lbl.textAlignHorizontal = 'CENTER';
+        labelsRow.appendChild(lbl);
+        lbl.layoutGrow = 1;
+      } else {
+        // Multi-bar group: wrapper frame that spans multiple bar slots
+        const wrap = figma.createFrame();
+        wrap.name = 'label-group';
+        wrap.layoutMode = 'HORIZONTAL';
+        wrap.primaryAxisAlignItems = 'CENTER';
+        wrap.fills = [];
+        labelsRow.appendChild(wrap);
+        wrap.layoutGrow = 1;
+        // Add empty spacers for extra bar slots so the wrapper grows proportionally
+        for (let s = 1; s < g.span; s++) {
+          const spacer = figma.createFrame();
+          spacer.name = 'spacer';
+          spacer.resize(1, 1);
+          spacer.fills = [];
+          labelsRow.appendChild(spacer);
+          spacer.layoutGrow = 1;
+        }
+        const lbl = figma.createText();
+        lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+        lbl.fontSize  = 10;
+        lbl.characters = g.label;
+        lbl.fills = [{ type: 'SOLID', color: { r: 0.46, g: 0.46, b: 0.46 } }];
+        lbl.textAlignHorizontal = 'CENTER';
+        wrap.appendChild(lbl);
+        lbl.layoutSizingHorizontal = 'FILL';
+      }
+    }
+  }
+
+  // ── X-axis title ──────────────────────────────────────────────────────────
   if (xLabel) {
-    await chartLabel(outer, xLabel, plotX + plotW / 2, h - 18, 12,
-                     { r: 0.063, g: 0.094, b: 0.157 }, 'center');
-  }
-
-  // Y-axis label (top-left, horizontal — no rotation in Figma plugin API)
-  if (yLabel) {
-    await chartLabel(outer, yLabel, plotX, plotY - 4, 10, null, 'left');
-  }
-
-  // Legend (top-right, square swatch)
-  const catEntries = Object.entries(categories);
-  let lx = w - PAD_R;
-  for (let li = catEntries.length - 1; li >= 0; li--) {
-    const [cat, hex] = catEntries[li];
-    const color = hexToRgb(hex);
-
-    const ltxt = figma.createText();
-    ltxt.fontName  = { family: 'Inter', style: 'Regular' };
-    ltxt.fontSize  = 11;
-    ltxt.characters = cat;
-    ltxt.fills = [{ type: 'SOLID', color: { r: 0.063, g: 0.094, b: 0.157 } }];
-    outer.appendChild(ltxt);
-    lx -= ltxt.width;
-    ltxt.x = lx;
-    ltxt.y = 5;
-
-    const sw = figma.createRectangle();
-    sw.resize(10, 10);
-    sw.cornerRadius = 2;
-    sw.fills   = [{ type: 'SOLID', color }];
-    sw.strokes = [];
-    lx -= 14;
-    sw.x = lx;
-    sw.y = 6;
-    outer.appendChild(sw);
-    lx -= 16;
+    const xLabelNode = figma.createText();
+    xLabelNode.fontName = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+    xLabelNode.fontSize = 12;
+    xLabelNode.characters = xLabel;
+    xLabelNode.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
+    xLabelNode.textAlignHorizontal = 'CENTER';
+    outer.appendChild(xLabelNode);
+    xLabelNode.layoutSizingHorizontal = 'FILL';
   }
 
   return { nodeId: outer.id, name: outer.name };
+
+  } catch (e) {
+    // Cleanup: remove the partially-built chart frame
+    try { outer.remove(); } catch (_) {}
+    throw e;
+  }
 }
 
 // ── Radar chart ───────────────────────────────────────────────────────────────
@@ -2020,15 +2860,15 @@ async function handleRadarChart(params) {
   const n = data.length;
   if (n < 3) throw new Error('Radar chart requires at least 3 data points');
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
   const LABEL_PAD = 32;
   const maxR = size / 2 - LABEL_PAD;
   const cx   = size / 2;
   const cy   = size / 2;
 
-  const outer = makeChartOuter(chartName, params.parentNodeId, size, size);
-  outer.fills = [];
+  const outer = await makeChartOuter(chartName, params.parentNodeId, size, size);
+  if (!chartDsBound.bg) outer.fills = [];
 
   function ptAt(i, r) {
     const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
@@ -2108,12 +2948,44 @@ async function handleRadarChart(params) {
 
 async function handleCreateChart(params) {
   const t = params.chartType || '';
-  if (t === 'scatter' || t === 'jitter')  return handleScatterChart(params);
-  if (t === 'line'    || t === 'area')    return handleLineChart(params);
-  if (t === 'donut'   || t === 'pie')     return handleDonutChart(params);
-  if (t === 'bar'     || t === 'histogram') return handleBarChart(params);
-  if (t === 'radar')                        return handleRadarChart(params);
-  throw new Error('Unknown chartType "' + t + '". Supported: scatter, jitter, line, area, donut, pie, bar, histogram, radar');
+
+  // Set up DS context for chart helpers.
+  // These params allow the orchestrator to pass DS variable paths for chart elements.
+  chartDsContext = {
+    bgVariable:         params.bgVariable || null,         // Outer frame background (e.g., "Colors/Background/bg-secondary")
+    radiusVariable:     params.radiusVariable || null,     // Outer frame radius (e.g., "Radius/radius-xl")
+    gridVariable:       params.gridVariable || null,       // Grid line color (e.g., "Colors/Border/border-secondary")
+    labelFillVariable:  params.labelFillVariable || null,  // Label text color (e.g., "Colors/Text/text-tertiary (600)")
+    labelTextStyleId:   params.labelTextStyleId || null,   // Label text style key
+    fontFamily:         params.fontFamily || null,          // Font family override for chart labels
+  };
+
+  // Translate MCP 'categories' object to 'data' array for donut/pie charts.
+  // MCP schema exposes categories: { "Label": { value, color } }
+  // Plugin handler reads data: [{ label, value, color }]
+  if ((t === 'donut' || t === 'pie') && params.categories && !params.data) {
+    const order = params.categoryOrder || Object.keys(params.categories);
+    params.data = order.map(function(k) {
+      return {
+        label: k,
+        value: (params.categories[k] || {}).value || 0,
+        color: (params.categories[k] || {}).color || '#888888',
+        colorVariable: (params.categories[k] || {}).colorVariable || null,
+      };
+    });
+  }
+
+  var result;
+  if (t === 'scatter' || t === 'jitter')    result = await handleScatterChart(params);
+  else if (t === 'line'    || t === 'area') result = await handleLineChart(params);
+  else if (t === 'donut'   || t === 'pie')  result = await handleDonutChart(params);
+  else if (t === 'bar'     || t === 'histogram') result = await handleBarChart(params);
+  else if (t === 'radar')                        result = await handleRadarChart(params);
+  else throw new Error('Unknown chartType "' + t + '". Supported: scatter, jitter, line, area, donut, pie, bar, histogram, radar');
+
+  // Clean up chart DS context
+  chartDsContext = null;
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -2158,34 +3030,44 @@ async function handleSetPrototypeStart(params) {
   return { ok: true, nodeId: node.id, name: node.name };
 }
 
-// Preload DS styles — imports a batch of style keys sequentially and caches their IDs.
+// Preload DS styles — imports a batch of style keys in parallel chunks and caches their IDs.
 // Call ONCE at the start of a build to avoid import queue congestion during rendering.
-// Sequential is safe — the bridge timeout for preload_styles is set high enough (300s)
-// to accommodate large batches on cold start.
+// Processes in chunks of 10 to balance throughput with Figma API stability.
 async function handlePreloadStyles(params) {
   const keys = params.keys || [];
   const results = {};
   let loaded = 0;
   let failed = 0;
+  const CHUNK_SIZE = 10;
 
-  for (const key of keys) {
-    if (styleCache.has(key)) { results[key] = 'cached'; loaded++; continue; }
-    try {
-      const imported = await Promise.race([
-        figma.importStyleByKeyAsync(key),
-        new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 30000); }),
-      ]);
-      if (imported && imported.id) {
-        styleCache.set(key, imported.id);
-        results[key] = 'loaded';
-        loaded++;
+  for (let i = 0; i < keys.length; i += CHUNK_SIZE) {
+    const chunk = keys.slice(i, i + CHUNK_SIZE);
+    const chunkResults = await Promise.allSettled(
+      chunk.map(async function(key) {
+        if (styleCache.has(key)) { return { key, status: 'cached' }; }
+        try {
+          const imported = await Promise.race([
+            figma.importStyleByKeyAsync(key),
+            new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 30000); }),
+          ]);
+          if (imported && imported.id) {
+            styleCache.set(key, imported.id);
+            return { key, status: 'loaded' };
+          }
+          return { key, status: 'not_found' };
+        } catch (e) {
+          return { key, status: e.message || 'error' };
+        }
+      })
+    );
+    for (const r of chunkResults) {
+      if (r.status === 'fulfilled') {
+        results[r.value.key] = r.value.status;
+        if (r.value.status === 'loaded' || r.value.status === 'cached') loaded++;
+        else failed++;
       } else {
-        results[key] = 'not_found';
         failed++;
       }
-    } catch (e) {
-      results[key] = e.message || 'error';
-      failed++;
     }
   }
 
@@ -2198,11 +3080,48 @@ async function handlePreloadStyles(params) {
 // params: { prefixes: ["Colors", "spacing", "radius"] }
 async function handlePreloadVariables(params) {
   const prefixes = params.prefixes || [];
-  const matchAll = prefixes.length === 0;
+  const keys = params.keys || [];
+  const matchAll = prefixes.length === 0 && keys.length === 0;
   let loaded = 0;
   let failed = 0;
   let collectionsWalked = 0;
 
+  // Initialize variable cache if needed
+  if (!variableCache) {
+    const vars = await figma.variables.getLocalVariablesAsync();
+    variableCache = new Map(vars.map(v => [v.name, v]));
+  }
+
+  // Key-based import: bypass collection enumeration entirely.
+  // Use this for community library variables that teamLibrary API can't enumerate.
+  // Keys come from the Figma REST API (search_design_system).
+  var importedNames = [];
+  for (const entry of keys) {
+    // Each entry: { key: "variableKey", name: "variable/path/name" }
+    var vKey = typeof entry === 'string' ? entry : entry.key;
+    var vName = typeof entry === 'string' ? null : entry.name;
+    if (!vKey) continue;
+    // Skip if already cached by name (but not if cached as null — that means a previous lookup failed)
+    if (vName && variableCache.has(vName) && variableCache.get(vName) !== null) { loaded++; continue; }
+    try {
+      var imported = await figma.variables.importVariableByKeyAsync(vKey);
+      if (imported) {
+        variableCache.set(imported.name, imported);
+        importedNames.push({ requested: vName, actual: imported.name, id: imported.id });
+        // Also cache by the provided name if different (handles path aliases)
+        if (vName && vName !== imported.name) variableCache.set(vName, imported);
+        loaded++;
+      } else {
+        failed++;
+      }
+    } catch (_) {
+      failed++;
+    }
+  }
+
+  // Prefix-based import: walk team library collections (existing behavior).
+  // This finds team-published libraries but NOT community libraries.
+  if (prefixes.length > 0 || (matchAll && keys.length === 0)) {
   try {
     const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
     for (const col of collections) {
@@ -2213,20 +3132,13 @@ async function handlePreloadVariables(params) {
       } catch (_) { continue; }
 
       for (const lv of libVars) {
-        // Skip if already cached
-        if (variableCache && variableCache.has(lv.name)) continue;
-
-        // Check prefix match
+        if (variableCache.has(lv.name)) continue;
         const matches = matchAll || prefixes.some(p => lv.name.startsWith(p));
         if (!matches) continue;
 
         try {
-          const imported = await figma.variables.importVariableByKeyAsync(lv.key);
-          if (!variableCache) {
-            const vars = await figma.variables.getLocalVariablesAsync();
-            variableCache = new Map(vars.map(v => [v.name, v]));
-          }
-          variableCache.set(lv.name, imported);
+          const imp = await figma.variables.importVariableByKeyAsync(lv.key);
+          variableCache.set(lv.name, imp);
           loaded++;
         } catch (_) {
           failed++;
@@ -2236,11 +3148,527 @@ async function handlePreloadVariables(params) {
   } catch (e) {
     return { loaded, failed, total: loaded + failed, collectionsWalked, error: e.message };
   }
+  }
 
-  return { loaded, failed, total: loaded + failed, collectionsWalked };
+  return { loaded, failed, total: loaded + failed, collectionsWalked, importedNames };
 }
 
 // ---------------------------------------------------------------------------
+
+// Restyle an entire artboard tree: walk all descendants and apply color/font/radius overrides.
+// params: { nodeId, colorMap, fontFamily?, radiusScale?, spacingScale? }
+// colorMap: { "#oldHex": "#newHex", ... } — keys are lowercase 6-char hex WITHOUT #
+// Walks all descendants: FRAME fills/strokes, TEXT fills, RECTANGLE fills.
+// For component INSTANCE children, walks their internal text nodes too.
+async function handleRestyleArtboard(params) {
+  var root = figma.getNodeById(params.nodeId);
+  if (!root) throw new Error('Root node not found: ' + params.nodeId);
+
+  var colorMap = params.colorMap || {};
+  var fontFamily = params.fontFamily || null;
+  var radiusScale = params.radiusScale || null;
+  var spacingScale = params.spacingScale || null;
+  var detachInstances = params.detachInstances !== false; // default true
+  // Force text colors by role: { primary: "hex", secondary: "hex", accent: "hex" }
+  var textColors = params.textColors || null;
+  // Threshold: text >= this size uses primary, below uses secondary
+  var textSizeThreshold = params.textSizeThreshold || 20;
+
+  // Normalize color map
+  var normalizedMap = {};
+  var mapKeys = Object.keys(colorMap);
+  for (var mi = 0; mi < mapKeys.length; mi++) {
+    var mk = mapKeys[mi];
+    normalizedMap[mk.replace('#', '').toLowerCase()] = colorMap[mk].replace('#', '').toLowerCase();
+  }
+
+  var stats = { detached: 0, frames: 0, texts: 0, rects: 0, fonts: 0, radius: 0, strokes: 0 };
+
+  function hexToRgb(hex) {
+    return {
+      r: parseInt(hex.substring(0, 2), 16) / 255,
+      g: parseInt(hex.substring(2, 4), 16) / 255,
+      b: parseInt(hex.substring(4, 6), 16) / 255
+    };
+  }
+
+  function rgbToHex(r, g, b) {
+    return (
+      Math.round(r * 255).toString(16).padStart(2, '0') +
+      Math.round(g * 255).toString(16).padStart(2, '0') +
+      Math.round(b * 255).toString(16).padStart(2, '0')
+    ).toLowerCase();
+  }
+
+  function remapColor(hex) {
+    return normalizedMap[hex] || null;
+  }
+
+  function makeSolidPaint(hexColor, opacity) {
+    var rgb = hexToRgb(hexColor);
+    return { type: 'SOLID', color: rgb, opacity: opacity !== undefined ? opacity : 1 };
+  }
+
+  // Remap an array of paints using the color map
+  function remapPaints(paints) {
+    if (!paints || !Array.isArray(paints)) return null;
+    var changed = false;
+    var newPaints = [];
+    for (var i = 0; i < paints.length; i++) {
+      var p = paints[i];
+      if (p.type !== 'SOLID' || !p.color) { newPaints.push(p); continue; }
+      var hex = rgbToHex(p.color.r, p.color.g, p.color.b);
+      var mapped = remapColor(hex);
+      if (mapped) {
+        newPaints.push(makeSolidPaint(mapped, p.opacity));
+        changed = true;
+      } else {
+        newPaints.push(p);
+      }
+    }
+    return changed ? newPaints : null;
+  }
+
+  // Determine the text color to force based on font size/weight
+  function getForceTextColor(fontSize, fontWeight) {
+    if (!textColors) return null;
+    // Check if this looks like an accent-colored text (we'll handle via color map instead)
+    if (textColors.accent && fontWeight >= 600 && fontSize >= 14 && fontSize < textSizeThreshold) {
+      return null; // let color map handle accent text
+    }
+    if (fontSize >= textSizeThreshold || fontWeight >= 600) {
+      return textColors.primary || null;
+    }
+    return textColors.secondary || null;
+  }
+
+  // Get font weight as number from style string
+  function styleToWeight(style) {
+    if (!style) return 400;
+    var s = style.toLowerCase();
+    if (s.indexOf('black') >= 0 || s.indexOf('heavy') >= 0) return 900;
+    if (s.indexOf('extrabold') >= 0 || s.indexOf('extra bold') >= 0) return 800;
+    if (s.indexOf('bold') >= 0) return 700;
+    if (s.indexOf('semibold') >= 0 || s.indexOf('semi bold') >= 0) return 600;
+    if (s.indexOf('medium') >= 0) return 500;
+    if (s.indexOf('light') >= 0) return 300;
+    if (s.indexOf('thin') >= 0) return 100;
+    return 400;
+  }
+
+  async function processTextNode(node) {
+    var len = node.characters.length;
+    if (len === 0) return;
+
+    // Load current font(s) so we can modify the node
+    var allFonts = node.getRangeAllFontNames(0, len);
+    for (var fi = 0; fi < allFonts.length; fi++) {
+      try { await figma.loadFontAsync(allFonts[fi]); } catch(_) {}
+    }
+
+    // Change font family if specified
+    if (fontFamily) {
+      for (var fi2 = 0; fi2 < allFonts.length; fi2++) {
+        var oldFont = allFonts[fi2];
+        var newFont = { family: fontFamily, style: oldFont.style };
+        try {
+          await figma.loadFontAsync(newFont);
+        } catch(_) {
+          // Fallback: try Regular style
+          newFont = { family: fontFamily, style: 'Regular' };
+          try { await figma.loadFontAsync(newFont); } catch(__) { continue; }
+        }
+        // Apply to matching ranges
+        for (var ci = 0; ci < len; ci++) {
+          try {
+            var cf = node.getRangeFontName(ci, ci + 1);
+            if (cf.family === oldFont.family && cf.style === oldFont.style) {
+              node.setRangeFontName(ci, ci + 1, newFont);
+            }
+          } catch(_) {}
+        }
+        stats.fonts++;
+      }
+    }
+
+    // Force text color
+    if (textColors) {
+      // Get font info for classification
+      var fontSize = 16;
+      var fontWeight = 400;
+      try {
+        var fn = node.getRangeFontName(0, 1);
+        fontSize = node.getRangeFontSize(0, 1);
+        fontWeight = styleToWeight(fn.style);
+      } catch(_) {}
+
+      var forceHex = getForceTextColor(fontSize, fontWeight);
+      if (forceHex) {
+        try {
+          node.fills = [makeSolidPaint(forceHex)];
+          stats.texts++;
+          return; // skip color map for this text
+        } catch(_) {}
+      }
+    }
+
+    // Try color map on text fills
+    try {
+      var currentFills = JSON.parse(JSON.stringify(node.fills));
+      if (Array.isArray(currentFills)) {
+        var remapped = remapPaints(currentFills);
+        if (remapped) {
+          node.fills = remapped;
+          stats.texts++;
+        }
+      }
+    } catch(_) {}
+  }
+
+  async function walkNode(node) {
+    // Step 1: Detach instances to make content editable
+    if (detachInstances && node.type === 'INSTANCE') {
+      try {
+        node = node.detachInstance();
+        stats.detached++;
+      } catch(_) {
+        // If detach fails, still recurse into children
+      }
+    }
+
+    // Step 2: Process frame/rect fills via color map
+    if (node.type !== 'TEXT' && 'fills' in node) {
+      try {
+        var currentFills = JSON.parse(JSON.stringify(node.fills));
+        if (Array.isArray(currentFills)) {
+          var remapped = remapPaints(currentFills);
+          if (remapped) {
+            node.fills = remapped;
+            if (node.type === 'FRAME' || node.type === 'GROUP') stats.frames++;
+            else stats.rects++;
+          }
+        }
+      } catch(_) {}
+    }
+
+    // Step 3: Process strokes via color map
+    if ('strokes' in node) {
+      try {
+        var currentStrokes = JSON.parse(JSON.stringify(node.strokes));
+        if (Array.isArray(currentStrokes)) {
+          var remappedS = remapPaints(currentStrokes);
+          if (remappedS) { node.strokes = remappedS; stats.strokes++; }
+        }
+      } catch(_) {}
+    }
+
+    // Step 4: Process text (font + color)
+    if (node.type === 'TEXT') {
+      await processTextNode(node);
+    }
+
+    // Step 5: Corner radius
+    if (radiusScale && 'cornerRadius' in node && typeof node.cornerRadius === 'number' && node.cornerRadius > 0) {
+      try { node.cornerRadius = Math.round(node.cornerRadius * radiusScale); stats.radius++; } catch(_) {}
+    }
+
+    // Step 6: Spacing
+    if (spacingScale && (node.type === 'FRAME' || node.type === 'GROUP')) {
+      try {
+        if (node.paddingTop > 0) node.paddingTop = Math.round(node.paddingTop * spacingScale);
+        if (node.paddingBottom > 0) node.paddingBottom = Math.round(node.paddingBottom * spacingScale);
+        if (node.paddingLeft > 0) node.paddingLeft = Math.round(node.paddingLeft * spacingScale);
+        if (node.paddingRight > 0) node.paddingRight = Math.round(node.paddingRight * spacingScale);
+        if (node.itemSpacing > 0) node.itemSpacing = Math.round(node.itemSpacing * spacingScale);
+      } catch(_) {}
+    }
+
+    // Recurse into children
+    if ('children' in node) {
+      for (var i = 0; i < node.children.length; i++) {
+        await walkNode(node.children[i]);
+      }
+    }
+  }
+
+  await walkNode(root);
+
+  return {
+    stats: stats,
+    totalColorMappings: Object.keys(normalizedMap).length,
+  };
+}
+
+// Fix all text in an artboard: force dark text to light (or vice versa).
+// Walks all descendants, checks each TEXT node's current fill luminance,
+// and overrides if it's on the wrong side of the threshold.
+// params: { nodeId, mode: "dark" | "light", primaryColor, secondaryColor, accentColor?, sizeThreshold? }
+// "dark" mode: text with luminance < 0.4 gets forced to primaryColor/secondaryColor
+// "light" mode: text with luminance > 0.6 gets forced to primaryColor/secondaryColor
+// Nuclear text fix: walks ALL text, loads fonts, uses setRangeFills to override range-level fills.
+// Handles figma.mixed fills from detached instances.
+async function handleFixTextColors(params) {
+  var root = figma.getNodeById(params.nodeId);
+  if (!root) throw new Error('Root not found: ' + params.nodeId);
+
+  var mode = params.mode || 'dark'; // "dark" = dark bg, fix dark text to light
+  var primaryHex = (params.primaryColor || 'f1f5f9').replace('#', '').toLowerCase();
+  var secondaryHex = (params.secondaryColor || '94a3b8').replace('#', '').toLowerCase();
+  var accentHex = params.accentColor ? params.accentColor.replace('#', '').toLowerCase() : null;
+  var sizeThreshold = params.sizeThreshold || 20;
+
+  // Also fix specific text content
+  var textReplacements = params.textReplacements || {}; // { "old text": "new text" }
+
+  function hexToRgb(hex) {
+    return {
+      r: parseInt(hex.substring(0, 2), 16) / 255,
+      g: parseInt(hex.substring(2, 4), 16) / 255,
+      b: parseInt(hex.substring(4, 6), 16) / 255
+    };
+  }
+
+  function luminance(r, g, b) {
+    return 0.299 * r + 0.587 * g + 0.114 * b;
+  }
+
+  function styleToWeight(style) {
+    if (!style) return 400;
+    var s = style.toLowerCase();
+    if (s.indexOf('bold') >= 0 || s.indexOf('black') >= 0 || s.indexOf('heavy') >= 0) return 700;
+    if (s.indexOf('semibold') >= 0 || s.indexOf('semi bold') >= 0) return 600;
+    if (s.indexOf('medium') >= 0) return 500;
+    return 400;
+  }
+
+  var fixed = 0;
+  var replaced = 0;
+
+  async function walkNode(node) {
+    if (node.type === 'TEXT') {
+      var len = node.characters.length;
+      if (len === 0) { return; }
+
+      // Check text content for replacements
+      var repKeys = Object.keys(textReplacements);
+      for (var ri = 0; ri < repKeys.length; ri++) {
+        if (node.characters.indexOf(repKeys[ri]) >= 0) {
+          // Load font before changing text
+          var allFonts = node.getRangeAllFontNames(0, len);
+          for (var fi = 0; fi < allFonts.length; fi++) {
+            try { await figma.loadFontAsync(allFonts[fi]); } catch(_) {}
+          }
+          try {
+            node.characters = node.characters.replace(repKeys[ri], textReplacements[repKeys[ri]]);
+            len = node.characters.length;
+            replaced++;
+          } catch(_) {}
+          break;
+        }
+      }
+
+      // Check current fill luminance — handle both normal and mixed fills
+      try {
+        // Load ALL fonts in this text node (required before any modification)
+        var allFonts3 = node.getRangeAllFontNames(0, len);
+        for (var f3 = 0; f3 < allFonts3.length; f3++) {
+          try { await figma.loadFontAsync(allFonts3[f3]); } catch(_) {}
+        }
+
+        // Get fill from first character (works even when node.fills is mixed)
+        var needsFix = false;
+        try {
+          var rangeFills = node.getRangeFills(0, 1);
+          if (rangeFills && Array.isArray(rangeFills) && rangeFills.length > 0 && rangeFills[0].color) {
+            var lum = luminance(rangeFills[0].color.r, rangeFills[0].color.g, rangeFills[0].color.b);
+            if (mode === 'dark' && lum < 0.5) needsFix = true;
+            if (mode === 'light' && lum > 0.5) needsFix = true;
+          } else {
+            // Can't read fills — force fix on dark mode since it's safer
+            if (mode === 'dark') needsFix = true;
+          }
+        } catch(_) {
+          // getRangeFills failed — force fix on dark mode
+          if (mode === 'dark') needsFix = true;
+        }
+
+        if (needsFix) {
+          // Determine which color to use based on font size/weight
+          var fontSize = 16;
+          var fontWeight = 400;
+          try {
+            fontSize = node.getRangeFontSize(0, 1);
+            if (typeof fontSize !== 'number') fontSize = 16;
+            var fn = node.getRangeFontName(0, 1);
+            fontWeight = styleToWeight(fn.style);
+          } catch(_) {}
+
+          var targetHex;
+          if (accentHex && fontWeight >= 600 && fontSize >= 14 && fontSize < sizeThreshold) {
+            targetHex = accentHex;
+          } else if (fontSize >= sizeThreshold || fontWeight >= 600) {
+            targetHex = primaryHex;
+          } else {
+            targetHex = secondaryHex;
+          }
+
+          // Use setRangeFills to override range-level fills (handles mixed fills from detached instances)
+          var newPaint = [{ type: 'SOLID', color: hexToRgb(targetHex), opacity: 1 }];
+          node.setRangeFills(0, len, newPaint);
+          fixed++;
+        }
+      } catch(_) {}
+    }
+
+    if ('children' in node) {
+      for (var i = 0; i < node.children.length; i++) {
+        await walkNode(node.children[i]);
+      }
+    }
+  }
+
+  await walkNode(root);
+  return { fixed: fixed, replaced: replaced };
+}
+
+// ---------------------------------------------------------------------------
+// Post-build DS compliance validation
+// ---------------------------------------------------------------------------
+
+async function handleValidateDsCompliance(params) {
+  var node = figma.getNodeById(params.nodeId);
+  if (!node) throw new Error('Node ' + params.nodeId + ' not found');
+
+  var violations = [];
+  var stats = { total: 0, compliant: 0, rawFill: 0, rawText: 0, rawSpacing: 0, fixedSize: 0 };
+
+  function checkFills(n) {
+    if (!('fills' in n) || !Array.isArray(n.fills) || n.fills.length === 0) return;
+    var bv = n.boundVariables;
+    var hasBoundFill = bv && bv.fills && bv.fills.length > 0;
+    var hasStyleId = n.fillStyleId && n.fillStyleId !== '';
+    if (!hasBoundFill && !hasStyleId) {
+      // Check if the fill is actually a color (not an image/gradient)
+      var hasSolidFill = false;
+      for (var i = 0; i < n.fills.length; i++) {
+        if (n.fills[i].type === 'SOLID' && n.fills[i].visible !== false) hasSolidFill = true;
+      }
+      if (hasSolidFill) {
+        stats.rawFill++;
+        violations.push({
+          nodeId: n.id,
+          name: n.name,
+          type: n.type,
+          issue: 'RAW_FILL',
+          detail: 'Solid fill not bound to DS variable or style',
+        });
+      }
+    }
+  }
+
+  function checkText(n) {
+    if (n.type !== 'TEXT') return;
+    var hasStyle = n.textStyleId && n.textStyleId !== '';
+    if (!hasStyle) {
+      stats.rawText++;
+      violations.push({
+        nodeId: n.id,
+        name: n.name,
+        type: 'TEXT',
+        issue: 'RAW_TEXT_STYLE',
+        detail: 'Text node has no DS text style (textStyleId is empty). Font: ' +
+          (n.fontName ? n.fontName.family + ' ' + n.fontName.style : 'mixed') +
+          ', size: ' + (typeof n.fontSize === 'number' ? n.fontSize : 'mixed'),
+      });
+    }
+  }
+
+  function checkSpacing(n) {
+    if (n.type !== 'FRAME' && n.type !== 'COMPONENT' && n.type !== 'INSTANCE') return;
+    if (!n.layoutMode || n.layoutMode === 'NONE') return;
+    var bv = n.boundVariables || {};
+    // Check if spacing properties are bound to DS variables
+    var spacingProps = ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'itemSpacing'];
+    for (var i = 0; i < spacingProps.length; i++) {
+      var prop = spacingProps[i];
+      var value = n[prop];
+      if (value > 0 && (!bv[prop] || !bv[prop].id)) {
+        stats.rawSpacing++;
+        violations.push({
+          nodeId: n.id,
+          name: n.name,
+          type: n.type,
+          issue: 'RAW_SPACING',
+          detail: prop + ' = ' + value + 'px without DS variable binding',
+        });
+        break; // One violation per node is enough
+      }
+    }
+  }
+
+  function checkSizing(n) {
+    if (n.type !== 'FRAME' && n.type !== 'COMPONENT' && n.type !== 'INSTANCE') return;
+    // Skip the root node (artboard) — it's allowed to be fixed
+    if (n.id === params.nodeId) return;
+    if (!n.layoutMode || n.layoutMode === 'NONE') return;
+    // Check for FIXED sizing on frames that should be HUG or FILL
+    if (n.layoutSizingHorizontal === 'FIXED' && n.layoutSizingVertical === 'FIXED') {
+      stats.fixedSize++;
+      violations.push({
+        nodeId: n.id,
+        name: n.name,
+        type: n.type,
+        issue: 'FIXED_SIZE',
+        detail: 'Frame has FIXED sizing on both axes. Expected HUG or FILL.',
+      });
+    }
+  }
+
+  function walkTree(n) {
+    stats.total++;
+    // Skip nodes tagged as user-approved raw exceptions
+    if (n.name && n.name.startsWith('[RAW-OK]')) return;
+    checkFills(n);
+    checkText(n);
+    checkSpacing(n);
+    checkSizing(n);
+    if ('children' in n) {
+      for (var i = 0; i < n.children.length; i++) {
+        walkTree(n.children[i]);
+      }
+    }
+  }
+
+  walkTree(node);
+  stats.compliant = stats.total - stats.rawFill - stats.rawText - stats.rawSpacing - stats.fixedSize;
+
+  return {
+    stats: stats,
+    violations: violations,
+    compliant: violations.length === 0,
+    summary: violations.length === 0
+      ? 'All ' + stats.total + ' nodes are DS-compliant.'
+      : stats.rawFill + ' raw fills, ' + stats.rawText + ' raw text styles, ' +
+        stats.rawSpacing + ' raw spacing, ' + stats.fixedSize + ' fixed-size frames out of ' + stats.total + ' nodes.',
+  };
+}
+
+// Tag a node as a user-approved raw exception. Prefixes the name with [RAW-OK]
+// so validate_ds_compliance can distinguish intentional exceptions from violations.
+// params: { nodeId, reason }
+function handleTagRawException(params) {
+  var node = figma.getNodeById(params.nodeId);
+  if (!node) throw new Error('Node ' + params.nodeId + ' not found');
+  var reason = params.reason || 'user-approved';
+  if (!node.name.startsWith('[RAW-OK]')) {
+    node.name = '[RAW-OK] ' + node.name;
+  }
+  // Store reason in plugin data (persists with the file)
+  try {
+    node.setPluginData('rawExceptionReason', reason);
+  } catch(_) {}
+  return { ok: true, nodeId: node.id, name: node.name };
+}
 
 const HANDLERS = {
   preload_styles:     handlePreloadStyles,
@@ -2251,6 +3679,7 @@ const HANDLERS = {
   create_frame:       handleCreateFrame,
   create_text:        handleCreateText,
   create_rectangle:   handleCreateRectangle,
+  create_ellipse:     handleCreateEllipse,
   set_component_text: handleSetComponentText,
   set_layout_sizing:  handleSetLayoutSizing,
   get_selection:      handleGetSelection,
@@ -2258,6 +3687,8 @@ const HANDLERS = {
   get_page_nodes:     handleGetPageNodes,
   get_node_parent:    handleGetNodeParent,
   list_text_styles:   handleListTextStyles,
+  discover_library_styles: handleDiscoverLibraryStyles,
+  discover_library_variables: handleDiscoverLibraryVariables,
   get_text_info:      handleGetTextInfo,
   get_fill_info:      handleGetFillInfo,
   resolve_variable_id:  handleResolveVariableId,
@@ -2286,6 +3717,11 @@ const HANDLERS = {
   change_page:            handleChangePage,
   batch:                  handleBatch,
   set_session_defaults:   handleSetSessionDefaults,
+  read_variable_values:   handleReadVariableValues,
+  validate_ds_compliance: handleValidateDsCompliance,
+  tag_raw_exception:      handleTagRawException,
+  restyle_artboard:       handleRestyleArtboard,
+  fix_text_colors:        handleFixTextColors,
 };
 
 figma.ui.onmessage = async msg => {
