@@ -2,15 +2,22 @@
 
 ## Two audiences, one framework
 
-These roles serve two different audiences depending on context:
+These roles serve two different audiences depending on context. **Context detection is automatic** — if a build happens, build obligations activate, regardless of what else is happening in the session.
 
 ### During an end-user build session
 Roles are **gates in the build lifecycle**. Each role owns a phase and ensures constitutional compliance. The user sees phase progress, build reports, and recommendations — never the internal deliberation. Roles operate silently during builds, speaking only through their phase outputs.
 
-### During tool development (internal)
+**End-user roles are the product experience.** Phase progress, pattern-learned notifications, DS gap recommendations, and the save-report offer are what the user sees. If these don't happen, the build is invisible — Mimic looks like a generic HTML-to-Figma converter.
+
+### During tool development (builder)
 Roles are **deliberation participants**. When making architectural decisions, fixing bugs, or evolving the governance layer, roles engage in multi-role deliberation (see "How to invoke" below). Deliberation artifacts go to gitignored paths (`internal/research/`, `mimic/reports/`).
 
-**The distinction matters.** An end user building a dashboard does not need to see 6-role deliberation. A tool developer fixing a plugin bug does. Roles adapt their behavior to context — but the rules they enforce are identical in both modes.
+**Builder roles are the engineering backbone.** Release management, boundary checks, code audits, DS-agnostic enforcement, and constitutional compliance. The end user never sees these.
+
+### Mixed sessions (builder + build)
+When a session includes both tool development AND a build (e.g., fixing bugs then running a verification build), **both modes are active simultaneously**. Builder obligations (code fixes, commits, boundary checks) do NOT exempt end-user obligations (Phase 5 report, pattern learning, save offer). A build that ships without Phase 5 is incomplete even if it was preceded by 10 bug fixes.
+
+**The rule:** If `create_frame` or `insert_component` was called to produce an artboard, the full Phase 0–5 lifecycle applies — including the user-facing Phase 5 outputs. No exceptions.
 
 ## How to invoke
 
@@ -265,18 +272,37 @@ Full report: [path].
 
 ---
 
-## Role behavior: development vs end-user builds
+## Role obligations by context
 
-| Role | During development | During end-user build |
-|---|---|---|
-| Platform Architect | Deliberates architecture decisions, reviews boundary compliance | Sets dsMode, confirms target, enforces stop protocol |
-| Build Engineer | Fixes tool bugs, optimizes build execution | Executes Phase 3, tracks tool calls, enforces per-node DS compliance |
-| Design QA | Validates QA framework, reviews QA tooling | Runs Phase 4 screenshot + compliance check |
-| DS Integration Engineer | Evolves discovery system, updates knowledge schema | Runs Phase 1-2 discovery and inventory |
-| Learning Engineer | Analyzes build patterns, improves knowledge persistence | Runs Phase 5 report generation and pattern saving |
-| Product QA | Reviews user experience, messaging, documentation | Formats Phase 5 user communication |
+### Builder context (tool development)
+These fire when modifying plugin/bridge/MCP code, governance files, or architecture.
 
-The roles are the same. The audience changes. The rules never change.
+| Role | Concrete obligations |
+|---|---|
+| Platform Architect | Boundary check on every committed file edit. Stranger test. Release management: version bump → merge → npm publish → verify. DS-agnostic audit after code changes. Owns `.gitignore`. |
+| Build Engineer | Fix tool bugs. Optimize handlers. Track regressions. Update KNOWN_ISSUES.md. |
+| Design QA | Validate QA tooling works (compliance checker, screenshot comparison). |
+| DS Integration Engineer | Evolve discovery system. Update knowledge schema. Test with multiple DSs. |
+| Learning Engineer | Analyze build patterns across sessions. Improve knowledge persistence. Update learnings files. |
+| Product QA | Review user-facing messaging. Ensure error messages are actionable. Review documentation. |
+
+### End-user context (builds)
+These fire whenever an artboard is produced — **mandatory, no exceptions, even in mixed sessions.**
+
+| Role | Concrete obligations |
+|---|---|
+| Platform Architect | Phase 0: confirm target, set dsMode, calculate placement. State "Phase 0 complete." |
+| DS Integration Engineer | Phase 1: component map with search evidence. Phase 2: style/variable inventory with mappings. |
+| Build Engineer | Phase 3: execute build, per-node DS compliance, track tool calls. |
+| Design QA | Phase 4: screenshot, content fidelity check, `validate_ds_compliance`. |
+| Learning Engineer | Phase 5: save patterns to ds-knowledge.json via `mimic_ai_knowledge_write`. Generate build report to `mimic/reports/`. Show pattern-learned notification. |
+| Product QA | Phase 5: format user communication (VOICE_AND_TONE.md format). Show DS gap recommendations as questions. Offer to save report as markdown or HTML. |
+
+### What "mandatory" means
+- If `create_frame` or `insert_component` was called to produce an artboard, Phases 0–5 apply.
+- Phase 5 is not "nice to have." It is the product experience. Skipping it makes the learning loop invisible.
+- A build during a bug-fixing session is still a build. Builder obligations and build obligations stack — they don't cancel each other.
+- The build is NOT complete until the user has received: (1) the build summary, (2) patterns learned, (3) DS gap recommendations, (4) save-report offer.
 
 ---
 
