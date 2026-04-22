@@ -8,15 +8,17 @@ Last updated: 2026-04-22
 |---|---|---|
 | **Team/org library with components + tokens** | Full | Components, text styles, color/spacing/radius variables all work. Full DS compliance achievable. |
 | **Team/org library with components only** | Partial | Components are used. Text, colors, spacing fall back to raw values. Build report recommends adding tokens. |
-| **Community library** | Limited | Component imports may fail due to Figma API limitations. If imports fail, the build stops and reports the issue. |
+| **Community library** | Full (with setup) | Components and text styles import normally. Variables require key-based import — Mimic discovers variable keys via the Figma REST API and imports them directly, bypassing the plugin's collection enumeration which doesn't cover community libraries. |
 | **No library enabled** | Blocked | Mimic requires a published library enabled in the target file. The build will not start without one. |
 
 ## Known Limitations
 
-### Community library imports
-Figma's `importComponentByKeyAsync` API may not support importing components from community-published files. When this happens, Mimic stops the build and reports the issue — it does not fall back to building without your DS.
+### Community library variables
+Figma's Plugin API (`figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync`) does not enumerate variable collections from community-published libraries — even when those variables are visible in the Figma UI and discoverable via the REST API.
 
-**Workaround:** If you want to use a community library, duplicate it as a team library in your workspace and publish it. Mimic can then import components normally.
+Mimic works around this by importing community library variables directly by key. During Phase 1, variable keys are discovered via the Figma REST API (`search_design_system`), then imported via `figma.variables.importVariableByKeyAsync` in Phase 2. This makes community library variables fully bindable — they respond to mode changes (light/dark) and behave identically to team library variables once imported.
+
+Components and text styles from community libraries import normally — no workaround needed.
 
 ### Large library preloading
 Libraries with 200+ text styles may take 30-60 seconds to preload on first build. Subsequent builds use cached style IDs and are faster.
