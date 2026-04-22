@@ -21,6 +21,7 @@ const styleCache = new Map(); // Map<styleKey, figmaStyleId> — preloaded DS st
 // DS-agnostic: the orchestrator discovers the right keys from the DS knowledge layer.
 var sessionDefaults = {
   textFillStyleKey: null,   // Applied to text when no fillStyleKey/fillVariable/fills provided
+  textFillVariable: null,   // Alternative to textFillStyleKey — DS variable path for default text fill. Used when DS has variables but no color styles (e.g., community libraries).
   frameFillStyleKey: null,  // NOT auto-applied — frames often have no fill intentionally
   strokeStyleKey: null,     // NOT auto-applied
   fontFamily: null,          // No default — set via set_session_defaults or auto-detected from first text style import. DS-agnostic: never hardcode a font family.
@@ -742,10 +743,15 @@ async function handleCreateText(params) {
     await applyFill(text, null, params.fillHex);
     dsCompliance.fill = 'raw_fallback';
   } else if (sessionDefaults.textFillStyleKey) {
-    // No explicit fill — apply session default (text-primary from DS)
+    // No explicit fill — apply session default via color style
     var defaultApplied = await applyColorStyle(text, 'fill', sessionDefaults.textFillStyleKey);
     dsCompliance.fill = defaultApplied ? 'ds_session_default' : 'raw_fallback';
     if (!defaultApplied) dsCompliance.rawFillReason = 'session_default_failed';
+  } else if (sessionDefaults.textFillVariable) {
+    // No explicit fill — apply session default via DS variable (community library path)
+    var varApplied = await applyFill(text, sessionDefaults.textFillVariable, null);
+    dsCompliance.fill = varApplied ? 'ds_session_default' : 'raw_fallback';
+    if (!varApplied) dsCompliance.rawFillReason = 'session_default_variable_failed';
   } else {
     // No fill param and no session default — Figma default black. Raw, not DS compliant.
     dsCompliance.fill = 'raw_fallback';
@@ -1133,10 +1139,10 @@ function handleSetVisibility(params) {
 // Set session-level defaults for DS compliance.
 // Called once at build start after preload_styles. DS-agnostic — the orchestrator
 // discovers the right keys from the DS knowledge layer and passes them here.
-// params: { textFillStyleKey?: string }
+// params: { textFillStyleKey?: string, textFillVariable?: string, fontFamily?: string, dsMode?: string }
 async function handleSetSessionDefaults(params) {
   if (params.textFillStyleKey) {
-    // Preload the style so it's available in the cache
+    // Preload the color style so it's available in the cache
     try {
       var imported = await figma.importStyleByKeyAsync(params.textFillStyleKey);
       styleCache.set(params.textFillStyleKey, imported.id);
@@ -1144,6 +1150,10 @@ async function handleSetSessionDefaults(params) {
     } catch (e) {
       return { ok: false, error: 'Failed to import textFillStyleKey: ' + e.message };
     }
+  }
+  if (params.textFillVariable) {
+    // DS variable path for default text fill — used when DS has variables but no color styles
+    sessionDefaults.textFillVariable = params.textFillVariable;
   }
   if (params.fontFamily) {
     sessionDefaults.fontFamily = params.fontFamily;
@@ -3085,17 +3095,19 @@ async function handlePreloadVariables(params) {
   // Key-based import: bypass collection enumeration entirely.
   // Use this for community library variables that teamLibrary API can't enumerate.
   // Keys come from the Figma REST API (search_design_system).
+  var importedNames = [];
   for (const entry of keys) {
     // Each entry: { key: "variableKey", name: "variable/path/name" }
     var vKey = typeof entry === 'string' ? entry : entry.key;
     var vName = typeof entry === 'string' ? null : entry.name;
     if (!vKey) continue;
-    // Skip if already cached by name
-    if (vName && variableCache.has(vName)) { loaded++; continue; }
+    // Skip if already cached by name (but not if cached as null — that means a previous lookup failed)
+    if (vName && variableCache.has(vName) && variableCache.get(vName) !== null) { loaded++; continue; }
     try {
       var imported = await figma.variables.importVariableByKeyAsync(vKey);
       if (imported) {
         variableCache.set(imported.name, imported);
+        importedNames.push({ requested: vName, actual: imported.name, id: imported.id });
         // Also cache by the provided name if different (handles path aliases)
         if (vName && vName !== imported.name) variableCache.set(vName, imported);
         loaded++;
@@ -3138,7 +3150,7 @@ async function handlePreloadVariables(params) {
   }
   }
 
-  return { loaded, failed, total: loaded + failed, collectionsWalked };
+  return { loaded, failed, total: loaded + failed, collectionsWalked, importedNames };
 }
 
 // ---------------------------------------------------------------------------
