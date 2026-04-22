@@ -1283,6 +1283,8 @@ const TOOLS = [
       'Set session-level defaults for DS compliance. Call once at build start after preload_styles. ' +
       'textFillStyleKey sets the default fill for all text nodes that have no explicit fill — ' +
       'prevents raw #000000 black. Pass the DS text-primary color style key. ' +
+      'textFillVariable is the alternative for DSs that use variables instead of color styles (e.g., community libraries). ' +
+      'Pass one of textFillStyleKey or textFillVariable — not both. ' +
       'fontFamily sets the default font family for all text nodes (default: "Inter"). ' +
       'Set this if your DS uses a different font (e.g., "Roboto", "SF Pro"). ' +
       'dsMode controls DS enforcement: "strict" (default) requires all visual properties to use DS ' +
@@ -1293,7 +1295,11 @@ const TOOLS = [
       properties: {
         textFillStyleKey: {
           type: 'string',
-          description: 'DS color style key for text-primary (default text fill).',
+          description: 'DS color style key for text-primary (default text fill). Use for DSs with published color styles.',
+        },
+        textFillVariable: {
+          type: 'string',
+          description: 'DS variable path for text-primary (e.g., "text/primary"). Use for DSs that use variables instead of color styles (community libraries).',
         },
         fontFamily: {
           type: 'string',
@@ -1305,7 +1311,7 @@ const TOOLS = [
           description: 'DS enforcement mode. "strict" (default): all fills, strokes, spacing, radius, and typography must use DS variables/styles — raw values are rejected with an error. "permissive": raw fallbacks allowed for DSs without published tokens. Default: "strict".',
         },
       },
-      required: ['textFillStyleKey'],
+      required: [],
     },
   },
 
@@ -1622,9 +1628,14 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
       const hasDsKnowledge = existsSync(dsKnowledgePath);
 
       let bridgeRunning = false;
+      let pluginConnected = false;
       try {
-        const r = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(2000) });
+        const r = await fetch(`${BRIDGE_URL}/status`, { signal: AbortSignal.timeout(2000) });
         bridgeRunning = r.ok;
+        if (r.ok) {
+          const statusData = await r.json();
+          pluginConnected = statusData.pluginConnected === true;
+        }
       } catch { /* bridge not running */ }
 
       const activePatterns = knowledge.patterns.filter(p => !p.valid_until);
@@ -1640,6 +1651,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
 
       result = {
         bridge_running: bridgeRunning,
+        plugin_connected: pluginConnected,
         bridge_url: BRIDGE_URL,
         ds_knowledge_file: hasDsKnowledge,
         learning_knowledge_file: hasKnowledge,
@@ -1667,7 +1679,9 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
           ? 'No DS knowledge found. Run mimic_discover_ds with your DS library file key to get started.'
           : !bridgeRunning
             ? 'DS knowledge loaded but bridge is not running. Start the bridge and Figma plugin.'
-            : `Ready. ${patternCount} patterns (${verifiedCount} verified, ${recipesCount} recipes). ${gapCount} DS gaps tracked.`,
+            : bridgeRunning && !pluginConnected
+              ? `Bridge running but Figma plugin not connected. Open the plugin in Figma. ${patternCount} patterns loaded.`
+              : `Ready. ${patternCount} patterns (${verifiedCount} verified, ${recipesCount} recipes). ${gapCount} DS gaps tracked.`,
       };
 
     } else if (name === 'mimic_pipeline_resolve') {
