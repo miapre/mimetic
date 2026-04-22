@@ -1,5 +1,17 @@
 # Mimic AI — Role Definitions
 
+## Two audiences, one framework
+
+These roles serve two different audiences depending on context:
+
+### During an end-user build session
+Roles are **gates in the build lifecycle**. Each role owns a phase and ensures constitutional compliance. The user sees phase progress, build reports, and recommendations — never the internal deliberation. Roles operate silently during builds, speaking only through their phase outputs.
+
+### During tool development (internal)
+Roles are **deliberation participants**. When making architectural decisions, fixing bugs, or evolving the governance layer, roles engage in multi-role deliberation (see "How to invoke" below). Deliberation artifacts go to gitignored paths (`internal/research/`, `mimic/reports/`).
+
+**The distinction matters.** An end user building a dashboard does not need to see 6-role deliberation. A tool developer fixing a plugin bug does. Roles adapt their behavior to context — but the rules they enforce are identical in both modes.
+
 ## How to invoke
 
 Include roles in your prompt to activate multi-role deliberation:
@@ -31,7 +43,13 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Owns:** Phase 0 (Target) + tool architecture, DS-agnosticism, public/private boundary.
 
-**Golden rules:** 1 (Core), 9 (Explicit target), 19 (DS change adaptation), 20 (Transparency)
+**Golden rules:** 1 (Core), 9 (Explicit target), 19 (DS change adaptation), 20 (Transparency), 43 (DS-only rule), 44 (Mandatory stop)
+
+**Standing mandate (Rule 43):** Every architectural decision must enforce the DS-only rule structurally — not through documentation or trust, but through API design. If a tool CAN accept raw values, someone WILL use them. The API must make the right thing easy and the wrong thing impossible. Owns the `dsMode` flag decision at Phase 0.
+
+**Standing mandate (Rule 44):** When the DS is unreachable, the build must stop — not silently degrade. Owns the stop decision at Phase 0 (library unreachable) and Phase 1 (zero components resolved).
+
+**End-user mode:** Confirms target, sets dsMode, validates artboard placement. The user sees: "Phase 0 complete. Target: [file/page]. DS mode: strict." No deliberation visible.
 
 **Phase 0 gate:**
 - Target file and node confirmed
@@ -60,7 +78,11 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Owns:** Phase 3 (Build) — execution quality, every frame/text/component created.
 
-**Golden rules:** 5 (Auto-layout), 10 (Correct placement), 11 (Usable output), 13 (Context adaptation), 22 (Minimal calls)
+**Golden rules:** 5 (Auto-layout), 10 (Correct placement), 11 (Usable output), 13 (Context adaptation), 22 (Minimal calls), 43 (DS-only rule)
+
+**Standing mandate (Rule 43):** Every node Mimic creates must be bound to DS artifacts. "Does this build use only components, styles, and variables?" is the first QA check on every build output. If a build produces a node with raw hex, raw font, or raw px, the build has a defect.
+
+**End-user mode:** Executes the build following Phase 1 component map. The user sees: phase progress checkboxes and section-by-section status. No internal debugging visible.
 
 **Phase 3 gate (per-node enforcement):**
 - Every frame has auto-layout set (VERTICAL or HORIZONTAL)
@@ -100,7 +122,11 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Owns:** Phase 4 (QA) — visual fidelity between HTML and Figma.
 
-**Golden rules:** 6 (HTML content fidelity), 7 (Layout fidelity), 8 (No UI invention), 14 (Content integrity)
+**Golden rules:** 6 (HTML content fidelity), 7 (Layout fidelity), 8 (No UI invention), 14 (Content integrity), 43 (DS-only rule)
+
+**Standing mandate (Rule 43):** Inspect bound variables, not visual appearance. A node that LOOKS correct but uses raw hex instead of a bound variable is a defect. Runs `validate_ds_compliance` on every build. Any violation blocks Phase 5.
+
+**End-user mode:** Takes screenshot, runs compliance check. The user sees: "QA passed — 0 violations" or "QA found X issues, fixing." No internal inspection details visible.
 
 **Phase 4 gate:**
 - Take a screenshot and compare with HTML rendering
@@ -120,7 +146,13 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Owns:** Phase 1 (DS Discovery) + Phase 2 (Inventory) — the bridge between raw HTML and the user's design system.
 
-**Golden rules:** 2 (DS first), 3 (Safe fallback), 4 (No fake usage), 12 (Component config), 18 (DS as truth), 23 (Mandatory discovery), 27 (DS change detection), 28 (No non-DS fonts), 29 (Zero raw hex), 30 (Regression check), 34 (Cache ≠ authority)
+**Golden rules:** 2 (DS first), 3 (Safe fallback), 4 (No fake usage), 12 (Component config), 18 (DS as truth), 23 (Mandatory discovery), 27 (DS change detection), 28 (No non-DS fonts), 29 (Zero raw hex), 30 (Regression check), 34 (Cache ≠ authority), 43 (DS-only rule), 44 (Mandatory stop)
+
+**Standing mandate (Rule 43):** Every property that has a DS token (color, spacing, radius, typography, effect) must be bound via `setBoundVariable` or `textStyleId` or `setBoundVariableForPaint`. If the plugin API doesn't support binding for a property, that's a gap to fix — not an exception to the rule.
+
+**Standing mandate (Rule 44):** If Phase 1 produces zero DS component matches when the library has published components, stop the build. An all-primitive component map from a DS with published components means something is broken — do not proceed.
+
+**End-user mode:** Discovers DS components and produces the component map. The user sees: "Found X components from your DS. Y from cache (Z invalidated)." No search internals visible.
 
 **Phase 1 gate — DS Discovery (mandatory, before any build):**
 - **Warm-cache path (Rule 34):** If `ds-knowledge.json` has cached patterns, validate each against the live DS: `importComponentByKeyAsync(key)` must succeed AND the target variant must still exist in the component set. Invalidate stale entries. Report: "X/Y validated, Z invalidated."
@@ -153,7 +185,11 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Owns:** Phase 5 (Report) — the feedback loop, build documentation, knowledge persistence.
 
-**Golden rules:** 15 (Post-build learning), 16 (Recommendations), 17 (DS copilot), 19 (DS adaptation), 21 (Graceful failure), 24 (Build report)
+**Golden rules:** 15 (Post-build learning), 16 (Recommendations), 17 (DS copilot), 19 (DS adaptation), 21 (Graceful failure), 24 (Build report), 43 (DS-only rule)
+
+**Standing mandate (Rule 43):** If a tool's API makes it easier to use raw values than DS references, the tool is teaching the wrong behavior. Error messages on DS failures must be educational: "Variable 'bg-secondary' not found. Available: [list]. Run discover_ds to refresh." Not just "failed."
+
+**End-user mode:** Saves patterns and generates the build report. The user sees: the build report and pattern-learned notification. No learning internals visible.
 
 **Phase 5 gate — Build Report (mandatory):**
 - Report saved to `mimic/reports/build-NNN-*.md`
@@ -185,7 +221,11 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Owns:** Phase 5 (Communication) — end-to-end experience from user's perspective.
 
-**Golden rules:** 11 (Usable output), 20 (Transparency), 22 (Minimal calls), 24 (Build report)
+**Golden rules:** 11 (Usable output), 20 (Transparency), 22 (Minimal calls), 24 (Build report), 43 (DS-only rule)
+
+**Standing mandate (Rule 43):** Mimic's pitch says "using only your design system." Every raw value in a build output contradicts this promise. Product QA must verify that the shipped tool makes this promise true, not aspirational.
+
+**End-user mode:** Formats the final user message and ensures recommendations are actionable. The user sees: the build summary in the mandated format. No internal checks visible.
 
 **Phase 5 gate — User Communication (mandatory format):**
 ```
@@ -213,6 +253,21 @@ Full report: [path].
 - Did the tool explain what it did and why?
 - Is the build report honest — flagging real issues, not hiding them?
 - Cost awareness: were there redundant calls or wasted operations?
+
+---
+
+## Role behavior: development vs end-user builds
+
+| Role | During development | During end-user build |
+|---|---|---|
+| Platform Architect | Deliberates architecture decisions, reviews boundary compliance | Sets dsMode, confirms target, enforces stop protocol |
+| Build Engineer | Fixes tool bugs, optimizes build execution | Executes Phase 3, tracks tool calls, enforces per-node DS compliance |
+| Design QA | Validates QA framework, reviews QA tooling | Runs Phase 4 screenshot + compliance check |
+| DS Integration Engineer | Evolves discovery system, updates knowledge schema | Runs Phase 1-2 discovery and inventory |
+| Learning Engineer | Analyzes build patterns, improves knowledge persistence | Runs Phase 5 report generation and pattern saving |
+| Product QA | Reviews user experience, messaging, documentation | Formats Phase 5 user communication |
+
+The roles are the same. The audience changes. The rules never change.
 
 ---
 
@@ -254,6 +309,18 @@ Full report: [path].
 | 32. Component inspection | | **P** | | **S** | | |
 | 33. Recipe persistence | | **P** | | | **P** | |
 | 34. Cache ≠ authority | **P** | **S** | **S** | **P** | | |
+| 35. Sequential imports | | **P** | | | | |
+| 36. No overlapping | | **P** | **S** | | | |
+| 37. Hide icon slots | | **P** | **S** | | | |
+| 38. Zero raw values | | **P** | **P** | **P** | | |
+| 39. Text styles only | | | **P** | **P** | | |
+| 40. No default text | | **P** | **P** | | | |
+| 41. Read HTML first | | | **P** | | | |
+| 42. No line breaks | | | **P** | | | |
+| 43. DS-only rule | **P** | **P** | **P** | **P** | **P** | **P** |
+| 44. Mandatory stop | **P** | **S** | | **P** | **S** | **P** |
 
 **P** = Primary owner. **S** = Secondary (supports enforcement).
 Every rule has at least one primary owner. No gaps.
+Rule 43 is the foundational constraint — ALL roles are primary owners. It overrides all other rules.
+Rule 44 is the stop protocol — Platform Architect, DS Integration Engineer, and Product QA are primary owners. Build Engineer and Learning Engineer support enforcement.

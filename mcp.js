@@ -149,6 +149,8 @@ function supersedePattern(knowledge, oldPatternKey, newPattern) {
     pattern_key:          newPattern.pattern_key || oldPatternKey,
     component_key:        newPattern.component_key,
     component_name:       newPattern.component_name ?? null,
+    library_key:          newPattern.library_key || null,
+    library_name:         newPattern.library_name || null,
     state:                'CANDIDATE',
     use_count:            1,
     correction_count:     0,
@@ -230,6 +232,8 @@ function applyPatternUpdates(knowledge, updates) {
         pattern_key,
         component_key:        update.component_key ?? null,
         component_name:       update.component_name ?? null,
+        library_key:          update.library_key ?? null,
+        library_name:         update.library_name ?? null,
         state:                update.state ?? 'CANDIDATE',
         use_count:            update.use_count ?? 1,
         correction_count:     update.correction_count ?? 0,
@@ -272,6 +276,8 @@ function applyPatternUpdates(knowledge, updates) {
       // Update component binding if provided
       if (update.component_key)  entry.component_key  = update.component_key;
       if (update.component_name) entry.component_name = update.component_name;
+      if (update.library_key !== undefined) entry.library_key = update.library_key;
+      if (update.library_name !== undefined) entry.library_name = update.library_name;
       if (update.notes !== undefined) entry.notes = update.notes;
 
       // V2 field updates
@@ -519,7 +525,7 @@ const TOOLS = [
         width:        { type: 'number', description: 'Resize instance to this width after insertion.' },
         height:       { type: 'number', description: 'Resize instance to this height after insertion.' },
       },
-      required: ['fileKey'],
+      required: [],
     },
   },
 
@@ -540,12 +546,14 @@ const TOOLS = [
           enum: ['HORIZONTAL', 'VERTICAL', 'NONE'],
           description: 'Auto-layout direction. NONE = no auto-layout.',
         },
-        gap:           { type: 'number', description: 'Gap between children in px.' },
-        padding:       { type: 'number', description: 'Uniform padding on all sides in px.' },
-        paddingTop:    { type: 'number' },
-        paddingRight:  { type: 'number' },
-        paddingBottom: { type: 'number' },
-        paddingLeft:   { type: 'number' },
+        gap:           { type: ['number', 'string'], description: 'Gap between children. DS variable path (e.g., "spacing-3xl") preferred. Raw px number allowed in permissive mode only.' },
+        gapVariable:   { type: 'string', description: 'DS spacing variable path for gap (e.g., "Spacing/spacing-3xl"). Bound via setBoundVariable. Preferred over raw gap number.' },
+        padding:       { type: ['number', 'string'], description: 'Uniform padding. DS variable path preferred. Raw px allowed in permissive mode only.' },
+        paddingVariable: { type: 'string', description: 'DS spacing variable path for uniform padding. Bound to all 4 sides via setBoundVariable.' },
+        paddingTop:    { type: ['number', 'string'] },
+        paddingRight:  { type: ['number', 'string'] },
+        paddingBottom: { type: ['number', 'string'] },
+        paddingLeft:   { type: ['number', 'string'] },
         primaryAxisSizingMode: {
           type: 'string', enum: ['FIXED', 'AUTO'],
           description: 'AUTO = hug contents along primary axis. Defaults to FIXED when width+height are set.',
@@ -569,7 +577,8 @@ const TOOLS = [
         strokeVariable: { type: 'string', description: 'Variable path for border color.' },
         strokeHex:    { type: 'string', description: 'Fallback hex for border color.' },
         strokeWidth:  { type: 'number', description: 'Border width in px.' },
-        cornerRadius: { type: 'number', description: 'Corner radius in px.' },
+        cornerRadius: { type: ['number', 'string'], description: 'Corner radius. DS variable path (e.g., "radius-xl") preferred. Raw px allowed in permissive mode only.' },
+        cornerRadiusVariable: { type: 'string', description: 'DS radius variable path (e.g., "Radius/radius-xl"). Bound via setBoundVariable. Preferred over raw cornerRadius number.' },
         clipsContent: { type: 'boolean' },
         layoutGrow:   { type: 'number', description: '1 = fill remaining space in parent.' },
         layoutAlign:  { type: 'string', enum: ['MIN', 'CENTER', 'MAX', 'STRETCH', 'INHERIT'] },
@@ -631,6 +640,41 @@ const TOOLS = [
         layoutGrow:   { type: 'number' },
         x:            { type: 'number' },
         y:            { type: 'number' },
+      },
+      required: ['width', 'height'],
+    },
+  },
+
+  {
+    name: 'figma_create_ellipse',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: 'Create an ellipse in Figma. Supports arcs for donut segments. Use DS color variables for fills and strokes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name:            { type: 'string', description: 'Name for the ellipse node.' },
+        width:           { type: 'number', description: 'Width in pixels.' },
+        height:          { type: 'number', description: 'Height in pixels.' },
+        parentNodeId:    { type: 'string', description: 'Parent frame to insert into.' },
+        fillVariable:    { type: 'string', description: 'DS color variable path for fill.' },
+        fillHex:         { type: 'string', description: 'Hex color fallback (rejected in strict mode).' },
+        fillNone:        { type: 'boolean', description: 'No fill.' },
+        strokeVariable:  { type: 'string', description: 'DS color variable path for stroke.' },
+        strokeHex:       { type: 'string', description: 'Hex color fallback.' },
+        strokeWidth:     { type: 'number', description: 'Stroke weight.' },
+        arcData: {
+          type: 'object',
+          description: 'Arc configuration for donut segments.',
+          properties: {
+            startingAngle: { type: 'number', description: 'Starting angle in radians.' },
+            endingAngle:   { type: 'number', description: 'Ending angle in radians.' },
+            innerRadius:   { type: 'number', description: 'Inner radius as 0-1 ratio.' },
+          },
+        },
+        x:               { type: 'number', description: 'X position.' },
+        y:               { type: 'number', description: 'Y position.' },
+        layoutGrow:      { type: 'number', description: 'Layout grow factor.' },
+        layoutAlign:     { type: 'string', description: 'Layout alignment.' },
       },
       required: ['width', 'height'],
     },
@@ -882,7 +926,8 @@ const TOOLS = [
           },
         },
         xDomain:      { type: 'array', items: { type: 'number' }, description: '[min, max] for X axis.' },
-        categories:   { type: 'object', description: 'Donut/pie segment definitions. Keys are segment names, values are { value: number, color: string (DS hex) }.' },
+        categories:   { type: 'object', description: 'Donut/pie/scatter/bar segment definitions. Keys are segment names, values are { value: number, color: string (DS hex), colorVariable?: string (DS variable path) }.' },
+        categoryVariables: { type: 'object', description: 'DS variable paths per category. Keys match categories keys, values are DS color variable paths (e.g., {"Pass": "Component colors/Utility/Success/utility-success-500"}). Tried first; hex fallback from categories if binding fails.' },
         categoryOrder: { type: 'array', items: { type: 'string' }, description: 'Render order for categories (donut/pie/scatter).' },
         dotSize:      { type: 'number' },
         jitter:       { type: 'boolean' },
@@ -909,6 +954,7 @@ const TOOLS = [
                 },
               },
               color:  { type: 'string', description: 'DS hex color for this series line.' },
+              colorVariable: { type: 'string', description: 'DS color variable path for this series (e.g., "Component colors/Utility/Success/utility-success-500"). Tried first; hex fallback from color if binding fails.' },
               smooth: { type: 'boolean', description: 'Smooth curve interpolation.' },
               area:   { type: 'boolean', description: 'Fill area under the line.' },
             },
@@ -928,6 +974,14 @@ const TOOLS = [
         innerRadius:  { type: 'number' },
         centerLabel:  { type: 'string' },
         centerSubLabel: { type: 'string' },
+        legendPosition: { type: 'string', enum: ['right', 'bottom'], description: 'Legend placement for donut/pie charts. "right" (default) places legend beside the chart. "bottom" places it below.' },
+        // DS integration params for chart elements
+        bgVariable:        { type: 'string', description: 'DS variable path for chart outer frame background (e.g., "Colors/Background/bg-secondary"). Replaces hardcoded #F9FAFB.' },
+        radiusVariable:    { type: 'string', description: 'DS radius variable path for chart outer frame (e.g., "Radius/radius-md"). Replaces hardcoded 8px.' },
+        gridVariable:      { type: 'string', description: 'DS variable path for grid line color (e.g., "Colors/Border/border-secondary"). Replaces hardcoded #E7EAEE.' },
+        labelFillVariable: { type: 'string', description: 'DS variable path for chart label text color (e.g., "Colors/Text/text-tertiary (600)"). Replaces hardcoded #6D778C.' },
+        labelTextStyleId:  { type: 'string', description: 'DS text style key for chart labels. Applied to all axis/legend labels.' },
+        fontFamily:        { type: 'string', description: 'Font family for chart labels (overrides session default).' },
       },
       required: ['chartType'],
     },
@@ -1129,6 +1183,59 @@ const TOOLS = [
   },
 
   {
+    name: 'figma_discover_library_styles',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description:
+      'List local and imported text styles, color styles, and effect styles in the current file. ' +
+      'Returns style IDs and keys usable with preload_styles and textStyleId in create_text. ' +
+      'Note: Figma Plugin API cannot enumerate library styles directly — for full library style discovery, ' +
+      'use search_design_system from the Figma MCP. Optional nameFilter narrows results.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nameFilter: { type: 'string', description: 'Optional substring to filter style names (case-insensitive).' },
+      },
+    },
+  },
+
+  {
+    name: 'figma_restyle_artboard',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    description:
+      'Restyle an entire artboard by walking all descendants and applying color, font, radius, and spacing overrides. ' +
+      'Pass a colorMap to remap hex colors (e.g. {"ffffff": "0f172a"} changes white to dark navy). ' +
+      'Optional fontFamily changes all text to a new font. radiusScale multiplies all corner radii. ' +
+      'spacingScale multiplies all padding and gaps.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId:       { type: 'string', description: 'Root artboard node ID to restyle.' },
+        colorMap:     { type: 'object', description: 'Hex color remapping: { "oldHex": "newHex" }. No # prefix. Lowercase.' },
+        fontFamily:   { type: 'string', description: 'New font family for all text nodes (e.g. "DM Sans").' },
+        radiusScale:  { type: 'number', description: 'Multiplier for all corner radii (e.g. 0.5 = halve, 2.0 = double).' },
+        spacingScale: { type: 'number', description: 'Multiplier for all padding and gap values.' },
+      },
+      required: ['nodeId'],
+    },
+  },
+
+  {
+    name: 'figma_discover_library_variables',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description:
+      'Discover ALL variable collections and variables available from enabled libraries. ' +
+      'Uses figma.teamLibrary API to enumerate across all enabled libraries (including community libraries). ' +
+      'Returns variable keys grouped by collection, usable with preload_variables or fillVariable/strokeVariable. ' +
+      'Call this at build start to discover what DS variables are available. Optional nameFilter narrows results.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nameFilter: { type: 'string', description: 'Optional substring to filter variable names (case-insensitive).' },
+      },
+    },
+  },
+
+  {
     name: 'figma_preload_variables',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
@@ -1157,7 +1264,10 @@ const TOOLS = [
       'textFillStyleKey sets the default fill for all text nodes that have no explicit fill — ' +
       'prevents raw #000000 black. Pass the DS text-primary color style key. ' +
       'fontFamily sets the default font family for all text nodes (default: "Inter"). ' +
-      'Set this if your DS uses a different font (e.g., "Roboto", "SF Pro").',
+      'Set this if your DS uses a different font (e.g., "Roboto", "SF Pro"). ' +
+      'dsMode controls DS enforcement: "strict" (default) requires all visual properties to use DS ' +
+      'variables/styles — raw hex, raw px, raw fonts are rejected. "permissive" allows raw fallbacks ' +
+      'for component-only DSs without published tokens.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1169,8 +1279,62 @@ const TOOLS = [
           type: 'string',
           description: 'Default font family for text nodes (e.g., "Inter", "Roboto", "SF Pro"). Defaults to "Inter" if not set.',
         },
+        dsMode: {
+          type: 'string',
+          enum: ['strict', 'permissive'],
+          description: 'DS enforcement mode. "strict" (default): all fills, strokes, spacing, radius, and typography must use DS variables/styles — raw values are rejected with an error. "permissive": raw fallbacks allowed for DSs without published tokens. Default: "strict".',
+        },
       },
       required: ['textFillStyleKey'],
+    },
+  },
+
+  {
+    name: 'figma_read_variable_values',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Read the resolved values of all local variables in the current Figma file. ' +
+      'Returns variable names, types, resolved hex values (for colors), and numeric values (for spacing/radius). ' +
+      'Use this to extract DS token values for DESIGN.md generation, Tailwind export, or drift detection. ' +
+      'Must be run in the library file (where variables are local) for full results. ' +
+      'In consumer files, use discover_library_variables instead (returns keys/names but not values).',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+
+  {
+    name: 'figma_tag_raw_exception',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Tag a node as a user-approved raw value exception. Prefixes the node name with [RAW-OK] ' +
+      'and stores the reason in plugin data. Tagged nodes are skipped by validate_ds_compliance. ' +
+      'Use ONLY after the user explicitly approves a raw fallback for a specific node.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Node ID to tag.' },
+        reason: { type: 'string', description: 'Why this raw value was approved (e.g., "chart internal geometry", "decorative element").' },
+      },
+      required: ['nodeId', 'reason'],
+    },
+  },
+
+  {
+    name: 'figma_validate_ds_compliance',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Post-build DS compliance validation. Walks all nodes under an artboard and flags violations: ' +
+      'raw fills (no bound DS variable), raw text styles (no textStyleId), raw spacing (no bound variable), ' +
+      'fixed sizing on non-artboard frames. Returns a compliance report with violation details. ' +
+      'Call after every build (Phase 4 QA) to verify DS-only rule compliance.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Root node ID to validate (typically the artboard).' },
+      },
+      required: ['nodeId'],
     },
   },
 
@@ -1316,6 +1480,8 @@ const TOOLS = [
               pattern_key:          { type: 'string',  description: 'Required. Canonical taxonomy key (e.g. "metric/kpi", "label/chip"). Must match the Pattern Key Taxonomy.' },
               component_key:        { type: 'string',  description: 'Figma component key hash for the mapped DS component.' },
               component_name:       { type: 'string',  description: 'Human-readable component name.' },
+              library_key:          { type: 'string',  description: 'Library key from Figma search. Tracks which DS library this component belongs to.' },
+              library_name:         { type: 'string',  description: 'Human-readable library name (e.g., "LayerLens Theme").' },
               state:                { type: 'string',  enum: ['CANDIDATE', 'VERIFIED', 'REJECTED', 'EXPIRED'], description: 'Explicit state override. Omit to let promotion logic handle CANDIDATE→VERIFIED automatically.' },
               increment_use:        { type: 'boolean', description: 'Set true to increment use_count by 1 for an existing entry.' },
               increment_correction: { type: 'boolean', description: 'Set true when the user corrected this mapping. Increments correction_count and demotes VERIFIED→CANDIDATE. Also write a rule_update with reset_seen_count=true for any associated rule.' },
@@ -1366,6 +1532,7 @@ const DIRECT_PASS = new Set([
   'figma_create_frame',
   'figma_create_text',
   'figma_create_rectangle',
+  'figma_create_ellipse',
   'figma_set_component_text',
   'figma_set_layout_sizing',
   'figma_set_text',
@@ -1391,6 +1558,12 @@ const DIRECT_PASS = new Set([
   'figma_change_page',
   'figma_preload_styles',
   'figma_set_session_defaults',
+  'figma_discover_library_styles',
+  'figma_discover_library_variables',
+  'figma_restyle_artboard',
+  'figma_read_variable_values',
+  'figma_validate_ds_compliance',
+  'figma_tag_raw_exception',
 ]);
 
 // Strip "figma_" prefix to get the bridge instruction type.

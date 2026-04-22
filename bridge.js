@@ -87,6 +87,7 @@ const TIMEOUT_BY_TYPE = {
   swap_main_component: 90_000,
   preload_styles: 300_000,      // Sequential import of N keys × 30s each. 300s covers ~10 keys on cold start.
   preload_variables: 300_000,   // Library collection walk + batch import. Can be slow with large DSs.
+  restyle_artboard: 600_000,    // Walks entire node tree, loads fonts. Can take minutes on large artboards.
 };
 const DEFAULT_TIMEOUT = 120_000;
 
@@ -237,7 +238,7 @@ const server = http.createServer(async (req, res) => {
         // componentKey may be supplied directly (e.g. from a DS search result).
         // nodeId is only required when componentKey is not already known.
         if (!params.componentKey && !nodeId) throw new Error('"params.nodeId" or "params.componentKey" is required for insert_component');
-        if (!fileKey) throw new Error('"params.fileKey" is required for insert_component');
+        if (!params.componentKey && !fileKey) throw new Error('"params.fileKey" is required when componentKey is not provided');
 
         if (nodeId && !params.componentKey) {
           try {

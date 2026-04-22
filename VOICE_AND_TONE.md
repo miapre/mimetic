@@ -236,6 +236,24 @@ Written for a designer. Answers: what was built, what DS components were used, w
 
 ---
 
+## Save Report Offer
+
+After every build summary, offer the user the option to save the report as a file. Designers work visually — a terminal summary scrolls away. A saved file can be shared with the team, attached to a ticket, or referenced later.
+
+**Format:** Ask once, at the end of the build summary. One line, no pressure.
+
+```
+Want this report saved as a file? (markdown or html)
+```
+
+If the user says yes:
+- **Markdown:** Save to `mimic/reports/build-{date}-{screen}.md`
+- **HTML:** Save to `mimic/reports/build-{date}-{screen}.html` — styled, readable, shareable. Include the DS usage table, gap recommendations, and cache status in a clean layout.
+
+If the user says nothing or no, don't ask again. The report was already shown in the terminal — saving is optional.
+
+---
+
 ## Recommendations: Questions, Not Commands
 
 *Research: people resist evaluative feedback unless it offers choice and preserves authorship. Google PAIR + Microsoft HAX converge: frame AI findings as hypotheses with evidence.*
