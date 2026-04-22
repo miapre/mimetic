@@ -1495,8 +1495,8 @@ async function handleSetNodeFill(params) {
   await walk(node);
   // Fallback: apply directly to node if no vector descendant found
   if (!applied) {
-    if (useStroke && 'strokes' in node) await applyStroke(node, params.variablePath, params.hexFallback);
-    else if (!useStroke && 'fills' in node) await applyFill(node, params.variablePath, params.hexFallback);
+    if (useStroke && 'strokes' in node) { await applyStroke(node, params.variablePath, params.hexFallback); applied = true; }
+    else if (!useStroke && 'fills' in node) { await applyFill(node, params.variablePath, params.hexFallback); applied = true; }
   }
   return { ok: true, applied };
 }
