@@ -4,6 +4,8 @@
 
 Mimic transforms HTML into Figma using the user's design system.
 
+**DS-agnostic mandate:** The tool code must NEVER contain hardcoded references to any specific design system — no font families, no hex colors, no component names, no variable paths from any particular DS (LayerLens, Untitled UI, Material UI, or any other). All DS-specific values must come from the user's DS at runtime via discovery, preloading, or session defaults. If a fallback is needed (e.g., chart labels when no DS context is provided), use neutral values (grays: #212121, #757575, #F7F7F7) that don't assume any brand palette. The Platform Architect must audit code for DS-specific leaks after every session that modifies plugin/bridge/MCP code.
+
 ## 2. Design system first
 
 Always use design system components when a correct match exists. A mandatory DS discovery step must precede every build. Search the DS for all component types present in the HTML (buttons, tabs, badges, tables, inputs, pagination, page headers, etc.). Produce a component map before creating any frame.
