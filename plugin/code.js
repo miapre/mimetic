@@ -23,7 +23,7 @@ var sessionDefaults = {
   textFillStyleKey: null,   // Applied to text when no fillStyleKey/fillVariable/fills provided
   frameFillStyleKey: null,  // NOT auto-applied — frames often have no fill intentionally
   strokeStyleKey: null,     // NOT auto-applied
-  fontFamily: 'Inter',      // Default font family — overridden via set_session_defaults
+  fontFamily: null,          // No default — set via set_session_defaults or auto-detected from first text style import. DS-agnostic: never hardcode a font family.
   dsMode: 'permissive',     // 'strict' = DS references required, raw values rejected. 'permissive' = raw fallbacks allowed. Set to 'strict' via set_session_defaults when DS is connected.
 };
 
@@ -259,7 +259,9 @@ const FONT_STYLES = {
 };
 
 async function loadFont(weight) {
-  var family = 'Inter';
+  // Use DS font from session defaults — never hardcode a specific font family.
+  // If no default is set, fall back to 'Inter' as a last resort (Figma ships it).
+  var family = sessionDefaults.fontFamily || 'Inter';
   await figma.loadFontAsync({ family: family, style: FONT_STYLES[weight] || 'Regular' });
 }
 
@@ -436,7 +438,7 @@ async function handleInsertComponent(params) {
   // Role warnings: check for default text still showing (Rule 40)
   const warnings = [];
   const defaultTexts = ['Button CTA', 'Label', 'Text', 'Title', 'Badge', 'Heading', 'Description',
-    'Team members', 'Untitled', 'My details', 'olivia@untitledui.com', 'Enter your email'];
+    'Team members', 'Untitled', 'My details', 'Enter your email'];
   try {
     const visibleTexts = instance.findAll(n => n.type === 'TEXT' && n.visible);
     for (const t of visibleTexts) {
@@ -631,27 +633,69 @@ async function handleCreateFrame(params) {
 
 async function handleCreateText(params) {
   const weight = params.fontWeight !== undefined ? params.fontWeight : 400;
-  await loadFont(weight);
-
   const text = figma.createText();
-  // Must set fontName before characters (Figma requires a loaded font to set text)
-  text.fontName = { family: 'Inter', style: FONT_STYLES[weight] || 'Regular' };
-  text.characters = params.text !== undefined ? params.text : '';
 
   // DS compliance tracking
   const dsCompliance = { textStyle: 'unresolved', fill: 'unresolved' };
 
-  // Typography: try DS text style. If it succeeds, it overrides raw font properties.
-  // Apply AFTER characters are set. The style import sets fontName/fontSize/lineHeight
-  // from the DS definition, replacing the raw values set above.
+  // Typography: try DS text style FIRST. The style defines the font — load that font,
+  // not a hardcoded fallback. This is critical for community libraries (e.g., MUI uses
+  // Roboto, not Inter). Only fall back to Inter if no style is provided or import fails.
   let styleApplied = false;
   if (params.textStyleId) {
-    styleApplied = await applyTextStyle(text, params.textStyleId);
+    // Import the style to get its font information
+    var styleKey = params.textStyleId.replace(/^S:/, '').split(',')[0];
+    var importedStyle = null;
+    try {
+      // Check preloaded cache first
+      var cachedId = styleCache.get(params.textStyleId) || styleCache.get(styleKey);
+      if (cachedId) {
+        // Style is cached — apply directly, then load the font it uses
+        try {
+          text.textStyleId = cachedId;
+          // Load the font the style uses (read from the node after style is applied)
+          if (text.fontName && text.fontName !== figma.mixed) {
+            await figma.loadFontAsync(text.fontName);
+          }
+          styleApplied = true;
+        } catch (e) {
+          // Style applied but font load failed — try importing fresh
+          styleApplied = false;
+        }
+      }
+      if (!styleApplied) {
+        importedStyle = await Promise.race([
+          figma.importStyleByKeyAsync(styleKey),
+          new Promise(function(_, reject) { setTimeout(function() { reject(new Error('style import timeout')); }, 20000); }),
+        ]);
+        if (importedStyle && importedStyle.id) {
+          text.textStyleId = importedStyle.id;
+          // Load the font the style specifies
+          if (text.fontName && text.fontName !== figma.mixed) {
+            await figma.loadFontAsync(text.fontName);
+          }
+          styleApplied = true;
+          styleCache.set(params.textStyleId, importedStyle.id);
+          styleCache.set(styleKey, importedStyle.id);
+          // Auto-detect DS font: if no fontFamily is set, learn it from the first successful style import.
+          // This makes the plugin DS-agnostic — it discovers the font from the DS instead of assuming one.
+          if (!sessionDefaults.fontFamily && text.fontName && text.fontName !== figma.mixed) {
+            sessionDefaults.fontFamily = text.fontName.family;
+          }
+        }
+      }
+    } catch (_) { /* style import failed — fall through to raw */ }
     dsCompliance.textStyle = styleApplied ? 'ds_style' : 'style_failed';
     if (!styleApplied) dsCompliance.failedStyleId = params.textStyleId;
   }
 
   if (!styleApplied) {
+    // No DS style — load fallback font (Inter or session default)
+    var fallbackFamily = sessionDefaults.fontFamily || 'Inter';
+    var fallbackStyle = FONT_STYLES[weight] || 'Regular';
+    await figma.loadFontAsync({ family: fallbackFamily, style: fallbackStyle });
+    text.fontName = { family: fallbackFamily, style: fallbackStyle };
+
     if (sessionDefaults.dsMode === 'strict' && params.textStyleId) {
       throw new Error(
         'DS_TEXT_STYLE_FAILED: Text style "' + params.textStyleId + '" could not be applied. ' +
@@ -673,6 +717,9 @@ async function handleCreateText(params) {
     dsCompliance.rawFontSize = params.fontSize || null;
     dsCompliance.rawFontWeight = weight;
   }
+
+  // Set characters AFTER font is loaded (either from style or fallback)
+  text.characters = params.text !== undefined ? params.text : '';
 
   if (params.textAlignHorizontal) text.textAlignHorizontal = params.textAlignHorizontal;
 
@@ -1848,6 +1895,9 @@ function det(i, seed) {
 // Chart DS context — set by handleCreateChart before delegating to chart-specific handlers.
 // Contains DS variable/style references the chart should use instead of hardcoded values.
 // If null, chart falls back to raw values (permissive mode only).
+// Chart color fallbacks: when DS variables are not provided, use neutral grays.
+// These are intentionally DS-agnostic — no specific DS's color palette is assumed.
+// Neutral dark: #212121 (rgb 0.13), Neutral mid: #757575 (rgb 0.46), Neutral light: #F7F7F7 (rgb 0.97)
 var chartDsContext = null;
 var chartDsBound = { bg: false, radius: false }; // Track what makeChartOuter successfully bound
 
@@ -1936,7 +1986,7 @@ async function chartLabel(parent, text, x, y, fontSize, colorRGB, align) {
     } catch(_) {}
   }
   if (!fillBound) {
-    node.fills = [{ type: 'SOLID', color: colorRGB || { r: 0.427, g: 0.467, b: 0.549 } }];
+    node.fills = [{ type: 'SOLID', color: colorRGB || { r: 0.46, g: 0.46, b: 0.46 } }];
   }
 
   parent.appendChild(node);
@@ -1974,7 +2024,7 @@ async function handleScatterChart(params) {
   const doJitter     = params.jitter   !== false;
   const chartName    = params.name     || 'Scatter Chart';
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
   // Layout constants
   const PAD_L  = 58;
@@ -2002,7 +2052,7 @@ async function handleScatterChart(params) {
 
   // Outer frame
   const outer = await makeChartOuter(chartName, params.parentNodeId, w, h);
-  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.976, g: 0.980, b: 0.984 } }];
+  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.97, g: 0.97, b: 0.97 } }];
   if (!chartDsBound.radius) outer.cornerRadius = 8;
 
   // ── Plot clip frame ────────────────────────────────────────────────────────
@@ -2065,7 +2115,7 @@ async function handleScatterChart(params) {
   // X-axis label
   if (xLabel) {
     await chartLabel(outer, xLabel, plotX + plotW / 2, h - 18, 12,
-                     { r: 0.063, g: 0.094, b: 0.157 }, 'center');
+                     { r: 0.13, g: 0.13, b: 0.13 }, 'center');
   }
 
   // Legend (top-right, right → left)
@@ -2075,10 +2125,10 @@ async function handleScatterChart(params) {
     const color = hexToRgb(categories[cat] || '#888888');
 
     const ltxt = figma.createText();
-    ltxt.fontName = { family: 'Inter', style: 'Regular' };
+    ltxt.fontName = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     ltxt.fontSize = 11;
     ltxt.characters = cat;
-    ltxt.fills = [{ type: 'SOLID', color: { r: 0.063, g: 0.094, b: 0.157 } }];
+    ltxt.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
     outer.appendChild(ltxt);
     lx -= ltxt.width;
     ltxt.x = lx;
@@ -2120,7 +2170,7 @@ async function handleLineChart(params) {
   const yLabel    = params.yLabel  || '';
   const chartName = params.name    || 'Line Chart';
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
   const PAD_L = 52;
   const PAD_T = 8;
@@ -2137,7 +2187,7 @@ async function handleLineChart(params) {
   const yScale = v => plotY + plotH - (v - yDomain[0]) / (yDomain[1] - yDomain[0]) * plotH;
 
   const outer = await makeChartOuter(chartName, params.parentNodeId, w, h);
-  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.976, g: 0.980, b: 0.984 } }];
+  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.97, g: 0.97, b: 0.97 } }];
   if (!chartDsBound.radius) outer.cornerRadius = 8;
 
   // Grid lines
@@ -2154,8 +2204,8 @@ async function handleLineChart(params) {
     await chartLabel(outer, String(tick) + xTickSfx, xScale(tick), plotY + plotH + 8, 11, null, 'center');
   }
 
-  if (xLabel) await chartLabel(outer, xLabel, plotX + plotW / 2, h - 18, 12, { r: 0.063, g: 0.094, b: 0.157 }, 'center');
-  if (yLabel) await chartLabel(outer, yLabel, 4, plotY + plotH / 2, 12, { r: 0.063, g: 0.094, b: 0.157 }, 'left');
+  if (xLabel) await chartLabel(outer, xLabel, plotX + plotW / 2, h - 18, 12, { r: 0.13, g: 0.13, b: 0.13 }, 'center');
+  if (yLabel) await chartLabel(outer, yLabel, 4, plotY + plotH / 2, 12, { r: 0.13, g: 0.13, b: 0.13 }, 'left');
 
   // Series
   for (const s of series) {
@@ -2201,10 +2251,10 @@ async function handleLineChart(params) {
     const s     = series[li];
     const color = hexToRgb(s.color || '#6941C6');
     const ltxt  = figma.createText();
-    ltxt.fontName  = { family: 'Inter', style: 'Regular' };
+    ltxt.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     ltxt.fontSize  = 11;
     ltxt.characters = s.name || '';
-    ltxt.fills = [{ type: 'SOLID', color: { r: 0.063, g: 0.094, b: 0.157 } }];
+    ltxt.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
     outer.appendChild(ltxt);
     lx -= ltxt.width;
     ltxt.x = lx; ltxt.y = 5;
@@ -2299,8 +2349,8 @@ async function handleDonutChart(params) {
   const centerStyleId    = params.centerTextStyleId    || null;
   const centerSubStyleId = params.centerSubTextStyleId || null;
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-  if (centerLabel) await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
+  if (centerLabel) await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Bold' });
 
   const LEGEND_W = noLegend ? 0 : 160;
   const LEGEND_H_BELOW = noLegend ? 0 : (data.length * 22 + 20); // height when legend is below
@@ -2365,22 +2415,22 @@ async function handleDonutChart(params) {
   // Center text
   if (centerLabel) {
     const ct = figma.createText();
-    ct.fontName  = { family: 'Inter', style: 'Bold' };
+    ct.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Bold' };
     ct.fontSize  = 22;
     ct.characters = centerLabel;
     await applyTextStyle(ct, centerStyleId);
-    await applyFill(ct, centerColorVar, '#101828');
+    await applyFill(ct, centerColorVar, '#212121');
     outer.appendChild(ct);
     ct.x = cx - ct.width / 2;
     ct.y = cy - ct.height / 2 - (centerSub ? 10 : 0);
 
     if (centerSub) {
       const cs = figma.createText();
-      cs.fontName  = { family: 'Inter', style: 'Regular' };
+      cs.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
       cs.fontSize  = 12;
       cs.characters = centerSub;
       await applyTextStyle(cs, centerSubStyleId);
-      await applyFill(cs, centerSubColorVar, '#667085');
+      await applyFill(cs, centerSubColorVar, '#757575');
       outer.appendChild(cs);
       cs.x = cx - cs.width / 2;
       cs.y = cy + 6;
@@ -2408,11 +2458,11 @@ async function handleDonutChart(params) {
     outer.appendChild(dot);
 
     const lbl = figma.createText();
-    lbl.fontName  = { family: 'Inter', style: 'Regular' };
+    lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     lbl.fontSize  = 12;
     lbl.characters = (seg.label || '') + '  ' + pct + '%';
     await applyTextStyle(lbl, params.legendTextStyleId || null);
-    await applyFill(lbl, null, '#101828');
+    await applyFill(lbl, null, '#212121');
     outer.appendChild(lbl);
     lbl.x = lx + 12; lbl.y = ly;
     ly += 22;
@@ -2463,7 +2513,7 @@ async function handleBarChart(params) {
   const chartName   = params.name    || 'Bar Chart';
   const annotations = params.annotations || [];
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
   const PAD_L    = 52;   // left padding for y-axis labels
   const PAD_R    = 16;
@@ -2476,7 +2526,7 @@ async function handleBarChart(params) {
 
   // ── Outer frame: VERTICAL auto-layout ──────────────────────────────────────
   const outer = await makeChartOuter(chartName, params.parentNodeId, w, h);
-  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.976, g: 0.980, b: 0.984 } }];
+  if (!chartDsBound.bg) outer.fills = [{ type: 'SOLID', color: { r: 0.97, g: 0.97, b: 0.97 } }];
   if (!chartDsBound.radius) outer.cornerRadius = 8;
 
   // Cleanup on failure: if anything below throws, remove the outer frame so
@@ -2528,10 +2578,10 @@ async function handleBarChart(params) {
       entry.appendChild(sw);
 
       const ltxt = figma.createText();
-      ltxt.fontName  = { family: 'Inter', style: 'Regular' };
+      ltxt.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
       ltxt.fontSize  = 11;
       ltxt.characters = cat;
-      ltxt.fills = [{ type: 'SOLID', color: { r: 0.063, g: 0.094, b: 0.157 } }];
+      ltxt.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
       entry.appendChild(ltxt);
 
       legendRow.appendChild(entry);
@@ -2542,10 +2592,10 @@ async function handleBarChart(params) {
   // ── Y-axis label (above the plot area) ─────────────────────────────────────
   if (yLabel) {
     const yLabelNode = figma.createText();
-    yLabelNode.fontName = { family: 'Inter', style: 'Regular' };
+    yLabelNode.fontName = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     yLabelNode.fontSize = 10;
     yLabelNode.characters = yLabel;
-    yLabelNode.fills = [{ type: 'SOLID', color: { r: 0.427, g: 0.467, b: 0.549 } }];
+    yLabelNode.fills = [{ type: 'SOLID', color: { r: 0.46, g: 0.46, b: 0.46 } }];
     const yLabelWrap = figma.createFrame();
     yLabelWrap.name = 'y-label';
     yLabelWrap.fills = [];
@@ -2676,7 +2726,7 @@ async function handleBarChart(params) {
     const bi    = ann.barIndex !== undefined ? ann.barIndex : 0;
     const barGroupW = nBars > 0 ? plotW / nBars : plotW;
     const ax    = PAD_L + bi * barGroupW;
-    const color = hexToRgb(ann.color || '#667085');
+    const color = hexToRgb(ann.color || '#757575');
     const line  = figma.createRectangle();
     line.name   = 'annotation-' + (ann.label || 'line');
     line.resize(1, plotH);
@@ -2723,10 +2773,10 @@ async function handleBarChart(params) {
       if (g.span === 1) {
         // Single bar: just a text node with layoutGrow: 1
         const lbl = figma.createText();
-        lbl.fontName  = { family: 'Inter', style: 'Regular' };
+        lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
         lbl.fontSize  = 10;
         lbl.characters = g.label;
-        lbl.fills = [{ type: 'SOLID', color: { r: 0.427, g: 0.467, b: 0.549 } }];
+        lbl.fills = [{ type: 'SOLID', color: { r: 0.46, g: 0.46, b: 0.46 } }];
         lbl.textAlignHorizontal = 'CENTER';
         labelsRow.appendChild(lbl);
         lbl.layoutGrow = 1;
@@ -2749,10 +2799,10 @@ async function handleBarChart(params) {
           spacer.layoutGrow = 1;
         }
         const lbl = figma.createText();
-        lbl.fontName  = { family: 'Inter', style: 'Regular' };
+        lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
         lbl.fontSize  = 10;
         lbl.characters = g.label;
-        lbl.fills = [{ type: 'SOLID', color: { r: 0.427, g: 0.467, b: 0.549 } }];
+        lbl.fills = [{ type: 'SOLID', color: { r: 0.46, g: 0.46, b: 0.46 } }];
         lbl.textAlignHorizontal = 'CENTER';
         wrap.appendChild(lbl);
         lbl.layoutSizingHorizontal = 'FILL';
@@ -2763,10 +2813,10 @@ async function handleBarChart(params) {
   // ── X-axis title ──────────────────────────────────────────────────────────
   if (xLabel) {
     const xLabelNode = figma.createText();
-    xLabelNode.fontName = { family: 'Inter', style: 'Regular' };
+    xLabelNode.fontName = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
     xLabelNode.fontSize = 12;
     xLabelNode.characters = xLabel;
-    xLabelNode.fills = [{ type: 'SOLID', color: { r: 0.063, g: 0.094, b: 0.157 } }];
+    xLabelNode.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
     xLabelNode.textAlignHorizontal = 'CENTER';
     outer.appendChild(xLabelNode);
     xLabelNode.layoutSizingHorizontal = 'FILL';
@@ -2800,7 +2850,7 @@ async function handleRadarChart(params) {
   const n = data.length;
   if (n < 3) throw new Error('Radar chart requires at least 3 data points');
 
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  await figma.loadFontAsync({ family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' });
 
   const LABEL_PAD = 32;
   const maxR = size / 2 - LABEL_PAD;
@@ -3020,11 +3070,46 @@ async function handlePreloadStyles(params) {
 // params: { prefixes: ["Colors", "spacing", "radius"] }
 async function handlePreloadVariables(params) {
   const prefixes = params.prefixes || [];
-  const matchAll = prefixes.length === 0;
+  const keys = params.keys || [];
+  const matchAll = prefixes.length === 0 && keys.length === 0;
   let loaded = 0;
   let failed = 0;
   let collectionsWalked = 0;
 
+  // Initialize variable cache if needed
+  if (!variableCache) {
+    const vars = await figma.variables.getLocalVariablesAsync();
+    variableCache = new Map(vars.map(v => [v.name, v]));
+  }
+
+  // Key-based import: bypass collection enumeration entirely.
+  // Use this for community library variables that teamLibrary API can't enumerate.
+  // Keys come from the Figma REST API (search_design_system).
+  for (const entry of keys) {
+    // Each entry: { key: "variableKey", name: "variable/path/name" }
+    var vKey = typeof entry === 'string' ? entry : entry.key;
+    var vName = typeof entry === 'string' ? null : entry.name;
+    if (!vKey) continue;
+    // Skip if already cached by name
+    if (vName && variableCache.has(vName)) { loaded++; continue; }
+    try {
+      var imported = await figma.variables.importVariableByKeyAsync(vKey);
+      if (imported) {
+        variableCache.set(imported.name, imported);
+        // Also cache by the provided name if different (handles path aliases)
+        if (vName && vName !== imported.name) variableCache.set(vName, imported);
+        loaded++;
+      } else {
+        failed++;
+      }
+    } catch (_) {
+      failed++;
+    }
+  }
+
+  // Prefix-based import: walk team library collections (existing behavior).
+  // This finds team-published libraries but NOT community libraries.
+  if (prefixes.length > 0 || (matchAll && keys.length === 0)) {
   try {
     const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
     for (const col of collections) {
@@ -3035,20 +3120,13 @@ async function handlePreloadVariables(params) {
       } catch (_) { continue; }
 
       for (const lv of libVars) {
-        // Skip if already cached
-        if (variableCache && variableCache.has(lv.name)) continue;
-
-        // Check prefix match
+        if (variableCache.has(lv.name)) continue;
         const matches = matchAll || prefixes.some(p => lv.name.startsWith(p));
         if (!matches) continue;
 
         try {
-          const imported = await figma.variables.importVariableByKeyAsync(lv.key);
-          if (!variableCache) {
-            const vars = await figma.variables.getLocalVariablesAsync();
-            variableCache = new Map(vars.map(v => [v.name, v]));
-          }
-          variableCache.set(lv.name, imported);
+          const imp = await figma.variables.importVariableByKeyAsync(lv.key);
+          variableCache.set(lv.name, imp);
           loaded++;
         } catch (_) {
           failed++;
@@ -3057,6 +3135,7 @@ async function handlePreloadVariables(params) {
     }
   } catch (e) {
     return { loaded, failed, total: loaded + failed, collectionsWalked, error: e.message };
+  }
   }
 
   return { loaded, failed, total: loaded + failed, collectionsWalked };

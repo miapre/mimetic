@@ -1239,20 +1239,40 @@ const TOOLS = [
     name: 'figma_preload_variables',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
-      'Batch import DS variables into the plugin cache. ' +
-      'Call at build start alongside preload_styles. Walks all library collections once and imports ' +
-      'variables matching the given path prefixes (e.g., "Colors", "spacing", "radius"). ' +
-      'Without preloading, each variable resolves via a full library walk with a 30-second timeout.',
+      'Batch import DS variables into the plugin cache. Two import modes:\n' +
+      '1. **Prefix-based** (prefixes param): Walks team library collections and imports variables matching path prefixes. ' +
+      'Works for team-published libraries. Does NOT find community library variables.\n' +
+      '2. **Key-based** (keys param): Imports variables directly by their Figma key, bypassing collection enumeration. ' +
+      'Use this for community library variables — get the keys from search_design_system (Figma MCP), then pass them here. ' +
+      'Each key entry can be a string (just the key) or { key, name } for explicit name mapping.\n' +
+      'Both modes can be used together. Call at build start alongside preload_styles.',
     inputSchema: {
       type: 'object',
       properties: {
         prefixes: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Variable path prefixes to import (e.g., ["Colors", "spacing", "radius"]). Empty array imports all.',
+          description: 'Variable path prefixes to import from team libraries (e.g., ["Colors", "spacing", "radius"]). Empty array imports all.',
+        },
+        keys: {
+          type: 'array',
+          items: {
+            oneOf: [
+              { type: 'string', description: 'Variable key string — name is read from the imported variable.' },
+              {
+                type: 'object',
+                properties: {
+                  key:  { type: 'string', description: 'Figma variable key (from search_design_system results).' },
+                  name: { type: 'string', description: 'Variable name/path for cache lookup (e.g., "primary/main").' },
+                },
+                required: ['key'],
+              },
+            ],
+          },
+          description: 'Variable keys to import directly (bypasses collection enumeration). Use for community library variables. Get keys from search_design_system.',
         },
       },
-      required: ['prefixes'],
+      required: [],
     },
   },
 
