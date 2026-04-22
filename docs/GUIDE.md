@@ -49,7 +49,7 @@ There are two separate channels between Claude and Figma. Understanding them upf
 │                          Claude Code                            │
 │                                                                 │
 │   ┌─────────────────────┐       ┌─────────────────────────┐    │
-│   │   Figma MCP         │       │   mimic-ai     │    │
+│   │   Figma MCP         │       │   mimic-ai              │    │
 │   │   (official,        │       │   (custom, write-only)  │    │
 │   │    read-only)       │       │                         │    │
 │   └──────────┬──────────┘       └────────────┬────────────┘    │
@@ -225,6 +225,8 @@ Publishing makes the library available. Enabling makes it accessible in a specif
 5. Toggle it **on**
 
 You only need to do this once per file. After this, all published components appear in the Assets panel under their library name, and all published variables are accessible via `figma.teamLibrary` in the plugin.
+
+> **Community libraries require an extra step.** If your design system comes from the Figma Community (e.g., Material 3, macOS 26, iOS 18, Simple Design System), you must **duplicate it to your drafts and publish the copy as a team library** before Mimic can discover its assets. The Figma Plugin API only reliably indexes team-published libraries. See the [Troubleshooting](#troubleshooting) section for the full steps.
 
 ### 0.6 Export variables for Claude
 
@@ -910,6 +912,32 @@ The component documentation has value for design decisions, code handoff, and de
 ---
 
 ## Troubleshooting
+
+**Community libraries return no components, variables, or styles**
+→ This is a Figma platform limitation. The Plugin API methods that discover library assets (`figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync`, `getAvailableLibraryTextStylesAsync`, etc.) only reliably index **team-published libraries** — not community libraries added from the Figma Community. If you add a community UI kit (e.g., Material 3 Design Kit, macOS 26, iOS 18) directly to your file, Mimic will not be able to discover its variables, styles, or most components.
+
+**The fix:** Duplicate the community file into your drafts and publish it as a team library:
+1. Open the community library file in Figma
+2. **File → Duplicate to your drafts**
+3. Open the duplicated copy
+4. Open the **Assets** panel → click **Publish library**
+5. Publish all components, variables, and styles
+6. In your target file, enable the **published copy** (not the original community version)
+
+After this, all discovery and binding tools work normally. This is the same process used for any community design system — the copy takes about two minutes and gives full API access.
+
+**Library has components but no variables or styles**
+→ Some design system libraries ship components only — no published color variables, spacing tokens, or text styles. This is common with community UI kits that were built before Figma added variable support, or kits that rely on hardcoded values inside their components. Mimic will still use every available component from the library (buttons, inputs, cards, tabs, etc.), but without tokens it cannot bind colors, spacing, or typography to the DS.
+
+**What this means for your output:** Components will look correct (they carry their own internal styles), but any element Mimic builds from scratch — text nodes, layout frames, dividers — will use raw values instead of DS variables. The build report will flag these as unbound values.
+
+**What to do about it:** If this is your primary DS and you plan to use it long-term, consider adding variables to the library:
+1. Open the library file
+2. Create variable collections for colors, spacing, and radius (see [Part 0.2](#02-set-up-variables))
+3. Replace hardcoded values inside your components with variable references
+4. Republish the library
+
+This is a one-time investment that pays off on every future build — Mimic will automatically bind to the tokens, and your components will respond to mode changes (light/dark) and token updates across your entire file.
 
 **"Figma plugin is not connected"**
 → The bridge is running but the Figma plugin is not. Go to Figma desktop → Plugins → Development → Mimic AI → Run. The bridge terminal should print "plugin connected".

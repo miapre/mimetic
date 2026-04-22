@@ -100,6 +100,8 @@ Open the Figma file where you want to build. Then:
 
 You only need to do this once per file. Without it, Mimic can't find your components.
 
+> **Using a community library?** If your DS comes from the Figma Community (Material 3, iOS 18, macOS 26, etc.), you need to **duplicate it to your drafts and publish the copy** first. Figma's Plugin API only discovers assets from team-published libraries — community libraries added directly won't work. See the [full guide](docs/GUIDE.md#troubleshooting) for details.
+
 ### You're ready
 
 Ask your AI assistant to build something. Include a Figma link to the file and page, or describe where you want the output.
@@ -251,18 +253,26 @@ All token bindings are real — nodes use your actual design system variables. U
 
 ---
 
-## Governance
+## Quality built in — not bolted on
 
-Every build follows 6 phases, each owned by a role that acts as a quality gate. 36 rules govern every decision.
+Every build is checked by 4 specialist roles before it's reported as done. You don't invoke them — they run automatically.
 
-| Phase | Owner | Gate |
+| Role | What it checks | When |
 |---|---|---|
-| **0. Target** | Platform Architect | File, page, artboard placement confirmed |
-| **1. Discovery** | DS Integration Engineer | Component map: every HTML element → DS component or primitive with reason |
-| **2. Inventory** | DS Integration Engineer | All text styles, color variables, spacing tokens imported |
-| **3. Build** | Build Engineer | Per-node: auto-layout, DS text style, DS color variable, DS spacing variable, component fully configured |
-| **4. QA** | Design QA | Screenshot comparison, content fidelity, no placeholder text, no raw values |
-| **5. Report** | Learning Engineer + Product QA | Build report, patterns learned, DS gaps, provenance |
+| **DS Integration Engineer** | Every element mapped to a DS component. No component left with default placeholder text. | During discovery + after build |
+| **Design QA** | Every text node uses a DS text style. Every color, spacing, and radius uses a DS variable. Content matches the HTML exactly. No raw values. | After build |
+| **Product QA** | Build report uses designer vocabulary. Gap recommendations are questions, not commands. | Before reporting |
+| **Learning Engineer** | Patterns saved. Gaps tracked. Build report generated. | End of build |
+
+**How it works without costing you tokens:**
+
+1. **Plugin-level enforcement (free)** — The Figma plugin automatically hides icon placeholders, sets auto-layout defaults, and rejects raw values. Zero tool calls, zero tokens. It just happens.
+
+2. **Inline warnings (free)** — Every tool response includes warnings if something isn't DS-compliant: "Text created without DS text style," "Frame fill is raw hex." These are in responses you'd already see — no extra calls.
+
+3. **Build completion audit (1 call)** — At the end of the build, one audit checks everything: DS compliance, content fidelity, learning pipeline. If anything fails, it gets fixed before you see "Build complete."
+
+The result: 44 rules enforced, 0 extra tool calls for enforcement.
 
 Full specification: [`GOLDEN_RULES.md`](GOLDEN_RULES.md), [`ROLES.md`](ROLES.md), [`VOICE_AND_TONE.md`](VOICE_AND_TONE.md).
 
@@ -352,7 +362,7 @@ internal/
   parsing/          — HTML parsing
 
 CLAUDE.md           — Build protocol and phased lifecycle
-GOLDEN_RULES.md     — 36 rules governing every build
+GOLDEN_RULES.md     — 44 rules governing every build
 ROLES.md            — 6 roles operating as build gates
 VOICE_AND_TONE.md   — Identity, voice principles, output formats
 docs/
@@ -386,7 +396,7 @@ Runs entirely on your machine. No design data, component names, token values, or
 - **Community libraries have limited support.** Components from community libraries (ones you didn't publish yourself, like Material 3 Design Kit) may fail to import. For best results, use a team library you own.
 - **First-build font caching.** If text styles don't apply on the very first build, it's because Figma hasn't cached the font data yet. Re-run the build — the second attempt will succeed.
 - **npx mode doesn't support library imports.** The one-click `npx -y @miapre/mimic-ai` install doesn't set a `FIGMA_ACCESS_TOKEN`, which is needed for importing components from team libraries. Use the full installer script for team library support.
-- **Governance is Claude-optimized.** The 36 rules, phased lifecycle, and learning reports are followed by Claude Code. Other MCP clients will have the tools but may not follow the protocol unless their LLM is instructed to read `CLAUDE.md`.
+- **Governance is Claude-optimized.** The 44 rules, phased lifecycle, and learning reports are followed by Claude Code. Other MCP clients will have the tools but may not follow the protocol unless their LLM is instructed to read `CLAUDE.md`.
 
 ---
 

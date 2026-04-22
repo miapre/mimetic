@@ -327,6 +327,43 @@ function generateRecommendations(knowledge) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// CONFIGURATION RECIPE BUILDER (Rule 33)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a configuration recipe from a successful component configuration.
+ * Returns null if there's no meaningful configuration to store.
+ *
+ * @param {Object} params
+ * @param {Object|null} params.variantProps — variant properties set via setProperties()
+ * @param {Object|null} params.textOverrides — text node name → content map
+ * @param {string[]}    params.hiddenSlots — boolean properties set to false
+ * @param {Object}      params.booleanOverrides — all boolean property overrides
+ * @param {Object}      params.semanticProps — semantic properties (Color, Type, etc.)
+ * @param {string|null} params.buildId — build ID for tracking
+ * @returns {Object|null} recipe object or null if no meaningful config
+ */
+export function buildConfigurationRecipe(params) {
+  const recipe = {
+    variant: params.variantProps || null,
+    text_overrides: params.textOverrides || null,
+    hidden_slots: params.hiddenSlots || [],
+    boolean_overrides: params.booleanOverrides || {},
+    semantic_properties: params.semanticProps || {},
+    verified: false,
+    last_verified_build: params.buildId || null,
+  };
+
+  // Only save if there's meaningful configuration (not just defaults)
+  const hasContent = recipe.variant || recipe.text_overrides ||
+    recipe.hidden_slots.length > 0 || Object.keys(recipe.boolean_overrides).length > 0 ||
+    Object.keys(recipe.semantic_properties).length > 0;
+
+  return hasContent ? recipe : null;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC API
 // ═══════════════════════════════════════════════════════════════════════════
 
