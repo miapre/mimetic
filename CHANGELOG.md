@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 (2026-04-23)
+
+### Added
+- **Build report generator** (`mimic_generate_build_report`): Compiles DS compliance data, learned patterns, and gap recommendations into a structured report (markdown or HTML). Shareable with your team.
+- **DESIGN.md generator** (`mimic_generate_design_md`): Compiles your DS into the open DESIGN.md format — compatible with Google Stitch, generative UI tools, and AI coding agents. Includes color tokens, typography, spacing, radius, and component patterns from builds.
+- **Component description suggestions**: Workflow for generating component descriptions from Mimic's usage data. Ask Mimic to suggest descriptions based on how components are actually used across builds.
+- **No-internal-names rule** in CLAUDE.md: Creator's company/brand names never appear in committed files.
+
+### Changed
+- **README rewrite**: Empathy-first positioning backed by research. "Learns your design system. Builds with it. Gets better every time." Comparison table, learning section as hero, DS enrichment angle (Figma Make, Stitch, generative UI), vibe design section.
+- **Positioning strategy**: Full competitive analysis documented (opportunity-analysis.html). 11 capabilities mapped with honest status assessment.
+
 ## 1.1.6 (2026-04-22)
 
 ### Added
