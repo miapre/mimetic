@@ -174,6 +174,62 @@ The phased gate model (above) is the canonical build protocol. Below are executi
 4. If using the bridge: call `preload_styles` and `set_session_defaults` for batch efficiency
 5. Calculate artboard placement: rightmost existing frame x + width + 80
 
+### CSS → Figma Auto-Layout Reference
+
+Read the HTML's CSS before building. These properties map directly — don't guess layout, translate it.
+
+**Direction & display:**
+| CSS | Figma |
+|---|---|
+| `display: flex; flex-direction: row` | `direction: 'HORIZONTAL'` |
+| `display: flex; flex-direction: column` | `direction: 'VERTICAL'` |
+| `display: grid; grid-template-columns: repeat(3, 1fr)` | `direction: 'HORIZONTAL'`, children `layoutSizingHorizontal: 'FILL'` (equal distribution) |
+
+**Sizing:**
+| CSS | Figma |
+|---|---|
+| `flex: 1` / `flex-grow: 1` | `layoutGrow: 1` (FILL remaining space) |
+| `flex: 2` vs `flex: 1` | Both `layoutGrow: 1` (Figma can't do proportional — equal split) |
+| `width: 300px` | `width: 300` (explicit, only when HTML specifies) |
+| `max-width: 960px; margin: 0 auto` | `layoutSizingHorizontal: 'FILL'`, `maxWidth: 960`, parent `counterAxisAlignItems: 'CENTER'` |
+| `width: 100%` | `layoutSizingHorizontal: 'FILL'` |
+| `height: auto` / no height | `layoutSizingVertical: 'HUG'` (always — height is HUG) |
+| `align-items: stretch` (default in flex) | Children `layoutSizingVertical: 'FILL'` in horizontal parents (equal height siblings) |
+
+**Spacing:**
+| CSS | Figma |
+|---|---|
+| `gap: 24px` | `gap: 24` → bind to DS spacing variable |
+| `padding: 48px` | `padding: 48` → bind to DS spacing variable |
+| `padding: 80px 48px` | `paddingTop: 80, paddingBottom: 80, paddingLeft: 48, paddingRight: 48` → bind each to DS spacing |
+| `border-radius: 12px` | `cornerRadius: 12` → bind to DS radius variable |
+
+**Alignment:**
+| CSS | Figma |
+|---|---|
+| `justify-content: center` | `primaryAxisAlignItems: 'CENTER'` |
+| `justify-content: space-between` | `primaryAxisAlignItems: 'SPACE_BETWEEN'` |
+| `justify-content: flex-start` | `primaryAxisAlignItems: 'MIN'` |
+| `justify-content: flex-end` | `primaryAxisAlignItems: 'MAX'` |
+| `align-items: center` | `counterAxisAlignItems: 'CENTER'` |
+| `align-items: flex-start` | `counterAxisAlignItems: 'MIN'` |
+| `text-align: center` | `textAlignHorizontal: 'CENTER'` |
+| `margin: 0 auto` (on block element) | Parent `counterAxisAlignItems: 'CENTER'` |
+
+**Overflow & clipping:**
+| CSS | Figma |
+|---|---|
+| `overflow: hidden` | `clipsContent: true` |
+| `overflow: visible` | `clipsContent: false` |
+
+**Borders:**
+| CSS | Figma |
+|---|---|
+| `border: 1px solid #e5e7eb` | `strokeVariable: 'divider'`, `strokeWidth: 1` |
+| `border-bottom: 2px solid #7c3aed` | Figma strokes apply to all sides — use a nested frame or accept all-side stroke |
+
+**Key principle:** Every CSS layout property has a Figma equivalent. Read the CSS, translate it. Don't invent layout from visual inspection.
+
 ### Phase 3 (Build)
 - Read the HTML carefully. Build what's there, not what you think should be there.
 - Every text node gets a `textStyleId` and a DS color fill from the correct semantic category
