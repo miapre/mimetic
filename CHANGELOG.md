@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 (2026-04-23)
+
+### Fixed
+- **README tool count**: Updated from 35 to 45 — added 10 tools that were missing from the documentation (batch, ellipse, chart, discover styles/variables, compliance, restyle, tag exception, pipeline resolve, render URL, DESIGN.md generator).
+- **KNOWN_ISSUES accuracy**: Configuration recipes status updated (active since v1.2.0, not "being rolled out"). Added npx mode `FIGMA_ACCESS_TOKEN` limitation.
+- **Boundary violation**: Removed internal DS name from `mimic_ai_knowledge_write` tool description.
+
 ## 1.3.0 (2026-04-23)
 
 ### Added
