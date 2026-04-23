@@ -712,10 +712,10 @@ const TOOLS = [
         counterAxisSizingMode: { type: 'string', enum: ['FIXED', 'AUTO'] },
         layoutSizingHorizontal: { type: 'string', enum: ['FILL', 'HUG', 'FIXED'] },
         layoutSizingVertical:   { type: 'string', enum: ['FILL', 'HUG', 'FIXED'] },
-        paddingTop:    { type: 'number' },
-        paddingRight:  { type: 'number' },
-        paddingBottom: { type: 'number' },
-        paddingLeft:   { type: 'number' },
+        paddingTop:    { type: ['number', 'string'], description: 'DS variable path (e.g., "spacing-xl") preferred. Raw px number allowed in permissive mode only.' },
+        paddingRight:  { type: ['number', 'string'], description: 'DS variable path preferred. Raw px allowed in permissive mode only.' },
+        paddingBottom: { type: ['number', 'string'], description: 'DS variable path preferred. Raw px allowed in permissive mode only.' },
+        paddingLeft:   { type: ['number', 'string'], description: 'DS variable path preferred. Raw px allowed in permissive mode only.' },
         width:         { type: 'number' },
         height:        { type: 'number' },
       },
@@ -1865,24 +1865,65 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         output += 'table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}th{text-align:left;padding:8px 12px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-weight:600}';
         output += 'td{padding:8px 12px;border-bottom:1px solid #f3f4f6}ul{margin:8px 0}li{margin:4px 0}strong{font-weight:600}';
         output += 'hr{border:none;border-top:1px solid #e5e7eb;margin:32px 0}em{color:#6b7280}</style></head><body>';
-        // Basic markdown to HTML
-        output += md
-          .replace(/^# (.*?)$/gm, '<h1>$1</h1>')
-          .replace(/^## (.*?)$/gm, '<h2>$1</h2>')
-          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-          .replace(/\*(.*?)\*/g, '<em>$1</em>')
-          .replace(/^\| (.*?) \|$/gm, (match) => {
-            const cells = match.split('|').filter(c => c.trim()).map(c => c.trim());
-            return '<tr>' + cells.map(c => '<td>' + c + '</td>').join('') + '</tr>';
-          })
-          .replace(/^\|[-|]+\|$/gm, '')
-          .replace(/^- (.*?)$/gm, '<li>$1</li>')
-          .replace(/(<li>.*<\/li>\n?)+/g, (m) => '<ul>' + m + '</ul>')
-          .replace(/(<tr>.*<\/tr>\n?)+/g, (m) => '<table><thead>' + m.split('\n')[0] + '</thead><tbody>' + m.split('\n').slice(1).join('\n') + '</tbody></table>')
-          .replace(/\n\n/g, '</p><p>')
-          .replace(/---/g, '<hr>')
-          .replace(/  \n/g, '<br>');
-        output += '</body></html>';
+        // Basic markdown to HTML — process sections manually for better table handling
+        const lines = md.split('\n');
+        let html = '';
+        let inTable = false;
+        let tableRows = [];
+        let inList = false;
+
+        function flushTable() {
+          if (tableRows.length === 0) return;
+          html += '<table>';
+          for (let ti = 0; ti < tableRows.length; ti++) {
+            const tag = ti === 0 ? 'th' : 'td';
+            html += '<tr>' + tableRows[ti].map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
+          }
+          html += '</table>';
+          tableRows = [];
+          inTable = false;
+        }
+        function flushList() {
+          if (inList) { html += '</ul>'; inList = false; }
+        }
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          // Table separator row — skip
+          if (/^\|[-| ]+\|$/.test(trimmed)) continue;
+          // Table row
+          if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+            flushList();
+            inTable = true;
+            const cells = trimmed.split('|').filter(c => c.trim() !== '').map(c => c.trim()
+              .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'));
+            tableRows.push(cells);
+            continue;
+          }
+          if (inTable) flushTable();
+          // Heading
+          if (trimmed.startsWith('## ')) { flushList(); html += '<h2>' + trimmed.slice(3) + '</h2>'; continue; }
+          if (trimmed.startsWith('# ')) { flushList(); html += '<h1>' + trimmed.slice(2) + '</h1>'; continue; }
+          // List item
+          if (trimmed.startsWith('- ')) {
+            if (!inList) { html += '<ul>'; inList = true; }
+            html += '<li>' + trimmed.slice(2).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') + '</li>';
+            continue;
+          }
+          flushList();
+          // HR
+          if (trimmed === '---') { html += '<hr>'; continue; }
+          // Empty line
+          if (!trimmed) continue;
+          // Regular paragraph
+          html += '<p>' + trimmed
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/  $/, '<br>') + '</p>';
+        }
+        flushTable();
+        flushList();
+        output += html + '</body></html>';
       }
 
       // Save if path provided
@@ -1935,65 +1976,108 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
       const yaml = { name: fixedArgs.dsName || 'Design System' };
       if (fixedArgs.description) yaml.description = fixedArgs.description;
 
-      // Colors: from resolved variables
+      // Colors: from resolved variables (deduplicated by name)
       const colorVars = variables.filter(v => v.resolvedType === 'COLOR');
+      const seenColors = new Set();
+      const uniqueColorVars = [];
       if (colorVars.length > 0) {
         yaml.colors = {};
         for (const v of colorVars) {
-          // Use short name (last segment of path) as token name
+          if (seenColors.has(v.name)) continue;
+          seenColors.add(v.name);
+          uniqueColorVars.push(v);
           const shortName = v.name.split('/').pop().replace(/\s*\([^)]*\)$/, '');
           yaml.colors[shortName] = v.value || '#000000';
         }
       }
 
       // Typography: from DS text styles (if available in inventory)
+      // Also try loading from resolved variables (Typography collection)
       const textStyles = dsData?.textStyles || dsData?.styles?.filter(s => s.styleType === 'TEXT') || [];
-      if (textStyles.length > 0) {
+      const typographyVars = variables.filter(v => /font|line.?height|letter/i.test(v.name));
+      const seenStyles = new Set();
+      if (textStyles.length > 0 || typographyVars.length > 0) {
         yaml.typography = {};
         for (const s of textStyles) {
           const tName = (s.name || '').replace(/^typography\//, '').replace(/\//g, '-');
-          if (!tName) continue;
+          if (!tName || seenStyles.has(tName)) continue;
+          seenStyles.add(tName);
           const t = {};
           if (s.fontFamily) t.fontFamily = s.fontFamily;
           if (s.fontSize) t.fontSize = s.fontSize + 'px';
           if (s.fontWeight) t.fontWeight = String(s.fontWeight);
           if (s.lineHeight) t.lineHeight = s.lineHeight + 'px';
           if (s.letterSpacing) t.letterSpacing = s.letterSpacing + 'em';
-          yaml.typography[tName] = Object.keys(t).length > 0 ? t : { fontSize: '16px' };
+          // Only include if we have real data — don't fake 16px
+          if (Object.keys(t).length > 0) yaml.typography[tName] = t;
+          else yaml.typography[tName] = { style: s.key || tName };
         }
       }
 
-      // Spacing: from resolved FLOAT variables with spacing-like names
-      const spacingVars = variables.filter(v => v.resolvedType === 'FLOAT' && /spacing|gap|padding|margin/i.test(v.name));
+      // Spacing: from resolved FLOAT variables with spacing-like names (deduplicated)
+      const spacingVars = variables.filter(v => v.resolvedType === 'FLOAT' && /spacing|gap|padding|margin|container/i.test(v.name));
+      const seenSpacing = new Set();
+      const uniqueSpacingVars = [];
       if (spacingVars.length > 0) {
         yaml.spacing = {};
         for (const v of spacingVars) {
           const shortName = v.name.split('/').pop();
-          yaml.spacing[shortName] = typeof v.value === 'number' ? v.value + 'px' : v.value;
+          if (seenSpacing.has(shortName)) continue;
+          seenSpacing.add(shortName);
+          uniqueSpacingVars.push(v);
+          // Skip null/alias values — only include resolved numbers
+          if (typeof v.value === 'number') yaml.spacing[shortName] = v.value + 'px';
+          else if (typeof v.value === 'string' && !v.value.startsWith('alias:')) yaml.spacing[shortName] = v.value;
+          // If value is null/alias, include the token name anyway as a reference
+          else yaml.spacing[shortName] = 'token';
         }
       }
 
-      // Radius: from resolved FLOAT variables with radius-like names
+      // Radius: from resolved FLOAT variables with radius-like names (deduplicated)
       const radiusVars = variables.filter(v => v.resolvedType === 'FLOAT' && /radius|rounded/i.test(v.name));
+      const seenRadius = new Set();
+      const uniqueRadiusVars = [];
       if (radiusVars.length > 0) {
         yaml.rounded = {};
         for (const v of radiusVars) {
           const shortName = v.name.split('/').pop();
-          yaml.rounded[shortName] = typeof v.value === 'number' ? v.value + 'px' : v.value;
+          if (seenRadius.has(shortName)) continue;
+          seenRadius.add(shortName);
+          uniqueRadiusVars.push(v);
+          if (typeof v.value === 'number') yaml.rounded[shortName] = v.value + 'px';
+          else if (typeof v.value === 'string' && !v.value.startsWith('alias:')) yaml.rounded[shortName] = v.value;
+          else yaml.rounded[shortName] = 'token';
         }
       }
 
-      // Components: from Mimic's learned patterns + DS component inventory
+      // Components: from Mimic's learned patterns, deduplicated by component_key
       const activePatterns = knowledge.patterns.filter(p => !p.valid_until && p.component_key);
-      if (activePatterns.length > 0) {
+      const componentsByKey = new Map();
+      for (const p of activePatterns) {
+        const existing = componentsByKey.get(p.component_key);
+        if (existing) {
+          existing.totalUse += (p.use_count || 0);
+          existing.patterns.push(p.pattern_key);
+          if (p.state === 'VERIFIED') existing.verified = true;
+        } else {
+          componentsByKey.set(p.component_key, {
+            name: p.component_name || p.pattern_key,
+            totalUse: p.use_count || 0,
+            patterns: [p.pattern_key],
+            verified: p.state === 'VERIFIED',
+            source: p.source,
+          });
+        }
+      }
+      if (componentsByKey.size > 0) {
         yaml.components = {};
-        for (const p of activePatterns) {
-          const cName = (p.component_name || p.pattern_key || 'component').replace(/[^a-zA-Z0-9-]/g, '-');
-          const comp = {};
-          if (p.variant) comp.variant = p.variant;
-          if (p.use_count) comp._usage = `Used ${p.use_count} times across builds`;
-          if (p.source) comp._source = p.source;
-          yaml.components[cName] = comp;
+        for (const [, comp] of componentsByKey) {
+          const cName = comp.name.replace(/[^a-zA-Z0-9-]/g, '-');
+          yaml.components[cName] = {
+            _patterns: comp.patterns.join(', '),
+            _usage: `Used ${comp.totalUse} times across builds`,
+            _source: comp.verified ? 'verified' : comp.source,
+          };
         }
       }
 
@@ -2019,14 +2103,14 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
       // Overview
       prose += `## Overview\n\n`;
       prose += `This DESIGN.md was generated by Mimic AI from the ${fixedArgs.dsName} design system.\n`;
-      prose += `It contains ${colorVars.length} color tokens, ${textStyles.length} text styles, `;
-      prose += `${spacingVars.length} spacing tokens, and ${radiusVars.length} radius tokens.\n\n`;
+      prose += `It contains ${uniqueColorVars.length} color tokens, ${seenStyles.size || textStyles.length} text styles, `;
+      prose += `${uniqueSpacingVars.length} spacing tokens, and ${uniqueRadiusVars.length} radius tokens.\n\n`;
 
       // Colors section
-      if (colorVars.length > 0) {
+      if (uniqueColorVars.length > 0) {
         prose += `## Colors\n\n`;
         const semanticGroups = {};
-        for (const v of colorVars) {
+        for (const v of uniqueColorVars) {
           const group = v.name.split('/').slice(0, -1).join('/') || 'Other';
           if (!semanticGroups[group]) semanticGroups[group] = [];
           semanticGroups[group].push(v);
@@ -2058,14 +2142,13 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         prose += `Border radius tokens: ${radiusVars.map(v => v.name.split('/').pop()).join(', ')}.\n\n`;
       }
 
-      // Components section (from Mimic's learning)
-      if (activePatterns.length > 0) {
+      // Components section (from Mimic's learning, deduplicated)
+      if (componentsByKey.size > 0) {
         prose += `## Components\n\n`;
-        prose += `Mimic has learned ${activePatterns.length} component patterns from builds:\n\n`;
-        for (const p of activePatterns) {
-          const state = p.state === 'VERIFIED' ? 'verified' : 'candidate';
-          const usage = p.use_count ? ` (used ${p.use_count} times)` : '';
-          prose += `- **${p.component_name || p.pattern_key}**${usage} — ${state}\n`;
+        prose += `Mimic has learned ${componentsByKey.size} unique components across ${activePatterns.length} patterns:\n\n`;
+        for (const [, comp] of componentsByKey) {
+          const state = comp.verified ? 'verified' : 'candidate';
+          prose += `- **${comp.name}** (${comp.patterns.join(', ')}) — used ${comp.totalUse} times, ${state}\n`;
         }
         prose += '\n';
       }
@@ -2096,11 +2179,11 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         content: designMd,
         saved: fixedArgs.savePath || null,
         stats: {
-          colors: colorVars.length,
-          textStyles: textStyles.length,
-          spacing: spacingVars.length,
-          radius: radiusVars.length,
-          components: activePatterns.length,
+          colors: uniqueColorVars.length,
+          textStyles: seenStyles.size || textStyles.length,
+          spacing: uniqueSpacingVars.length,
+          radius: uniqueRadiusVars.length,
+          components: componentsByKey.size,
           gaps: gaps.length,
         },
       };

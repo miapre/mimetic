@@ -3000,16 +3000,20 @@ async function handleCreateChart(params) {
   };
 
   // Translate MCP 'categories' object to 'data' array for donut/pie charts.
-  // MCP schema exposes categories: { "Label": { value, color } }
-  // Plugin handler reads data: [{ label, value, color }]
+  // MCP schema exposes categories: { "Label": { value, color, colorVariable? } }
+  // MCP also exposes categoryVariables: { "Label": "DS/variable/path" } (top-level)
+  // Plugin handler reads data: [{ label, value, color, colorVariable }]
   if ((t === 'donut' || t === 'pie') && params.categories && !params.data) {
     const order = params.categoryOrder || Object.keys(params.categories);
+    const catVars = params.categoryVariables || {};
     params.data = order.map(function(k) {
+      var catData = params.categories[k] || {};
+      var colorVar = catData.colorVariable || catVars[k] || null;
       return {
         label: k,
-        value: (params.categories[k] || {}).value || 0,
-        color: (params.categories[k] || {}).color || '#888888',
-        colorVariable: (params.categories[k] || {}).colorVariable || null,
+        value: catData.value || 0,
+        color: catData.color || (colorVar ? null : '#888888'),
+        colorVariable: colorVar,
       };
     });
   }
