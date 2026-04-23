@@ -1396,6 +1396,54 @@ const TOOLS = [
     },
   },
 
+  // ── Build report generator ───────────────────────────────────────────────
+
+  {
+    name: 'mimic_generate_build_report',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Generate a build report after a Mimic build. Compiles DS compliance data, learned patterns, ' +
+      'DS gap recommendations, and build metadata into a structured report. ' +
+      'Call validate_ds_compliance first to get the complianceData, then pass it here. ' +
+      'Returns the report as markdown (default) or HTML. Optionally saves to a file.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        screenName: { type: 'string', description: 'Name of the screen that was built (e.g., "Dataflow Landing Page").' },
+        dsName: { type: 'string', description: 'Name of the design system used.' },
+        artboardNodeId: { type: 'string', description: 'Artboard node ID (for metadata).' },
+        complianceData: {
+          type: 'object',
+          description: 'Output from validate_ds_compliance: { stats, violations, summary }.',
+        },
+        sectionsBuilt: {
+          type: 'array',
+          description: 'List of section names built (e.g., ["Nav", "Hero", "Metrics"]).',
+          items: { type: 'string' },
+        },
+        dsComponents: {
+          type: 'array',
+          description: 'DS components used: [{ name, count, variant }].',
+          items: { type: 'object' },
+        },
+        primitives: {
+          type: 'array',
+          description: 'Elements built as primitives: [{ name, reason }].',
+          items: { type: 'object' },
+        },
+        format: {
+          type: 'string', enum: ['markdown', 'html'],
+          description: 'Output format. Default: markdown.',
+        },
+        savePath: {
+          type: 'string',
+          description: 'Optional file path to save the report.',
+        },
+      },
+      required: ['screenName', 'dsName'],
+    },
+  },
+
   // ── Mimic AI pipeline controller ─────────────────────────────────────────
 
   {
@@ -1714,6 +1762,148 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
             : bridgeRunning && !pluginConnected
               ? `Bridge running but Figma plugin not connected. Open the plugin in Figma. ${patternCount} patterns loaded.`
               : `Ready. ${patternCount} patterns (${verifiedCount} verified, ${recipesCount} recipes). ${gapCount} DS gaps tracked.`,
+      };
+
+    } else if (name === 'mimic_generate_build_report') {
+      // ── Build report generator ──────────────────────────────────────────
+      const knowledge = loadKnowledge();
+      const activePatterns = knowledge.patterns.filter(p => !p.valid_until);
+      const verifiedCount = activePatterns.filter(p => p.state === 'VERIFIED').length;
+      const candidateCount = activePatterns.filter(p => p.state === 'CANDIDATE').length;
+      const gaps = knowledge.explicit_rules.filter(r => r.type === 'gap' && !r.dismissed);
+      const conventions = knowledge.explicit_rules.filter(r => r.type === 'convention' && !r.dismissed);
+
+      const stats = fixedArgs.complianceData?.stats || {};
+      const sections = fixedArgs.sectionsBuilt || [];
+      const components = fixedArgs.dsComponents || [];
+      const primitives = fixedArgs.primitives || [];
+      const fmt = fixedArgs.format || 'markdown';
+
+      const totalComponents = components.reduce((sum, c) => sum + (c.count || 1), 0);
+      const now = new Date().toISOString().split('T')[0];
+
+      // ── Build markdown report ──────────────────────────────────────────
+      let md = '';
+      md += `# Build Report — ${fixedArgs.screenName}\n\n`;
+      md += `**Date:** ${now}  \n`;
+      md += `**Design system:** ${fixedArgs.dsName}  \n`;
+      if (fixedArgs.artboardNodeId) md += `**Artboard:** ${fixedArgs.artboardNodeId}  \n`;
+      md += `**Sections:** ${sections.length > 0 ? sections.join(', ') : 'Not specified'}  \n\n`;
+
+      // What was built
+      md += `## What was built\n\n`;
+      md += `${fixedArgs.screenName}: ${sections.length} sections`;
+      if (totalComponents > 0) md += `, ${totalComponents} DS component instances`;
+      md += `.\n\n`;
+
+      // DS usage
+      md += `## DS usage\n\n`;
+      if (components.length > 0) {
+        md += `**Components used:**\n`;
+        for (const c of components) md += `- ${c.name}${c.count > 1 ? ' ×' + c.count : ''}${c.variant ? ' (' + c.variant + ')' : ''}\n`;
+        md += '\n';
+      }
+      if (primitives.length > 0) {
+        md += `**Built as primitives:**\n`;
+        for (const p of primitives) md += `- ${p.name} — ${p.reason}\n`;
+        md += '\n';
+      }
+
+      // Quality
+      md += `## Quality\n\n`;
+      md += `| Metric | Value |\n|---|---|\n`;
+      md += `| Total nodes | ${stats.total || '—'} |\n`;
+      md += `| DS-compliant | ${stats.compliant || '—'} |\n`;
+      md += `| Raw fills | ${stats.rawFill || 0} |\n`;
+      md += `| Raw text styles | ${stats.rawText || 0} |\n`;
+      md += `| Raw spacing | ${stats.rawSpacing || 0} |\n`;
+      md += `| Fixed sizing | ${stats.fixedSize || 0} |\n\n`;
+
+      if (stats.total) {
+        const pct = Math.round((stats.compliant / stats.total) * 100);
+        md += `DS compliance: **${pct}%** (${stats.compliant}/${stats.total} nodes)\n\n`;
+      }
+
+      // Patterns
+      md += `## Patterns\n\n`;
+      md += `| Pattern | Component | Confidence | Source |\n|---|---|---|---|\n`;
+      for (const p of activePatterns.slice(0, 15)) {
+        const conf = p.state === 'VERIFIED' ? 'Strong' : p.use_count >= 2 ? 'Moderate' : 'New';
+        md += `| ${p.pattern_key} | ${p.component_name || '—'} | ${conf} (${p.use_count} builds) | ${p.source} |\n`;
+      }
+      if (activePatterns.length > 15) md += `| ... | ${activePatterns.length - 15} more patterns | | |\n`;
+      md += `\nCache: ${verifiedCount} verified, ${candidateCount} candidates. Next build uses ${activePatterns.length} cached patterns.\n\n`;
+
+      // DS gap recommendations
+      if (gaps.length > 0) {
+        md += `## DS gap recommendations\n\n`;
+        for (const g of gaps) {
+          md += `- **${g.rule_key}** — ${g.reason} (seen ${g.seen_count} times)\n`;
+        }
+        md += '\n';
+      }
+
+      // Conventions learned
+      if (conventions.length > 0) {
+        md += `## Conventions learned\n\n`;
+        for (const c of conventions) {
+          md += `- **${c.rule_key}** — ${c.reason}\n`;
+        }
+        md += '\n';
+      }
+
+      md += `---\n*Generated by Mimic AI v${JSON.parse(readFileSync(resolve(__dir, 'package.json'), 'utf8')).version}*\n`;
+
+      // Convert to HTML if requested
+      let output = md;
+      if (fmt === 'html') {
+        // Simple markdown → HTML conversion
+        output = '<!DOCTYPE html><html><head><meta charset="UTF-8">';
+        output += '<title>Build Report — ' + fixedArgs.screenName + '</title>';
+        output += '<style>body{font-family:Inter,-apple-system,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#1a1a1a;line-height:1.6}';
+        output += 'h1{font-size:24px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}h2{font-size:18px;margin-top:32px}';
+        output += 'table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}th{text-align:left;padding:8px 12px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-weight:600}';
+        output += 'td{padding:8px 12px;border-bottom:1px solid #f3f4f6}ul{margin:8px 0}li{margin:4px 0}strong{font-weight:600}';
+        output += 'hr{border:none;border-top:1px solid #e5e7eb;margin:32px 0}em{color:#6b7280}</style></head><body>';
+        // Basic markdown to HTML
+        output += md
+          .replace(/^# (.*?)$/gm, '<h1>$1</h1>')
+          .replace(/^## (.*?)$/gm, '<h2>$1</h2>')
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*(.*?)\*/g, '<em>$1</em>')
+          .replace(/^\| (.*?) \|$/gm, (match) => {
+            const cells = match.split('|').filter(c => c.trim()).map(c => c.trim());
+            return '<tr>' + cells.map(c => '<td>' + c + '</td>').join('') + '</tr>';
+          })
+          .replace(/^\|[-|]+\|$/gm, '')
+          .replace(/^- (.*?)$/gm, '<li>$1</li>')
+          .replace(/(<li>.*<\/li>\n?)+/g, (m) => '<ul>' + m + '</ul>')
+          .replace(/(<tr>.*<\/tr>\n?)+/g, (m) => '<table><thead>' + m.split('\n')[0] + '</thead><tbody>' + m.split('\n').slice(1).join('\n') + '</tbody></table>')
+          .replace(/\n\n/g, '</p><p>')
+          .replace(/---/g, '<hr>')
+          .replace(/  \n/g, '<br>');
+        output += '</body></html>';
+      }
+
+      // Save if path provided
+      if (fixedArgs.savePath) {
+        const { writeFileSync, mkdirSync } = await import('fs');
+        const { dirname } = await import('path');
+        mkdirSync(dirname(fixedArgs.savePath), { recursive: true });
+        writeFileSync(fixedArgs.savePath, output, 'utf8');
+      }
+
+      result = {
+        report: output,
+        saved: fixedArgs.savePath || null,
+        summary: {
+          sections: sections.length,
+          dsComponents: totalComponents,
+          primitives: primitives.length,
+          compliance: stats.total ? Math.round((stats.compliant / stats.total) * 100) + '%' : '—',
+          patterns: activePatterns.length,
+          gaps: gaps.length,
+        },
       };
 
     } else if (name === 'mimic_generate_design_md') {
