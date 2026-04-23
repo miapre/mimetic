@@ -489,28 +489,23 @@ The HTML's container constraints (`max-width`, `padding`, `gap`, `margin: 0 auto
    - If the DS has width variables (e.g., `container-max = 960`), bind them
    - If the DS has no spacing variables, use raw values in permissive mode — document in report as a DS gap
 
-3. **Apply as auto-layout properties — match the HTML's layout model:**
+3. **Apply as auto-layout — FILL width, HUG height, max-width from HTML:**
 
-   **All frames HUG height.** Height is always determined by content — never FILL or FIXED on content frames (Rule 5). The width rules below determine horizontal sizing only.
+   **Width is FILL by default.** Every frame fills its parent's width. No exceptions for containers.
 
-   **Section frames:** FILL width. Padding from step 1, bound to DS spacing variables where available.
+   **Height is always HUG.** Content determines height — never FILL or FIXED on content frames (Rule 5).
 
-   **Multi-column containers** (cards row, charts row, footer links) — HTML uses `display: flex`:
-   - Container: **FILL width**, gap bound to DS spacing variable
-   - Children distribute within the available width: some FILL (bar chart stretches), some use explicit widths from the HTML (cards at `flex: 1` within a `max-width` parent)
-   - If the HTML constrains the container via `max-width + margin: 0 auto`, the container uses **HUG width** and the **parent section** centers it via `counterAxisAlignItems: CENTER`
+   **When the HTML has `max-width`:** Apply it as Figma's `maxWidth` property on the frame. The frame still uses FILL width but stops growing at the max-width value. The parent frame uses `counterAxisAlignItems: CENTER` to center the constrained frame. This maps 1:1 to CSS `max-width + margin: 0 auto`.
 
-   **Single-element containers** (table wrapper, hero subtitle) — HTML uses `max-width + margin: auto`:
-   - The element has its width from the HTML (e.g., 900px table, 540px subtitle text)
-   - The parent section centers it via `counterAxisAlignItems: CENTER`
-   - No wrapper frame needed — the element sits directly in the section
+   If the DS has width/container variables, bind the maxWidth to the closest DS variable. If not, use the raw value from the HTML.
 
-   **Text nodes with wrapping:** explicit width (e.g., 540px for hero subtitle) is acceptable — text wrapping requires a width constraint. This is not a fixed-frame violation.
+   **Element sizing** (buttons, cards, inputs, etc.) follows the HTML context — no fixed rules. If the HTML says `flex: 1`, the element FILLs. If the HTML gives it a fixed width, use that width. Read the CSS, don't assume.
 
-   **The key distinction — read the HTML's CSS:**
-   - `display: flex` with no `max-width` → container FILL width, children distribute
-   - `display: flex` with `max-width + margin: auto` → container HUG width (capped), parent centers
-   - `max-width + margin: auto` on a single element → element width constrained, parent centers
+   **Text nodes with wrapping:** explicit width for wrapping is acceptable (hero subtitle at 540px). Also map to DS spacing variable if available.
+
+   **Gaps and padding:** Always bound to DS spacing variables when available. Values come from the HTML's CSS.
+
+   **No side-padding hacks.** Never add extra padding to simulate max-width. Max-width is the constraint mechanism. Every `max-width + margin: auto` in the HTML becomes `FILL + maxWidth + parent CENTER` in Figma.
 
 **Example — cards section:**
 ```css
@@ -518,9 +513,9 @@ The HTML's container constraints (`max-width`, `padding`, `gap`, `margin: 0 auto
 .card { flex: 1; padding: 24px; }
 ```
 Becomes:
-- Features section: FILL horizontal, HUG vertical, padding 96/48 (bound to DS spacing), `counterAxisAlignItems: CENTER`
-- Cards container: HORIZONTAL, **HUG horizontal** (respects 960px max-width), gap 24 (bound to DS spacing)
-- Each card: VERTICAL, width ~304px, padding 24, radius bound to DS radius variable
+- Features section: FILL width, padding 96/48 (DS spacing), `counterAxisAlignItems: CENTER`
+- Cards container: FILL width, **maxWidth: 960** (DS width var if available), gap 24 (DS spacing)
+- Each card: FILL width (flex: 1 → cards share space equally), padding 24, radius from DS
 
 **Example — charts section:**
 ```css
@@ -529,14 +524,22 @@ Becomes:
 .chart-card.small { flex: 1; }
 ```
 Becomes:
-- Charts section: HORIZONTAL, **FILL horizontal**, gap 24 (bound to DS spacing), padding 0/48/80/48
-- Bar chart card: **FILL horizontal** (flex: 2 → takes remaining space)
-- Donut chart card: **HUG horizontal** (flex: 1 → hugs its content, bar takes the rest)
+- Charts section: FILL width, gap 24 (DS spacing), padding 0/48/80/48
+- Bar chart card: FILL width (flex: 2)
+- Donut chart card: FILL width (flex: 1) — Figma's `layoutGrow` distributes space proportionally
+
+**Example — table section:**
+```css
+.table-wrap { max-width: 900px; margin: 0 auto; }
+```
+Becomes:
+- Table section: FILL width, `counterAxisAlignItems: CENTER`
+- Table wrapper: FILL width, **maxWidth: 900** — fills up to 900px then stops, centered by parent
 
 **What this rule prevents:**
-- Content stretching to full 1344px when the HTML constrains it to 960px or 900px
-- Artboards wider than 1440px (caused by unconstrained children)
-- Multi-column containers collapsing when they should fill available space
-- Gap values not bound to DS spacing variables
+- Content stretching beyond its HTML intent
+- Artboards wider than 1440px
+- Side-padding hacks to simulate max-width
+- Gap/padding values not bound to DS spacing variables
 
 This rule is owned by the **Build Engineer** (execution) and **Design QA** (verification against HTML).

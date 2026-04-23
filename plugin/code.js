@@ -616,6 +616,11 @@ async function handleCreateFrame(params) {
   }
   // When layoutAlign is omitted: frame inherits parent's counterAxisAlignItems (Figma default)
 
+  // Max/min width constraints (Rule 46 — HTML container fidelity)
+  // FILL + maxWidth = CSS max-width behavior. Parent centers via counterAxisAlignItems.
+  if (params.maxWidth !== undefined && 'maxWidth' in frame) frame.maxWidth = Number(params.maxWidth);
+  if (params.minWidth !== undefined && 'minWidth' in frame) frame.minWidth = Number(params.minWidth);
+
   if (params.x !== undefined) frame.x = params.x;
   if (params.y !== undefined) frame.y = params.y;
 
@@ -975,13 +980,16 @@ async function handleSetLayoutSizing(params) {
   if (params.paddingBottom !== undefined) await applySpacing(node, 'paddingBottom', params.paddingBottom);
   if (params.paddingLeft   !== undefined) await applySpacing(node, 'paddingLeft',   params.paddingLeft);
   if (params.paddingRight  !== undefined) await applySpacing(node, 'paddingRight',  params.paddingRight);
+  // Max/min width constraints (Rule 46 — HTML container fidelity)
+  if (params.maxWidth !== undefined && 'maxWidth' in node) node.maxWidth = Number(params.maxWidth);
+  if (params.minWidth !== undefined && 'minWidth' in node) node.minWidth = Number(params.minWidth);
   // Explicit resize (width and/or height)
   if (params.width !== undefined || params.height !== undefined) {
     const w = params.width  !== undefined ? params.width  : node.width;
     const h = params.height !== undefined ? params.height : node.height;
     node.resize(w, h);
   }
-  return { ok: true, width: node.width, height: node.height, warning: layoutWarning || undefined };
+  return { ok: true, width: node.width, height: node.height, maxWidth: node.maxWidth || null, warning: layoutWarning || undefined };
 }
 
 function handleResizeNode(params) {
