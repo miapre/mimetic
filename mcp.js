@@ -1364,6 +1364,38 @@ const TOOLS = [
     },
   },
 
+  // ── DESIGN.md generator ──────────────────────────────────────────────────
+
+  {
+    name: 'mimic_generate_design_md',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Generate a DESIGN.md file from the current DS knowledge. ' +
+      'Compiles DS variables, text styles, components, and Mimic\'s learned usage patterns ' +
+      'into the open DESIGN.md format (compatible with Google Stitch, generative UI tools, and AI coding agents). ' +
+      'The YAML frontmatter contains machine-readable tokens (colors, typography, spacing, radius, components). ' +
+      'The markdown prose sections contain human-readable usage guidelines generated from build patterns. ' +
+      'Optionally saves to a file path. Returns the full DESIGN.md content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dsName: {
+          type: 'string',
+          description: 'Name for the design system (used in the DESIGN.md header).',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional one-line description of the design system.',
+        },
+        savePath: {
+          type: 'string',
+          description: 'Optional file path to save the DESIGN.md. If omitted, content is returned but not saved.',
+        },
+      },
+      required: ['dsName'],
+    },
+  },
+
   // ── Mimic AI pipeline controller ─────────────────────────────────────────
 
   {
@@ -1682,6 +1714,205 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
             : bridgeRunning && !pluginConnected
               ? `Bridge running but Figma plugin not connected. Open the plugin in Figma. ${patternCount} patterns loaded.`
               : `Ready. ${patternCount} patterns (${verifiedCount} verified, ${recipesCount} recipes). ${gapCount} DS gaps tracked.`,
+      };
+
+    } else if (name === 'mimic_generate_design_md') {
+      // ── DESIGN.md generator ──────────────────────────────────────────────
+      // Compiles DS knowledge into the open DESIGN.md format (Google Stitch compatible).
+      const dsKnowledgePath = resolve(__dir, 'internal', 'ds-knowledge', 'ds-knowledge-normalized.json');
+      const knowledge = loadKnowledge();
+
+      // Load DS inventory
+      let dsData = null;
+      if (existsSync(dsKnowledgePath)) {
+        try { dsData = JSON.parse(readFileSync(dsKnowledgePath, 'utf8')); } catch (_) {}
+      }
+
+      // Resolve variable values via bridge (if running)
+      let variables = [];
+      try {
+        const vr = await fetch(`${BRIDGE_URL}/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'read_variable_values', params: {} }),
+          signal: AbortSignal.timeout(10000),
+        });
+        const vd = await vr.json();
+        if (vd.ok && vd.result) variables = vd.result.variables || [];
+      } catch (_) { /* bridge not running — use DS inventory only */ }
+
+      // Build YAML frontmatter
+      const yaml = { name: fixedArgs.dsName || 'Design System' };
+      if (fixedArgs.description) yaml.description = fixedArgs.description;
+
+      // Colors: from resolved variables
+      const colorVars = variables.filter(v => v.resolvedType === 'COLOR');
+      if (colorVars.length > 0) {
+        yaml.colors = {};
+        for (const v of colorVars) {
+          // Use short name (last segment of path) as token name
+          const shortName = v.name.split('/').pop().replace(/\s*\([^)]*\)$/, '');
+          yaml.colors[shortName] = v.value || '#000000';
+        }
+      }
+
+      // Typography: from DS text styles (if available in inventory)
+      const textStyles = dsData?.textStyles || dsData?.styles?.filter(s => s.styleType === 'TEXT') || [];
+      if (textStyles.length > 0) {
+        yaml.typography = {};
+        for (const s of textStyles) {
+          const tName = (s.name || '').replace(/^typography\//, '').replace(/\//g, '-');
+          if (!tName) continue;
+          const t = {};
+          if (s.fontFamily) t.fontFamily = s.fontFamily;
+          if (s.fontSize) t.fontSize = s.fontSize + 'px';
+          if (s.fontWeight) t.fontWeight = String(s.fontWeight);
+          if (s.lineHeight) t.lineHeight = s.lineHeight + 'px';
+          if (s.letterSpacing) t.letterSpacing = s.letterSpacing + 'em';
+          yaml.typography[tName] = Object.keys(t).length > 0 ? t : { fontSize: '16px' };
+        }
+      }
+
+      // Spacing: from resolved FLOAT variables with spacing-like names
+      const spacingVars = variables.filter(v => v.resolvedType === 'FLOAT' && /spacing|gap|padding|margin/i.test(v.name));
+      if (spacingVars.length > 0) {
+        yaml.spacing = {};
+        for (const v of spacingVars) {
+          const shortName = v.name.split('/').pop();
+          yaml.spacing[shortName] = typeof v.value === 'number' ? v.value + 'px' : v.value;
+        }
+      }
+
+      // Radius: from resolved FLOAT variables with radius-like names
+      const radiusVars = variables.filter(v => v.resolvedType === 'FLOAT' && /radius|rounded/i.test(v.name));
+      if (radiusVars.length > 0) {
+        yaml.rounded = {};
+        for (const v of radiusVars) {
+          const shortName = v.name.split('/').pop();
+          yaml.rounded[shortName] = typeof v.value === 'number' ? v.value + 'px' : v.value;
+        }
+      }
+
+      // Components: from Mimic's learned patterns + DS component inventory
+      const activePatterns = knowledge.patterns.filter(p => !p.valid_until && p.component_key);
+      if (activePatterns.length > 0) {
+        yaml.components = {};
+        for (const p of activePatterns) {
+          const cName = (p.component_name || p.pattern_key || 'component').replace(/[^a-zA-Z0-9-]/g, '-');
+          const comp = {};
+          if (p.variant) comp.variant = p.variant;
+          if (p.use_count) comp._usage = `Used ${p.use_count} times across builds`;
+          if (p.source) comp._source = p.source;
+          yaml.components[cName] = comp;
+        }
+      }
+
+      // Serialize YAML (simple serializer — no dependency needed)
+      function toYaml(obj, indent = 0) {
+        const pad = '  '.repeat(indent);
+        let out = '';
+        for (const [k, v] of Object.entries(obj)) {
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            out += `${pad}${k}:\n${toYaml(v, indent + 1)}`;
+          } else {
+            const val = typeof v === 'string' && (v.includes(':') || v.includes('#') || v.includes('{'))
+              ? `"${v}"` : v;
+            out += `${pad}${k}: ${val}\n`;
+          }
+        }
+        return out;
+      }
+
+      // Build markdown prose from knowledge patterns
+      let prose = '';
+
+      // Overview
+      prose += `## Overview\n\n`;
+      prose += `This DESIGN.md was generated by Mimic AI from the ${fixedArgs.dsName} design system.\n`;
+      prose += `It contains ${colorVars.length} color tokens, ${textStyles.length} text styles, `;
+      prose += `${spacingVars.length} spacing tokens, and ${radiusVars.length} radius tokens.\n\n`;
+
+      // Colors section
+      if (colorVars.length > 0) {
+        prose += `## Colors\n\n`;
+        const semanticGroups = {};
+        for (const v of colorVars) {
+          const group = v.name.split('/').slice(0, -1).join('/') || 'Other';
+          if (!semanticGroups[group]) semanticGroups[group] = [];
+          semanticGroups[group].push(v);
+        }
+        for (const [group, vars] of Object.entries(semanticGroups)) {
+          prose += `**${group}:** ${vars.map(v => v.name.split('/').pop()).join(', ')}\n\n`;
+        }
+      }
+
+      // Typography section
+      if (textStyles.length > 0) {
+        prose += `## Typography\n\n`;
+        prose += `The design system provides ${textStyles.length} text styles. `;
+        const fonts = [...new Set(textStyles.map(s => s.fontFamily).filter(Boolean))];
+        if (fonts.length > 0) prose += `Font families: ${fonts.join(', ')}.\n\n`;
+        else prose += '\n';
+      }
+
+      // Layout section
+      if (spacingVars.length > 0) {
+        prose += `## Layout & Spacing\n\n`;
+        prose += `Spacing follows a defined scale with ${spacingVars.length} tokens. `;
+        prose += `Use these tokens for padding, margins, and gaps to maintain consistency.\n\n`;
+      }
+
+      // Shapes section
+      if (radiusVars.length > 0) {
+        prose += `## Shapes\n\n`;
+        prose += `Border radius tokens: ${radiusVars.map(v => v.name.split('/').pop()).join(', ')}.\n\n`;
+      }
+
+      // Components section (from Mimic's learning)
+      if (activePatterns.length > 0) {
+        prose += `## Components\n\n`;
+        prose += `Mimic has learned ${activePatterns.length} component patterns from builds:\n\n`;
+        for (const p of activePatterns) {
+          const state = p.state === 'VERIFIED' ? 'verified' : 'candidate';
+          const usage = p.use_count ? ` (used ${p.use_count} times)` : '';
+          prose += `- **${p.component_name || p.pattern_key}**${usage} — ${state}\n`;
+        }
+        prose += '\n';
+      }
+
+      // DS gaps section
+      const gaps = Object.values(knowledge.gaps || {}).filter(g => !g.resolved);
+      if (gaps.length > 0) {
+        prose += `## Do's and Don'ts\n\n`;
+        prose += `### Gaps identified by Mimic\n\n`;
+        for (const g of gaps) {
+          prose += `- ${g.description || g.gap_key}: seen ${g.seen_count || 0} times across builds\n`;
+        }
+        prose += '\n';
+      }
+
+      // Assemble final DESIGN.md
+      const designMd = `---\n${toYaml(yaml)}---\n\n${prose}`;
+
+      // Save if path provided
+      if (fixedArgs.savePath) {
+        const { writeFileSync, mkdirSync } = await import('fs');
+        const { dirname } = await import('path');
+        mkdirSync(dirname(fixedArgs.savePath), { recursive: true });
+        writeFileSync(fixedArgs.savePath, designMd, 'utf8');
+      }
+
+      result = {
+        content: designMd,
+        saved: fixedArgs.savePath || null,
+        stats: {
+          colors: colorVars.length,
+          textStyles: textStyles.length,
+          spacing: spacingVars.length,
+          radius: radiusVars.length,
+          components: activePatterns.length,
+          gaps: gaps.length,
+        },
       };
 
     } else if (name === 'mimic_pipeline_resolve') {
