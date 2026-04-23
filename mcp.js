@@ -1599,7 +1599,7 @@ const TOOLS = [
               component_key:        { type: 'string',  description: 'Figma component key hash for the mapped DS component.' },
               component_name:       { type: 'string',  description: 'Human-readable component name.' },
               library_key:          { type: 'string',  description: 'Library key from Figma search. Tracks which DS library this component belongs to.' },
-              library_name:         { type: 'string',  description: 'Human-readable library name (e.g., "LayerLens Theme").' },
+              library_name:         { type: 'string',  description: 'Human-readable library name (e.g., "My Team Library").' },
               state:                { type: 'string',  enum: ['CANDIDATE', 'VERIFIED', 'REJECTED', 'EXPIRED'], description: 'Explicit state override. Omit to let promotion logic handle CANDIDATE→VERIFIED automatically.' },
               increment_use:        { type: 'boolean', description: 'Set true to increment use_count by 1 for an existing entry.' },
               increment_correction: { type: 'boolean', description: 'Set true when the user corrected this mapping. Increments correction_count and demotes VERIFIED→CANDIDATE. Also write a rule_update with reset_seen_count=true for any associated rule.' },

@@ -243,17 +243,19 @@ Your AI assistant talks to Mimic. Mimic talks to Figma. Everything happens local
 </details>
 
 <details>
-<summary><strong>35 tools available</strong></summary>
+<summary><strong>45 tools available</strong></summary>
 
 **Status & learning:** `mimic_status`, `mimic_discover_ds`, `mimic_ai_knowledge_read`, `mimic_ai_knowledge_write`
 
-**DS setup:** `figma_preload_styles`, `figma_preload_variables`, `figma_set_session_defaults`, `figma_list_text_styles`, `figma_read_variable_values`
+**DS setup:** `figma_preload_styles`, `figma_preload_variables`, `figma_discover_library_styles`, `figma_discover_library_variables`, `figma_set_session_defaults`, `figma_list_text_styles`, `figma_read_variable_values`
 
-**Build:** `figma_create_frame`, `figma_create_text`, `figma_create_rectangle`, `figma_create_chart`, `figma_insert_component`, `figma_batch`
+**Build:** `figma_create_frame`, `figma_create_text`, `figma_create_rectangle`, `figma_create_ellipse`, `figma_create_chart`, `figma_insert_component`, `figma_batch`
 
-**Edit:** `figma_set_component_text`, `figma_set_text`, `figma_set_node_fill`, `figma_set_layout_sizing`, `figma_set_variant`, `figma_set_visibility`, `figma_swap_main_component`, `figma_replace_component`, `figma_move_node`, `figma_delete_node`
+**Edit:** `figma_set_component_text`, `figma_set_text`, `figma_set_node_fill`, `figma_set_layout_sizing`, `figma_set_variant`, `figma_set_visibility`, `figma_swap_main_component`, `figma_replace_component`, `figma_restyle_artboard`, `figma_move_node`, `figma_delete_node`
 
-**Inspect & QA:** `figma_get_node_props`, `figma_get_node_children`, `figma_get_node_parent`, `figma_get_text_info`, `figma_get_component_variants`, `figma_get_selection`, `figma_select_node`, `figma_get_page_nodes`, `figma_get_pages`, `figma_change_page`, `figma_validate_ds_compliance`
+**Inspect & QA:** `figma_get_node_props`, `figma_get_node_children`, `figma_get_node_parent`, `figma_get_text_info`, `figma_get_component_variants`, `figma_get_selection`, `figma_select_node`, `figma_get_page_nodes`, `figma_get_pages`, `figma_change_page`, `figma_validate_ds_compliance`, `figma_tag_raw_exception`
+
+**Rendering:** `mimic_pipeline_resolve`, `mimic_render_url`, `mimic_generate_build_report`, `mimic_generate_design_md`
 
 </details>
 

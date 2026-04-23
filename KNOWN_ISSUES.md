@@ -1,6 +1,6 @@
 # Known Issues & Compatibility
 
-Last updated: 2026-04-22
+Last updated: 2026-04-23
 
 ## Compatibility Matrix
 
@@ -31,7 +31,10 @@ Chart data geometry (donut arcs, scatter dots, line paths) uses pixel calculatio
 - Frames with `direction=NONE` inside auto-layout parents may stretch unexpectedly. Mimic now defaults these to `INHERIT` alignment.
 
 ### Configuration recipes
-Component configuration recipes (remembering HOW to configure a component, not just which one to use) are being rolled out. Early builds record recipes; future builds will replay them to skip component inspection and reduce build time.
+Component configuration recipes — remembering HOW to configure a component, not just which one to use — are active since v1.2.0. Mimic records recipes after successful builds and replays them in future builds to skip component inspection. Recipes are invalidated when the DS changes (component removed, variant renamed).
+
+### npx mode and FIGMA_ACCESS_TOKEN
+Running Mimic via `npx -y @miapre/mimic-ai` does not configure the `FIGMA_ACCESS_TOKEN` environment variable. Without it, community library variable discovery and some REST API features won't work. Use the full installer (`install.sh`) or set the token manually in your shell environment.
 
 ## Reporting Issues
 
