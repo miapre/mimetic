@@ -2390,6 +2390,22 @@ async function handleDonutChart(params) {
   if (params.x !== undefined) outer.x = params.x;
   if (params.y !== undefined) outer.y = params.y;
 
+  // For bottom legend: outer uses VERTICAL auto-layout with donut geometry in a sub-frame
+  var geoFrame = outer; // default: vectors go directly on outer
+  if (legendPos === 'bottom' && !noLegend) {
+    outer.layoutMode = 'VERTICAL';
+    outer.counterAxisAlignItems = 'CENTER';
+    outer.primaryAxisAlignItems = 'MIN';
+    outer.itemSpacing = 0;
+    outer.layoutSizingVertical = 'HUG';
+    // Geometry sub-frame for donut arcs (NONE layout — absolute positioning for vectors)
+    geoFrame = figma.createFrame();
+    geoFrame.name = 'donut-geometry';
+    geoFrame.resize(size + PAD * 2, size + PAD * 2);
+    geoFrame.fills = [];
+    outer.appendChild(geoFrame);
+  }
+
   const cx = (noLegend ? 0 : PAD) + size / 2;
   const cy = (noLegend ? 0 : PAD) + size / 2;
   const R  = size / 2;
@@ -2425,7 +2441,7 @@ async function handleDonutChart(params) {
     await applyFill(slice, seg.colorVariable || null, seg.color || '#888888');
     slice.strokes = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
     slice.strokeWeight = 2;
-    outer.appendChild(slice);
+    geoFrame.appendChild(slice);
 
     startAngle = endAngle;
   }
@@ -2438,7 +2454,7 @@ async function handleDonutChart(params) {
     ct.characters = centerLabel;
     await applyTextStyle(ct, centerStyleId);
     await applyFill(ct, centerColorVar, '#212121');
-    outer.appendChild(ct);
+    geoFrame.appendChild(ct);
     ct.x = cx - ct.width / 2;
     ct.y = cy - ct.height / 2 - (centerSub ? 10 : 0);
 
@@ -2449,42 +2465,99 @@ async function handleDonutChart(params) {
       cs.characters = centerSub;
       await applyTextStyle(cs, centerSubStyleId);
       await applyFill(cs, centerSubColorVar, '#757575');
-      outer.appendChild(cs);
+      geoFrame.appendChild(cs);
       cs.x = cx - cs.width / 2;
       cs.y = cy + 6;
     }
   }
 
-  // Legend
+  // Legend — auto-layout frame. Bottom: VERTICAL stack, each item SPACE_BETWEEN.
+  // Right: VERTICAL stack beside donut (absolute positioned).
   if (!noLegend) {
-  var ly, lx;
-  if (legendPos === 'bottom') {
-    lx = PAD;
-    ly = PAD + size + PAD;
-  } else {
-    lx = PAD + size + PAD;
-    ly = PAD;
-  }
-  for (const seg of data) {
-    const pct = Math.round((seg.value / total) * 100);
+    if (legendPos === 'bottom') {
+      // Auto-layout legend below the donut geometry
+      const legendFrame = figma.createFrame();
+      legendFrame.name = 'legend';
+      legendFrame.layoutMode = 'VERTICAL';
+      legendFrame.itemSpacing = 8;
+      legendFrame.fills = [];
+      legendFrame.paddingTop = PAD;
+      outer.appendChild(legendFrame);
+      legendFrame.layoutSizingHorizontal = 'FILL';
+      legendFrame.layoutSizingVertical   = 'HUG';
 
-    const dot = figma.createEllipse();
-    dot.resize(8, 8);
-    await applyFill(dot, seg.colorVariable || null, seg.color || '#888888');
-    dot.strokes = [];
-    dot.x = lx; dot.y = ly + 1;
-    outer.appendChild(dot);
+      for (const seg of data) {
+        const pct = Math.round((seg.value / total) * 100);
 
-    const lbl = figma.createText();
-    lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
-    lbl.fontSize  = 12;
-    lbl.characters = (seg.label || '') + '  ' + pct + '%';
-    await applyTextStyle(lbl, params.legendTextStyleId || null);
-    await applyFill(lbl, null, '#212121');
-    outer.appendChild(lbl);
-    lbl.x = lx + 12; lbl.y = ly;
-    ly += 22;
-  }
+        // Each legend item: HORIZONTAL, SPACE_BETWEEN (label left, value right)
+        const item = figma.createFrame();
+        item.name = seg.label || 'item';
+        item.layoutMode = 'HORIZONTAL';
+        item.primaryAxisAlignItems = 'SPACE_BETWEEN';
+        item.counterAxisAlignItems = 'CENTER';
+        item.fills = [];
+        legendFrame.appendChild(item);
+        item.layoutSizingHorizontal = 'FILL';
+        item.layoutSizingVertical   = 'HUG';
+
+        // Left side: dot + label
+        const leftGroup = figma.createFrame();
+        leftGroup.name = 'label';
+        leftGroup.layoutMode = 'HORIZONTAL';
+        leftGroup.counterAxisAlignItems = 'CENTER';
+        leftGroup.itemSpacing = 8;
+        leftGroup.fills = [];
+        item.appendChild(leftGroup);
+        leftGroup.layoutSizingHorizontal = 'HUG';
+        leftGroup.layoutSizingVertical   = 'HUG';
+
+        const dot = figma.createEllipse();
+        dot.resize(8, 8);
+        await applyFill(dot, seg.colorVariable || null, seg.color || '#888888');
+        dot.strokes = [];
+        leftGroup.appendChild(dot);
+
+        const lbl = figma.createText();
+        lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+        lbl.fontSize  = 12;
+        lbl.characters = seg.label || '';
+        await applyTextStyle(lbl, params.legendTextStyleId || null);
+        await applyFill(lbl, params.labelFillVariable || null, '#212121');
+        leftGroup.appendChild(lbl);
+
+        // Right side: percentage
+        const valTxt = figma.createText();
+        valTxt.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+        valTxt.fontSize  = 12;
+        valTxt.characters = pct + '%';
+        await applyTextStyle(valTxt, params.legendTextStyleId || null);
+        await applyFill(valTxt, params.labelFillVariable || null, '#212121');
+        item.appendChild(valTxt);
+      }
+    } else {
+      // Right legend: absolute positioned beside donut (existing behavior)
+      var lx = PAD + size + PAD;
+      var ly = PAD;
+      for (const seg of data) {
+        const pct = Math.round((seg.value / total) * 100);
+        const dot = figma.createEllipse();
+        dot.resize(8, 8);
+        await applyFill(dot, seg.colorVariable || null, seg.color || '#888888');
+        dot.strokes = [];
+        dot.x = lx; dot.y = ly + 1;
+        outer.appendChild(dot);
+
+        const lbl = figma.createText();
+        lbl.fontName  = { family: sessionDefaults.fontFamily || 'Inter', style: 'Regular' };
+        lbl.fontSize  = 12;
+        lbl.characters = (seg.label || '') + '  ' + pct + '%';
+        await applyTextStyle(lbl, params.legendTextStyleId || null);
+        await applyFill(lbl, null, '#212121');
+        outer.appendChild(lbl);
+        lbl.x = lx + 12; lbl.y = ly;
+        ly += 22;
+      }
+    }
   } // end !noLegend
 
   return { nodeId: outer.id, name: outer.name };
@@ -2625,45 +2698,20 @@ async function handleBarChart(params) {
     yLabelWrap.layoutSizingHorizontal = 'FILL';
   }
 
-  // ── Plot area (absolute positioning for grid + y-labels; contains AL bar row)
-  const plotArea = figma.createFrame();
-  plotArea.name = 'plot-area';
-  plotArea.resize(w - PAD_R, plotH);
-  plotArea.fills = [];
-  plotArea.clipsContent = true;
-  plotArea.layoutSizingVertical   = 'FIXED';
-  outer.appendChild(plotArea);
-  plotArea.layoutSizingHorizontal = 'FILL';
-
-  // Horizontal grid lines at y-ticks (absolute within plot area)
-  for (const tick of yTicks) {
-    const yPos = plotH - (tick - yDomain[0]) / yRange * plotH;
-    await gridLine(plotArea, PAD_L, yPos, plotW, 1);
-  }
-  // Baseline + y-axis line
-  await gridLine(plotArea, PAD_L, plotH, plotW, 1);
-  await gridLine(plotArea, PAD_L, 0, 1, plotH);
-
-  // Y-axis tick labels (absolute within plot area)
-  for (const tick of yTicks) {
-    const yPos = plotH - (tick - yDomain[0]) / yRange * plotH;
-    await chartLabel(plotArea, String(tick) + yTickSfx, PAD_L - 4, yPos - 8, 11, null, 'right');
-  }
-
-  // ── Bar row: HORIZONTAL auto-layout, bottom-aligned ───────────────────────
+  // ── Bar row: HORIZONTAL auto-layout, bottom-aligned, FILL both axes ────────
+  // No plot-area wrapper — bar-row is a direct auto-layout child of outer.
+  // This mirrors CSS: .bar-chart { display: flex; align-items: flex-end; gap: 6px; }
   const barRow = figma.createFrame();
   barRow.name = 'bar-row';
   barRow.layoutMode = 'HORIZONTAL';
-  barRow.counterAxisAlignItems = 'MAX';   // bottom-align bars
+  barRow.counterAxisAlignItems = 'MAX';   // bottom-align bars (CSS align-items: flex-end)
   barRow.primaryAxisAlignItems = 'MIN';
   barRow.itemSpacing = BAR_GAP;
   barRow.fills = [];
-  barRow.resize(plotW, plotH);
-  barRow.x = PAD_L;
-  barRow.y = 0;
-  barRow.layoutSizingHorizontal = 'FIXED';
-  barRow.layoutSizingVertical   = 'FIXED';
-  plotArea.appendChild(barRow);
+  barRow.clipsContent = true;
+  outer.appendChild(barRow);
+  barRow.layoutSizingHorizontal = 'FILL';
+  barRow.layoutSizingVertical   = 'FILL';  // takes remaining vertical space
 
   // Build bars — each bar column gets layoutGrow: 1
   var barCatVars = params.categoryVariables || {};
@@ -2738,25 +2786,8 @@ async function handleBarChart(params) {
     }
   }
 
-  // Annotation lines (absolute within plot area)
-  for (const ann of annotations) {
-    if (ann.type !== 'vline') continue;
-    const bi    = ann.barIndex !== undefined ? ann.barIndex : 0;
-    const barGroupW = nBars > 0 ? plotW / nBars : plotW;
-    const ax    = PAD_L + bi * barGroupW;
-    const color = hexToRgb(ann.color || '#757575');
-    const line  = figma.createRectangle();
-    line.name   = 'annotation-' + (ann.label || 'line');
-    line.resize(1, plotH);
-    line.x = ax;
-    line.y = 0;
-    line.fills   = [{ type: 'SOLID', color, opacity: 0.8 }];
-    line.strokes = [];
-    plotArea.appendChild(line);
-    if (ann.label) {
-      await chartLabel(plotArea, ann.label, ax + 3, 4, 10, color, 'left');
-    }
-  }
+  // Annotation lines — skipped when plot-area is auto-layout (bars fill correctly).
+  // TODO: re-enable annotations as overlay frame when needed.
 
   // ── Labels row: HORIZONTAL, SPACE_BETWEEN ─────────────────────────────────
   if (nBars > 0) {
@@ -2766,7 +2797,7 @@ async function handleBarChart(params) {
     labelsRow.primaryAxisAlignItems = 'SPACE_BETWEEN';
     labelsRow.counterAxisAlignItems = 'MIN';
     labelsRow.fills = [];
-    labelsRow.paddingLeft  = PAD_L;
+    labelsRow.paddingLeft  = 0;
     labelsRow.paddingRight = 0;
     labelsRow.layoutSizingVertical   = 'HUG';
     // Append to outer BEFORE setting FILL
