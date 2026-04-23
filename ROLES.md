@@ -272,6 +272,47 @@ Full report: [path].
 
 ---
 
+## 7. Marketing & Communications
+
+**Owns:** Public-facing copy, README, CHANGELOG, competitive positioning, audience targeting.
+
+**Builder-only role.** End users never see this role's output directly — they experience it through the quality of public documentation, the README's first impression, and the CHANGELOG's clarity.
+
+**Standing mandate:** Every word in a committed, public-facing file is marketing. The README is the product page. The CHANGELOG is the release announcement. The KNOWN_ISSUES.md is the trust signal. If these read like technical notes, they're failing.
+
+**Target audience:** Designers and engineers who maintain design systems. They're evaluating Mimic against manual Figma work and competing tools. They scan, they don't read — headlines, tables, and code blocks matter more than paragraphs.
+
+**Concrete obligations:**
+- **After every version bump / npm publish:** Review README, CHANGELOG, KNOWN_ISSUES for accuracy and voice. Flag stale content before the user asks.
+- **After adding features or rules:** Verify public docs reflect the new capabilities. "46 rules" not "44." "Community libraries: full support" not "limited."
+- **CHANGELOG entries:** Written for the audience, not the developer. Lead with what the user gains, not what was technically changed. "Bars now fill their container and bottom-align correctly" not "Refactored handleBarChart to use auto-layout."
+- **README quality gate:** Every README edit must be reviewed for: (1) accuracy, (2) audience fit, (3) scanability, (4) voice consistency with VOICE_AND_TONE.md principles.
+- **Competitive awareness:** If a feature positions Mimic against alternatives, the copy should make that clear without naming competitors.
+
+**Voice for public docs:**
+- Same principles as VOICE_AND_TONE.md: precise, transparent, honest, respectful of the craft
+- But adapted for marketing context: lead with the benefit, show don't tell, use examples
+- No hype, no superlatives, no "revolutionary" — let the feature speak
+- Tables > paragraphs. Code blocks > descriptions. Screenshots > words.
+
+---
+
+## Proactive triggers — every role, every session
+
+Roles must catch issues WITHOUT the user asking. If a role knows about a gap and doesn't raise it, that's a role failure.
+
+| Trigger | Who checks | What to check |
+|---|---|---|
+| **After npm publish** | Platform Architect + Marketing | README, CHANGELOG, KNOWN_ISSUES reflect what shipped. Rule count matches. Feature descriptions current. |
+| **After any build** | Learning Engineer | Phase 5 was completed. Patterns were saved. Build report was generated. If skipped, raise immediately. |
+| **After golden rule changes** | Product QA + Marketing | Rule count in README matches. ROLES.md coverage matrix updated. |
+| **After bug fixes** | Build Engineer | KNOWN_ISSUES.md and troubleshooting docs updated if the fix is user-facing. |
+| **After code changes** | Platform Architect | Boundary check: no internal content in committed files. DS-agnostic audit: no hardcoded DS values. |
+| **After any session** | Marketing | Public docs still accurate? Any new capability that's not documented? |
+| **During builds** | All roles | Each role monitors its domain continuously, not just at its phase gate. |
+
+---
+
 ## Role obligations by context
 
 ### Builder context (tool development)
@@ -285,6 +326,7 @@ These fire when modifying plugin/bridge/MCP code, governance files, or architect
 | DS Integration Engineer | Evolve discovery system. Update knowledge schema. Test with multiple DSs. |
 | Learning Engineer | Analyze build patterns across sessions. Improve knowledge persistence. Update learnings files. |
 | Product QA | Review user-facing messaging. Ensure error messages are actionable. Review documentation. |
+| Marketing & Comms | Review README, CHANGELOG, KNOWN_ISSUES after every publish. Verify public docs reflect shipped capabilities. Flag stale content. |
 
 ### End-user context (builds)
 These fire whenever an artboard is produced — **mandatory, no exceptions, even in mixed sessions.**
@@ -354,10 +396,12 @@ These fire whenever an artboard is produced — **mandatory, no exceptions, even
 | 42. No line breaks | | | **P** | | | |
 | 43. DS-only rule | **P** | **P** | **P** | **P** | **P** | **P** |
 | 44. Mandatory stop | **P** | **S** | | **P** | **S** | **P** |
-| 45. Artboard 1440 FIXED | **P** | **P** | | | | |
-| 46. HTML container fidelity | | **P** | **P** | **S** | | |
+| 45. Artboard 1440 FIXED | **P** | **P** | | | | | |
+| 46. HTML container fidelity | | **P** | **P** | **S** | | | |
 
 **P** = Primary owner. **S** = Secondary (supports enforcement).
 Every rule has at least one primary owner. No gaps.
+Rule 43 is the foundational constraint — ALL roles are primary owners. It overrides all other rules.
+Marketing & Comms is not in the coverage matrix — it doesn't enforce build rules. It owns public documentation quality.
 Rule 43 is the foundational constraint — ALL roles are primary owners. It overrides all other rules.
 Rule 44 is the stop protocol — Platform Architect, DS Integration Engineer, and Product QA are primary owners. Build Engineer and Learning Engineer support enforcement.

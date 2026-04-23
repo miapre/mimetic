@@ -272,7 +272,7 @@ All token bindings are real — nodes use your actual design system variables. U
 
 ## Quality built in — not bolted on
 
-Every build is checked by 6 specialist roles before it's reported as done. You don't invoke them — they run automatically.
+Every build is checked by 6 specialist roles before it's reported as done. A 7th role (Marketing & Communications) ensures public documentation stays current. You don't invoke them — they run automatically.
 
 | Role | What it checks | When |
 |---|---|---|
