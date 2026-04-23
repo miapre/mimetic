@@ -1428,7 +1428,7 @@ const TOOLS = [
         },
         primitives: {
           type: 'array',
-          description: 'Elements built as primitives: [{ name, reason }].',
+          description: 'Elements built as primitives: [{ name, reason, instances }]. instances = count of this element in the build (e.g., 4 metric cards). Used for efficiency estimates.',
           items: { type: 'object' },
         },
         format: {
@@ -1438,6 +1438,18 @@ const TOOLS = [
         savePath: {
           type: 'string',
           description: 'Optional file path to save the report.',
+        },
+        toolCallCount: {
+          type: 'number',
+          description: 'Total tool calls made during this build (use_figma + get_screenshot + get_metadata). Tracked in-memory by the build orchestrator.',
+        },
+        cacheHits: {
+          type: 'number',
+          description: 'Number of patterns resolved from cache (skipped DS search).',
+        },
+        coldBuildEstimate: {
+          type: 'number',
+          description: 'Estimated tool calls for the same build with no cache. Default: toolCallCount * 2 if not provided.',
         },
       },
       required: ['screenName', 'dsName'],
@@ -1834,11 +1846,50 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
       if (activePatterns.length > 15) md += `| ... | ${activePatterns.length - 15} more patterns | | |\n`;
       md += `\nCache: ${verifiedCount} verified, ${candidateCount} candidates. Next build uses ${activePatterns.length} cached patterns.\n\n`;
 
-      // DS gap recommendations
+      // Efficiency
+      const toolCalls = fixedArgs.toolCallCount;
+      const cacheHitsCount = fixedArgs.cacheHits || 0;
+      const coldEst = fixedArgs.coldBuildEstimate || (toolCalls ? Math.round(toolCalls * 2) : null);
+      if (toolCalls) {
+        md += `## Efficiency\n\n`;
+        md += `| Metric | Value |\n|---|---|\n`;
+        md += `| Tool calls (total) | ${toolCalls} |\n`;
+        md += `| From cache | ${cacheHitsCount} |\n`;
+        if (coldEst) md += `| Estimated cold build | ~${coldEst} |\n`;
+        if (coldEst) md += `| Saved vs cold | ~${coldEst - toolCalls} calls |\n`;
+        if (totalComponents > 0) {
+          const compSavings = totalComponents * 7; // ~7 calls saved per component vs primitive
+          md += `| DS components used | ${totalComponents} (saves ~${compSavings} primitive calls) |\n`;
+        }
+        md += '\n';
+
+        // Component savings projection from gaps
+        if (primitives.length > 0) {
+          const primCounts = primitives.filter(p => p.instances && p.instances > 0);
+          if (primCounts.length > 0) {
+            const totalPotential = primCounts.reduce((sum, p) => sum + (p.instances || 1) * 5, 0);
+            md += `**If your DS added these as components, future builds would save ~${totalPotential} calls/build.**\n\n`;
+          }
+        }
+      }
+
+      // DS gap recommendations — with economic estimates
       if (gaps.length > 0) {
         md += `## DS gap recommendations\n\n`;
         for (const g of gaps) {
-          md += `- **${g.rule_key}** — ${g.reason} (seen ${g.seen_count} times)\n`;
+          // Cross-reference with primitives to find current-build instance count
+          const match = primitives.find(p => p.name && g.rule_key && (
+            p.name.toLowerCase().includes(g.rule_key.split('/').pop()) ||
+            g.rule_key.toLowerCase().includes(p.name.toLowerCase().split(' ')[0])
+          ));
+          const instances = match?.instances || null;
+          let savings = '';
+          if (instances) {
+            savings = ` With a DS component: ~${instances * 5} fewer calls/build.`;
+          } else if (g.seen_count >= 3) {
+            savings = ' Adding this to your DS would reduce tool calls on future builds.';
+          }
+          md += `- **${g.rule_key}** — ${g.reason} (seen ${g.seen_count} times).${savings}\n`;
         }
         md += '\n';
       }
@@ -1944,6 +1995,9 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
           compliance: stats.total ? Math.round((stats.compliant / stats.total) * 100) + '%' : '—',
           patterns: activePatterns.length,
           gaps: gaps.length,
+          toolCalls: toolCalls || null,
+          cacheHits: cacheHitsCount,
+          savedVsCold: coldEst && toolCalls ? coldEst - toolCalls : null,
         },
       };
 

@@ -130,7 +130,7 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 - Were operations batched where possible?
 - Were unnecessary calls avoided?
 - Was the resize() trap avoided? (set sizing modes AFTER resize)
-- **Tool call count tracked** — total use_figma, get_screenshot, get_metadata calls recorded for the build report
+- **Tool call count tracked and surfaced** — total use_figma, get_screenshot, get_metadata calls recorded in-memory during the build. Passed as `toolCallCount` and `cacheHits` to `mimic_generate_build_report`. Shown in Phase 5 terminal output AND the build report's Efficiency section. This is not optional — every build must report its tool call count.
 
 ---
 
@@ -214,7 +214,7 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 - **Cache status:** matches validated, invalidated, new discoveries, recipes saved
 - **Pattern-learned notification:** terminal output listing new patterns saved, promotions, supersessions (see VOICE_AND_TONE.md)
 - **DS gaps (cumulative):** maintained across builds in `ds-knowledge.json`, surfaced in every report
-- **Execution metrics section:** total use_figma calls, get_screenshot calls, get_metadata calls, total tool calls, post-QA fix count, Phase 3 defect rate (fixes / sections)
+- **Efficiency section:** total tool calls, cache hits, saved vs cold build estimate, DS component call savings, per-gap savings projection. Pass `toolCallCount` and `cacheHits` to `mimic_generate_build_report`.
 - **Spacing compliance:** X/Y frames bound to DS spacing variables (0 raw px = compliant)
 - **Badge color compliance:** X/Y Badge instances with semantic color set (0 default colors = compliant)
 - Every finding classified as DS-specific or tool-specific
@@ -245,16 +245,16 @@ Roles are not passive reviewers. Each role owns a specific phase of the build li
 
 **Phase 5 gate — User Communication (mandatory format):**
 ```
-Build complete. [X] sections built.
+Build complete. [X] sections, [N] tool calls ([M] from cache — saved ~[K] vs first build).
 DS components: [Y] instances ([component names]).
-Primitives: [Z] sections ([section: reason], ...).
+Primitives: [Z] sections — adding [W] DS components would save ~[S] calls/build.
 Issues: [N] ([severity breakdown]).
 Known limitations: [list if any].
-DS gap recommendations: [list if any].
+DS gap recommendations: [list with call savings per gap].
 Full report: [path].
 ```
 - If post-QA fixes were applied, frame them transparently: "X issues caught during QA review and corrected before delivery."
-- Recommendations surfaced: DS gaps that would improve future builds
+- Recommendations surfaced: DS gaps that would improve future builds, with tool call savings estimates
 - **No silent completion.** A build that ends without user communication is a Rule 20 + Rule 24 violation
 
 **Voice & tone (UX writing standards):**

@@ -62,10 +62,10 @@ Mimic drafts; the designer approves. Frame outputs as drafts, options, or starti
 - **Don't:** "Loading..."
 
 ### Completion
-- **Do:** "Done. 52 frames, 12 DS components, 0 raw hex. 3 patterns learned."
+- **Do:** "Done. 52 frames, 12 DS components, 0 raw hex. 67 tool calls (22 from cache — saved ~73 vs cold). 3 patterns learned."
 - **Do:** "Drafted 3 button variants using your `color/action` tokens."
 - **Don't:** "All done! Hope this helps!"
-- **Don't:** "Build complete." (no specifics)
+- **Don't:** "Build complete." (no specifics, no efficiency data)
 
 ### Suggestion
 - **Do:** "Consider `spacing/200` here — it matches the surrounding grid."
@@ -169,6 +169,7 @@ Phase 4 — QA
 Phase 5 — Report
   [x] Report saved
   [x] 3 patterns learned, 0 superseded, 1 DS gap tracked
+  [x] 67 tool calls (22 from cache — saved ~73 vs first build)
 ```
 
 ---
@@ -223,6 +224,18 @@ Written for a designer. Answers: what was built, what DS components were used, w
 - Text styles: [X]/[Y] DS-backed
 - Color variables: [X]/[Y] DS-backed
 - Auto-layout: [X]/[Y] frames
+
+## Efficiency
+| Metric | This build | Typical cold build |
+|---|---|---|
+| Tool calls (total) | 67 | ~140 |
+| From cache | 22 | 0 |
+| Saved vs cold | ~73 | — |
+| DS components | 12 (saves ~84 primitive calls) | |
+
+**If your DS added these components, future builds would save:**
+- Metric Card → ~20 calls/build (4 instances × 5 calls saved)
+- Feature Card → ~15 calls/build (3 instances × 5 calls saved)
 
 ## What I learned
 [Specific: "Saved: `<div class='status-badge success'>` → Badge/Success. Promoted: Table Filters label override pattern."]

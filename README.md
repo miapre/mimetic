@@ -278,6 +278,30 @@ Everything runs on your machine. No design data, component names, token values, 
 
 ---
 
+## Cost & efficiency
+
+Mimic runs on your AI plan. Every build uses tool calls and tokens. The learning loop isn't just about quality — it's about cost.
+
+| Build | Tool calls | Why |
+|---|---|---|
+| 1st (cold) | ~140 | Full DS discovery, no cache, every pattern new |
+| 5th (warm) | ~80 | Most patterns cached, discovery skipped for known components |
+| 10th+ (hot) | ~55 | Nearly everything cached, decisions instant |
+
+**What drives cost down:**
+- **Cache** — every pattern Mimic learns skips a DS search next time
+- **DS components** — inserting a component = ~3 calls. Building the same thing from primitives = ~10-15 calls
+- **DS gap recommendations** — when Mimic suggests a component, it's also telling you how to make future builds cheaper
+
+**What you can do:**
+- Add components Mimic recommends — fewer primitive builds, fewer calls
+- Build similar screens in sequence — patterns transfer, cache warms fast
+- Use strict DS mode — fewer QA fix passes, fewer calls
+
+Every build report includes tool call counts and efficiency savings.
+
+---
+
 ## Constraints
 
 - **Figma Professional plan required** — free plan can't publish libraries

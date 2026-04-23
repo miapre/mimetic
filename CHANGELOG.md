@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.0 (2026-04-23)
+
+### Added
+- **Efficiency tracking in build reports**: New "Efficiency" section shows total tool calls, cache hits, saved-vs-cold estimates, and DS component call savings. Zero extra tool calls — uses counters already tracked in-memory during builds.
+- **Economic DS gap recommendations**: Gap recommendations now include tool-call savings estimates. "Adding a Metric Card would save ~20 calls/build" instead of just "seen 5 times." Helps users prioritize which DS components to add.
+- **Efficiency line in Phase 5 output**: Terminal summary now shows tool call count, cache hits, and savings. One line, zero extra cost.
+- **README cost & efficiency section**: Honest cost model showing how builds get cheaper over time (cold ~140 calls → warm ~80 → hot ~55). Documents what drives cost down and what users can do about it.
+- **`toolCallCount`, `cacheHits`, `coldBuildEstimate` params** on `mimic_generate_build_report`: Build orchestrators pass efficiency data for inclusion in reports.
+- **`instances` field on primitives**: Primitives array now accepts an instance count per element type, used for per-gap savings projections.
+
+### Fixed
+- **`set_layout_sizing` padding in strict mode**: Accepts DS variable path strings (e.g., `spacing/spacing-xl`) in addition to numbers. Previously rejected valid DS paths as raw values.
+- **Donut chart `categoryVariables`**: Maps category-level DS color variables to individual data entries. No more strict mode failures on donut charts with DS colors.
+- **HTML build report tables**: Replaced regex-based markdown→HTML table converter with a line-by-line parser. Tables now render as clean `<table>` markup instead of broken fragments.
+- **DESIGN.md generator accuracy**: Deduplicates colors, spacing, radius, and components by name/key. Removes fake `fontSize` values. Shows `token` placeholder for unresolvable variable values instead of null.
+
 ## 1.2.0 (2026-04-23)
 
 ### Added

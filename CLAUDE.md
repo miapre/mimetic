@@ -84,7 +84,7 @@ The product philosophy is: "stopping is a feature, not a failure." A stopped bui
 
 5. **Phase 4 — QA** (Design QA): Screenshot and compare. Verify content fidelity, layout direction, structure, nothing added/removed. **DS compliance validation (Rule 43):** Call `validate_ds_compliance` on the artboard. Any violation (raw fill, raw text style, raw spacing, fixed sizing) is a build defect that must be fixed before Phase 5. If a violation cannot be fixed (e.g., chart internal geometry), document it in the build report as a known exception.
 
-6. **Phase 5 — Report & Communicate** (Learning Engineer + Product QA): Save build report to `mimic/reports/build-NNN-*.md`. Communicate summary to user. **A build is NOT done until this phase completes.**
+6. **Phase 5 — Report & Communicate** (Learning Engineer + Product QA): Save build report to `mimic/reports/build-NNN-*.md`. Communicate summary to user including tool call count, cache hits, and savings vs cold build. Pass `toolCallCount` and `cacheHits` to `mimic_generate_build_report`. DS gap recommendations must include tool-call savings estimates. **A build is NOT done until this phase completes.**
 
 ### Multi-Page HTML (Rule 26)
 When the HTML contains multiple views/pages, list them and let the user choose which to build first. Build one at a time. Learn between builds. Show the list with completion status after each build.
