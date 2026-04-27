@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Mimic AI" width="120">
+</p>
+
 # Mimic AI
 
 **The design system copilot that builds Figma screens from HTML — and gets better every time you use it.**
