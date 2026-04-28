@@ -29,6 +29,9 @@ internal/diagnostics/
 # Internal marketing strategy — creator-only, not for end users
 internal/marketing/
 
+# Internal logo iterations — published logos are in assets/
+internal/logo/
+
 # DS knowledge cache (generated, large)
 internal/ds-knowledge/
 
