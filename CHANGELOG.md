@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0 (2026-04-29)
+
+### Breaking
+- **Default dsMode is now `strict`** -- previously defaulted to `permissive`. Builds start with full DS enforcement. If your DS has no published tokens (component-only library), the plugin now validates this before accepting `permissive`.
+
+### Added
+- **Conditional permissive mode** -- `set_session_defaults(dsMode: "permissive")` is now rejected when the DS has published variables or text styles. Returns `DS_PERMISSIVE_REJECTED` with the token count. Permissive mode is only accepted for component-only DSs with genuinely zero tokens.
+- **Immutable dsMode** -- once set to `strict`, dsMode cannot be downgraded to `permissive` in the same session. Prevents mid-build enforcement bypass. Returns `DS_PERMISSIVE_REJECTED` explaining the lock.
+- **Discovery gate upgraded to error** -- creating a page-level frame (artboard) without DS discovery now returns `DS_DISCOVERY_REQUIRED` error and does NOT create the artboard. Previously this was a warning that allowed the artboard to be created anyway.
+- **Raw fallback threshold (Rule 49)** -- plugin tracks `rawFallbackCount`. After 5 nodes with raw fallbacks in strict mode, `RAW_FALLBACK_THRESHOLD` warning is emitted on every subsequent node creation. Catches cascading DS compliance failures early.
+- **Rule 47: Style preload retry protocol** -- when styles timeout, retry in batches of 3, then individually. Never switch to permissive as a workaround. 3 consecutive individual failures = BLOCKER.
+- **Rule 48: Mandatory knowledge load** -- `mimic_ai_knowledge_read` must be called before every build to load cached component mappings.
+- **Rule 49: Token waste threshold** -- if 5+ nodes are created with raw fallbacks in strict mode, build must pause for root cause investigation.
+- **46 -> 49 golden rules** -- updated GOLDEN_RULES.md, CLAUDE.md, ROLES.md, README.md.
+
 ## 1.5.0 (2026-04-28)
 
 ### Fixed

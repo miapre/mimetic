@@ -284,7 +284,7 @@ Full report: [path].
 
 **Concrete obligations:**
 - **After every version bump / npm publish:** Review README, CHANGELOG, KNOWN_ISSUES for accuracy and voice. Flag stale content before the user asks.
-- **After adding features or rules:** Verify public docs reflect the new capabilities. "46 rules" not "44." "Community libraries: full support" not "limited."
+- **After adding features or rules:** Verify public docs reflect the new capabilities. "49 rules" not "46." "Community libraries: full support" not "limited."
 - **CHANGELOG entries:** Written for the audience, not the developer. Lead with what the user gains, not what was technically changed. "Bars now fill their container and bottom-align correctly" not "Refactored handleBarChart to use auto-layout."
 - **README quality gate:** Every README edit must be reviewed for: (1) accuracy, (2) audience fit, (3) scanability, (4) voice consistency with VOICE_AND_TONE.md principles.
 - **Competitive awareness:** If a feature positions Mimic against alternatives, the copy should make that clear without naming competitors.
@@ -398,10 +398,15 @@ These fire whenever an artboard is produced — **mandatory, no exceptions, even
 | 44. Mandatory stop | **P** | **S** | | **P** | **S** | **P** |
 | 45. Artboard 1440 FIXED | **P** | **P** | | | | | |
 | 46. HTML container fidelity | | **P** | **P** | **S** | | | |
+| 47. Style preload retry | | **S** | | **P** | | |
+| 48. Mandatory knowledge load | | **S** | | **P** | **S** | |
+| 49. Token waste threshold | **P** | | **P** | | | |
 
 **P** = Primary owner. **S** = Secondary (supports enforcement).
 Every rule has at least one primary owner. No gaps.
 Rule 43 is the foundational constraint — ALL roles are primary owners. It overrides all other rules.
 Marketing & Comms is not in the coverage matrix — it doesn't enforce build rules. It owns public documentation quality.
-Rule 43 is the foundational constraint — ALL roles are primary owners. It overrides all other rules.
 Rule 44 is the stop protocol — Platform Architect, DS Integration Engineer, and Product QA are primary owners. Build Engineer and Learning Engineer support enforcement.
+Rule 47 is the retry protocol — DS Integration Engineer owns it (Phase 2), Build Engineer supports.
+Rule 48 is the mandatory knowledge load — DS Integration Engineer owns it (Phase 1), Build Engineer and Learning Engineer support.
+Rule 49 is the token waste threshold — Platform Architect owns enforcement (code level), Design QA owns monitoring.

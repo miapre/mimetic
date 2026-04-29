@@ -25,7 +25,8 @@ var sessionDefaults = {
   frameFillStyleKey: null,  // NOT auto-applied — frames often have no fill intentionally
   strokeStyleKey: null,     // NOT auto-applied
   fontFamily: null,          // No default — set via set_session_defaults or auto-detected from first text style import. DS-agnostic: never hardcode a font family.
-  dsMode: 'permissive',     // 'strict' = DS references required, raw values rejected. 'permissive' = raw fallbacks allowed. Set to 'strict' via set_session_defaults when DS is connected.
+  dsMode: 'strict',         // 'strict' = DS references required, raw values rejected. 'permissive' = raw fallbacks allowed for component-only DSs with zero tokens. Default: strict — builds start safe.
+  dsModeLockedBy: null,     // Once set to 'strict', records who locked it. Prevents mid-build downgrade to 'permissive'.
 };
 
 // Phase 1 enforcement: tracks whether DS discovery has been performed in this session.
@@ -34,6 +35,10 @@ var sessionDefaults = {
 // Set to true by: insert_component, preload_styles, preload_variables, discover_library_styles,
 // discover_library_variables, or any operation that proves the orchestrator engaged with the DS.
 var dsDiscoveryPerformed = false;
+
+// Rule 49: Token waste threshold — counts nodes created with raw fallbacks in strict mode.
+// When this exceeds 5, subsequent create_frame/create_text calls return an error.
+var rawFallbackCount = 0;
 
 // Session-level cache of component keys that failed to import.
 // Prevents repeated 45s+ waits on keys that are known to fail in this session.
@@ -520,15 +525,18 @@ async function handleInsertComponent(params) {
 }
 
 async function handleCreateFrame(params) {
-  // Phase 1 enforcement: warn if creating a page-level frame (artboard) without DS discovery.
+  // Phase 1 enforcement: BLOCK artboard creation without DS discovery in strict mode.
   // This is the product's core gate — without discovery, the build uses no DS components.
   var phase1Warning = null;
   const isArtboard = !params.parentNodeId && !params.parentId;
   if (isArtboard && sessionDefaults.dsMode === 'strict' && !dsDiscoveryPerformed) {
-    phase1Warning = 'DS_DISCOVERY_REQUIRED: No DS discovery performed in this session. ' +
-      'Phase 1 (DS Discovery) is mandatory before building. ' +
-      'Run discover_library_styles, discover_library_variables, preload_styles, or insert_component first. ' +
-      'Building without DS discovery produces primitive-only output — the opposite of what Mimic does.';
+    return {
+      error: 'DS_DISCOVERY_REQUIRED: No DS discovery performed in this session. ' +
+        'Phase 1 (DS Discovery) is mandatory before building. ' +
+        'Run discover_library_styles, discover_library_variables, preload_styles, or insert_component first. ' +
+        'Building without DS discovery produces primitive-only output — the opposite of what Mimic does. ' +
+        'This is a BLOCKER, not a warning. The artboard was NOT created.'
+    };
   }
 
   const frame = figma.createFrame();
@@ -715,12 +723,19 @@ async function handleCreateFrame(params) {
   const frameWarnings = [];
   if (frameDsCompliance.fill === 'raw_fallback') {
     frameWarnings.push('Frame fill is raw hex — Rule 38 violation. Use fillVariable with a DS color variable.');
+    if (sessionDefaults.dsMode === 'strict') rawFallbackCount++;
   }
   if (frameDsCompliance.stroke === 'raw_fallback') {
     frameWarnings.push('Frame stroke is raw hex — Rule 38 violation. Use strokeVariable with a DS color variable.');
+    if (sessionDefaults.dsMode === 'strict') rawFallbackCount++;
   }
   if (layoutWarning) frameWarnings.push(layoutWarning);
   if (phase1Warning) frameWarnings.push(phase1Warning);
+
+  // Rule 49: Token waste threshold — catch cascading raw fallbacks early.
+  if (sessionDefaults.dsMode === 'strict' && rawFallbackCount > 5) {
+    frameWarnings.push('RAW_FALLBACK_THRESHOLD: ' + rawFallbackCount + ' nodes with raw fallbacks in strict mode. Build should pause — investigate root cause before continuing.');
+  }
 
   return { nodeId: frame.id, name: frame.name, dsCompliance: frameDsCompliance, warnings: frameWarnings.length > 0 ? frameWarnings : undefined };
 }
@@ -913,11 +928,18 @@ async function handleCreateText(params) {
   const textWarnings = [];
   if (textDsCompliance.textStyle === 'raw_fallback') {
     textWarnings.push('Text created without DS text style — Rule 39 violation. Use textStyleId instead of fontSize/fontWeight.');
+    if (sessionDefaults.dsMode === 'strict') rawFallbackCount++;
   }
   if (textDsCompliance.fill === 'raw_fallback') {
     textWarnings.push('Text fill is raw hex — Rule 38 violation. Use fillVariable with a DS color variable.');
+    if (sessionDefaults.dsMode === 'strict') rawFallbackCount++;
   }
   if (layoutWarning) textWarnings.push(layoutWarning);
+
+  // Rule 49: Token waste threshold — catch cascading raw fallbacks early.
+  if (sessionDefaults.dsMode === 'strict' && rawFallbackCount > 5) {
+    textWarnings.push('RAW_FALLBACK_THRESHOLD: ' + rawFallbackCount + ' nodes with raw fallbacks in strict mode. Build should pause — investigate root cause before continuing.');
+  }
 
   return { nodeId: text.id, dsCompliance: textDsCompliance, warnings: textWarnings.length > 0 ? textWarnings : undefined };
 }
@@ -1330,6 +1352,12 @@ async function handleSetSessionDefaults(params) {
   dsDiscoveryPerformed = false;
   // Clear failed component cache — new session, fresh start.
   failedComponentKeys.clear();
+  // Reset dsMode lock — new session can set its own mode.
+  // But dsMode defaults to 'strict' until explicitly set.
+  sessionDefaults.dsModeLockedBy = null;
+  sessionDefaults.dsMode = 'strict';
+  // Reset raw fallback counter (Rule 49).
+  rawFallbackCount = 0;
 
   if (params.textFillStyleKey) {
     // Preload the color style so it's available in the cache
@@ -1348,8 +1376,56 @@ async function handleSetSessionDefaults(params) {
   if (params.fontFamily) {
     sessionDefaults.fontFamily = params.fontFamily;
   }
-  if (params.dsMode === 'strict' || params.dsMode === 'permissive') {
-    sessionDefaults.dsMode = params.dsMode;
+  if (params.dsMode === 'strict') {
+    sessionDefaults.dsMode = 'strict';
+    sessionDefaults.dsModeLockedBy = 'set_session_defaults';
+  } else if (params.dsMode === 'permissive') {
+    // Change 1: Reject permissive mode if the DS has published tokens.
+    // Permissive is ONLY for component-only DSs with zero variables/styles.
+    if (sessionDefaults.dsModeLockedBy) {
+      // Change 2: Once strict, always strict in this session.
+      return {
+        ok: false,
+        error: 'DS_PERMISSIVE_REJECTED: dsMode was set to "strict" earlier in this session and cannot be downgraded to "permissive". ' +
+          'Strict mode is immutable once set. If you need permissive mode, start a new session with set_session_defaults. ' +
+          'But note: permissive mode is ONLY for component-only DSs with zero published tokens.'
+      };
+    }
+    // Validate against DS state: check if the file has library variables or styles available.
+    // If the DS has tokens, permissive mode is invalid — the DS can satisfy strict mode.
+    try {
+      var localVars = await figma.variables.getLocalVariablesAsync();
+      var localStyles = await figma.getLocalTextStylesAsync();
+      // Also check library variables via teamLibrary (available since Figma Plugin API v1.4)
+      var libraryVarCollections = [];
+      try {
+        libraryVarCollections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+      } catch (e) { /* teamLibrary may not be available in all contexts */ }
+      var totalTokens = localVars.length + localStyles.length;
+      for (var lvc of libraryVarCollections) {
+        try {
+          var libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(lvc.key);
+          totalTokens += libVars.length;
+        } catch (e) { /* skip inaccessible collections */ }
+      }
+      if (totalTokens > 0) {
+        return {
+          ok: false,
+          error: 'DS_PERMISSIVE_REJECTED: This DS has ' + totalTokens + ' tokens (variables + styles). ' +
+            'Permissive mode is ONLY for component-only DSs with zero published tokens. ' +
+            'Use dsMode: "strict". If styles are timing out, retry in smaller batches — do not disable enforcement.'
+        };
+      }
+    } catch (e) {
+      // If we can't determine DS state, default to rejecting permissive (safe default).
+      return {
+        ok: false,
+        error: 'DS_PERMISSIVE_REJECTED: Could not verify DS token state (' + e.message + '). ' +
+          'Defaulting to strict mode. Use dsMode: "strict".'
+      };
+    }
+    // Only reach here if DS genuinely has zero tokens — permissive is valid.
+    sessionDefaults.dsMode = 'permissive';
   }
   return { ok: true, sessionDefaults: sessionDefaults };
 }

@@ -574,3 +574,56 @@ Becomes:
 - Gap/padding values not bound to DS spacing variables
 
 This rule is owned by the **Build Engineer** (execution) and **Design QA** (verification against HTML).
+
+
+## 47. Style preload retry protocol — never switch to permissive
+
+When text style preloading times out, the ONLY valid response is retry or stop. Switching to `dsMode: "permissive"` is never acceptable when the DS has tokens.
+
+**Retry protocol:**
+1. Retry failed styles in batches of 3 (not all at once).
+2. If a batch of 3 fails, check `mimic_status` for plugin connectivity.
+3. If plugin is connected, retry failed styles individually (1 at a time).
+4. If 3 consecutive individual retries fail, this is a BLOCKER — stop the build.
+5. Report to the user: "Style preloading failed after retries. The Figma plugin may need to be restarted."
+
+**What NOT to do:**
+- Never call `set_session_defaults(dsMode: "permissive")` as a workaround for timeouts.
+- Never use raw `fontSize`/`fontWeight` as a "temporary" fallback — there is no such thing.
+- Never continue building when styles can't be loaded — the output will be non-DS-compliant.
+
+**Enforcement:** The plugin now rejects `dsMode: "permissive"` when the DS has published tokens (validated at the API level). Even if the orchestrator tries, the tool will return `DS_PERMISSIVE_REJECTED`.
+
+This rule is owned by the **DS Integration Engineer** (Phase 2) and the **Build Engineer** (Phase 3).
+
+
+## 48. Mandatory knowledge load before every build
+
+Before any build starts, the orchestrator MUST call `mimic_ai_knowledge_read` to load the DS knowledge base. If the knowledge base has VERIFIED patterns with component mappings, those components must be used (after validation).
+
+**Protocol:**
+1. Call `mimic_ai_knowledge_read` at the start of every build session.
+2. For each VERIFIED pattern: validate the component key still resolves.
+3. Produce a component map from knowledge + fresh DS search for unmapped elements.
+4. If no knowledge base exists, perform a full DS search (Phase 1 cold path).
+
+**Why:** The knowledge base contains proven component mappings from previous builds. Ignoring it means rediscovering (or failing to discover) components that are already known. The 2026-04-29 dashboard build had 7 VERIFIED mappings (buttons, badges, inputs, table cells, tabs) — all ignored because `mimic_ai_knowledge_read` was never called.
+
+This rule is owned by the **DS Integration Engineer** (Phase 1).
+
+
+## 49. Token waste threshold — early cascade detection
+
+If a build has created more than 5 nodes (frames or text) that violate DS compliance (no `textStyleId`, raw fills, raw spacing), the build MUST pause and self-check before proceeding.
+
+**Self-check protocol:**
+1. Count violations so far.
+2. If violations > 5: stop building. Review why violations are accumulating.
+3. Common cause: dsMode is permissive when it shouldn't be, or styles failed to load.
+4. Fix the root cause before continuing. If the root cause can't be fixed, stop the build.
+
+**Why:** The 2026-04-29 dashboard build created 40+ non-compliant nodes over 33 minutes before the user noticed. A threshold of 5 would have caught the cascade within 2 minutes, saving 31 minutes and hundreds of tool calls.
+
+**Enforcement:** The plugin tracks `rawFallbackCount` in the session. When it exceeds 5 in strict mode, subsequent `create_frame` and `create_text` calls return a `RAW_FALLBACK_THRESHOLD: Build paused — 5+ nodes created with raw fallbacks in strict mode. Investigate root cause before continuing.` error.
+
+This rule is owned by **Design QA** (monitoring) and the **Platform Architect** (enforcement).

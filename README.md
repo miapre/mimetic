@@ -187,7 +187,7 @@ Assets panel → Team library icon → toggle on. Once per file. Community libra
 
 ## What gets checked automatically
 
-Every build enforces 46 quality rules. You don't configure them. They just run.
+Every build enforces 49 quality rules. You don't configure them. They just run.
 
 - Text uses your text styles, not raw font properties
 - Colors bound to your variables, not hardcoded

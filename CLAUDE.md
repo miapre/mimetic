@@ -47,7 +47,7 @@ Read it at the start of every session that involves building. All user-facing ou
 
 Every build follows 6 phases. Each phase has a gate that must pass before proceeding. **All phases must be shown to the user with checkbox progress** (see VOICE_AND_TONE.md for format):
 
-1. **Phase 0 — Target** (Platform Architect): Confirm target file/node, calculate artboard placement, identify variable mode requirements. **DS-only enforcement (Rule 43):** Call `set_session_defaults` with `dsMode: "strict"` at the start of every build when a DS is connected. This makes all tools reject raw hex, raw px, and raw fonts — DS variables/styles are required. For component-only DSs without published tokens, use `dsMode: "permissive"` instead.
+1. **Phase 0 — Target** (Platform Architect): Confirm target file/node, calculate artboard placement, identify variable mode requirements. **DS-only enforcement (Rule 43):** Call `set_session_defaults` with `dsMode: "strict"` at the start of every build. The plugin now defaults to strict mode and will reject `dsMode: "permissive"` if the DS has published tokens (validated at the API level). Once set to strict, the mode is immutable for the session — it cannot be downgraded mid-build. Permissive mode is ONLY accepted for component-only DSs with zero published variables and styles.
 
 ### Mandatory Stop Protocol
 
@@ -67,7 +67,7 @@ Mimic must stop and notify the user — not fall back silently — when:
 
 The product philosophy is: "stopping is a feature, not a failure." A stopped build with an honest report is better than a completed build with silent degradation.
 
-2. **Phase 1 — DS Discovery** (DS Integration Engineer): Produce a component map: `HTML element → DS component key` or `"primitive" + reason`. This is NON-OPTIONAL — skipping it is a critical violation (Rule 23). **Regression check (Rule 30):** compare against previous builds of similar screen types.
+2. **Phase 1 — DS Discovery** (DS Integration Engineer): **Mandatory first step: call `mimic_ai_knowledge_read` to load the DS knowledge base (Rule 48).** Then produce a component map: `HTML element → DS component key` or `"primitive" + reason`. For VERIFIED patterns in the knowledge base, validate the component key still resolves before using it. This is NON-OPTIONAL — skipping it is a critical violation (Rule 23). The plugin now BLOCKS artboard creation if no discovery has been performed (returns `DS_DISCOVERY_REQUIRED` error, not warning). **Regression check (Rule 30):** compare against previous builds of similar screen types.
 
    **Warm-cache path (Rule 34):** If `ds-knowledge.json` has cached patterns:
    - For each cached match: validate component exists (`importComponentByKeyAsync`) → validate variant exists → if both pass, use cached match (skip `search_design_system`)
@@ -76,7 +76,7 @@ The product philosophy is: "stopping is a feature, not a failure." A stopped bui
    
    **Cold path:** No cache exists. Full DS search for every component type. Cache all results.
 
-3. **Phase 2 — Style & Variable Inventory** (DS Integration Engineer): Import all needed text styles, color variables, spacing, radius. Map every HTML font size to a DS text style. Map the DS's variable categories to node types. **Font validation (Rule 28):** every font in the HTML must be checked against the DS. Non-DS fonts are substituted. **Color validation (Rule 29):** every color must map to a DS variable. No raw hex on text.
+3. **Phase 2 — Style & Variable Inventory** (DS Integration Engineer): Import all needed text styles, color variables, spacing, radius. Map every HTML font size to a DS text style. Map the DS's variable categories to node types. **Style preload retry protocol (Rule 47):** If styles timeout, retry in batches of 3. If batch retries fail, check plugin connectivity. If individual retries fail 3 times, STOP — this is a BLOCKER. Never switch to permissive mode as a workaround. **Font validation (Rule 28):** every font in the HTML must be checked against the DS. Non-DS fonts are substituted. **Color validation (Rule 29):** every color must map to a DS variable. No raw hex on text.
 
    **Component-only DS (no tokens):** If the library has components but no published variables or text styles, Phase 2 reports this clearly: "This DS provides components but no design tokens. Components will be used wherever available. Colors, spacing, and typography will use raw values." The build proceeds using all available components, but the Phase 5 report includes a **Token gap** section recommending the user add variable collections (colors, spacing, radius) to their library for full DS compliance on future builds.
 
@@ -188,7 +188,7 @@ Each role evaluates and scores — iterate until all roles reach 10/10.
 
 ## Golden Rules
 
-**Authoritative source:** `GOLDEN_RULES.md` (44 rules).
+**Authoritative source:** `GOLDEN_RULES.md` (49 rules).
 Read it at the start of every session that involves building. Never violate any rule.
 
 ---
@@ -312,7 +312,7 @@ Charts are built using the same primitives as any other section. **Never use `fi
 
 ## Multi-Role Deliberation Framework
 
-**Role definitions:** `ROLES.md` (6 roles, phased gate model, coverage matrix against all 44 golden rules).
+**Role definitions:** `ROLES.md` (6 roles, phased gate model, coverage matrix against all 49 golden rules).
 
 When invoked with a prompt like:
 > "As [role1], [role2], ..., come up with a framework to [goal]..."
