@@ -305,9 +305,9 @@ handlers.create_frame = function (payload) {
   if (payload.primaryAxisAlignItems) frame.primaryAxisAlignItems = payload.primaryAxisAlignItems;
   if (payload.counterAxisAlignItems) frame.counterAxisAlignItems = payload.counterAxisAlignItems;
 
-  // Sizing
-  frame.layoutSizingHorizontal = payload.layoutSizingHorizontal || 'HUG';
-  frame.layoutSizingVertical = payload.layoutSizingVertical || 'HUG';
+  // Sizing — deferred to after appendChild (FILL requires auto-layout parent)
+  var deferSizingH = payload.layoutSizingHorizontal || 'HUG';
+  var deferSizingV = payload.layoutSizingVertical || 'HUG';
 
   // Fixed dimensions (for artboards)
   if (payload.width) frame.resize(payload.width, payload.height || 100);
@@ -414,6 +414,12 @@ handlers.create_frame = function (payload) {
   // Append to parent
   parent.appendChild(frame);
 
+  // Apply sizing AFTER appendChild (FILL requires auto-layout parent)
+  try {
+    frame.layoutSizingHorizontal = deferSizingH;
+    frame.layoutSizingVertical = deferSizingV;
+  } catch (e) { /* Page root — sizing not applicable */ }
+
   return {
     nodeId: frame.id,
     name: frame.name,
@@ -517,9 +523,9 @@ handlers.insert_component = function (payload) {
     var instance = imported.createInstance();
     instance.name = payload.name || imported.name;
 
-    // Set to HUG by default
-    instance.layoutSizingHorizontal = payload.layoutSizingHorizontal || 'HUG';
-    instance.layoutSizingVertical = payload.layoutSizingVertical || 'HUG';
+    // Defer sizing to after appendChild
+    var deferInstSizingH = payload.layoutSizingHorizontal || 'HUG';
+    var deferInstSizingV = payload.layoutSizingVertical || 'HUG';
 
     // Position
     if (typeof payload.x === 'number') instance.x = payload.x;
@@ -527,6 +533,12 @@ handlers.insert_component = function (payload) {
 
     // Append to parent
     parent.appendChild(instance);
+
+    // Apply sizing after appendChild
+    try {
+      instance.layoutSizingHorizontal = deferInstSizingH;
+      instance.layoutSizingVertical = deferInstSizingV;
+    } catch (e) { /* not in auto-layout parent */ }
 
     // Collect configuration hints
     var hints = collectConfigurationHints(instance);
@@ -551,10 +563,10 @@ handlers.create_rectangle = function (payload) {
 
   rect.name = payload.name || 'Rectangle';
 
-  // Sizing
+  // Sizing (defer FILL to after appendChild)
   if (payload.width && payload.height) rect.resize(payload.width, payload.height);
-  if (payload.layoutSizingHorizontal) rect.layoutSizingHorizontal = payload.layoutSizingHorizontal;
-  if (payload.layoutSizingVertical) rect.layoutSizingVertical = payload.layoutSizingVertical;
+  var deferRectSizingH = payload.layoutSizingHorizontal;
+  var deferRectSizingV = payload.layoutSizingVertical;
 
   // Position
   if (typeof payload.x === 'number') rect.x = payload.x;
@@ -599,6 +611,10 @@ handlers.create_rectangle = function (payload) {
   if (typeof payload.opacity === 'number') rect.opacity = payload.opacity;
 
   parent.appendChild(rect);
+  try {
+    if (deferRectSizingH) rect.layoutSizingHorizontal = deferRectSizingH;
+    if (deferRectSizingV) rect.layoutSizingVertical = deferRectSizingV;
+  } catch (e) { /* not in auto-layout parent */ }
 
   return {
     nodeId: rect.id,
@@ -614,10 +630,10 @@ handlers.create_ellipse = function (payload) {
 
   ellipse.name = payload.name || 'Ellipse';
 
-  // Sizing
+  // Sizing (defer FILL to after appendChild)
   if (payload.width && payload.height) ellipse.resize(payload.width, payload.height);
-  if (payload.layoutSizingHorizontal) ellipse.layoutSizingHorizontal = payload.layoutSizingHorizontal;
-  if (payload.layoutSizingVertical) ellipse.layoutSizingVertical = payload.layoutSizingVertical;
+  var deferEllipseSizingH = payload.layoutSizingHorizontal;
+  var deferEllipseSizingV = payload.layoutSizingVertical;
 
   // Arc data (for donut segments)
   if (payload.arcData) {
@@ -655,6 +671,10 @@ handlers.create_ellipse = function (payload) {
   if (typeof payload.opacity === 'number') ellipse.opacity = payload.opacity;
 
   parent.appendChild(ellipse);
+  try {
+    if (deferEllipseSizingH) ellipse.layoutSizingHorizontal = deferEllipseSizingH;
+    if (deferEllipseSizingV) ellipse.layoutSizingVertical = deferEllipseSizingV;
+  } catch (e) { /* not in auto-layout parent */ }
 
   return {
     nodeId: ellipse.id,
@@ -683,10 +703,10 @@ handlers.create_svg = function (payload) {
   if (typeof payload.x === 'number') svgNode.x = payload.x;
   if (typeof payload.y === 'number') svgNode.y = payload.y;
 
-  // Sizing
+  // Sizing (defer FILL to after appendChild)
   if (payload.width && payload.height) svgNode.resize(payload.width, payload.height);
-  if (payload.layoutSizingHorizontal) svgNode.layoutSizingHorizontal = payload.layoutSizingHorizontal;
-  if (payload.layoutSizingVertical) svgNode.layoutSizingVertical = payload.layoutSizingVertical;
+  var deferSvgSizingH = payload.layoutSizingHorizontal;
+  var deferSvgSizingV = payload.layoutSizingVertical;
 
   // Optionally apply fill/stroke variables to child vectors
   if (payload.fillVariable || payload.strokeVariable) {
@@ -705,6 +725,10 @@ handlers.create_svg = function (payload) {
   }
 
   parent.appendChild(svgNode);
+  try {
+    if (deferSvgSizingH) svgNode.layoutSizingHorizontal = deferSvgSizingH;
+    if (deferSvgSizingV) svgNode.layoutSizingVertical = deferSvgSizingV;
+  } catch (e) { /* not in auto-layout parent */ }
 
   return {
     nodeId: svgNode.id,
