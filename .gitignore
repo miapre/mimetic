@@ -1,0 +1,7 @@
+node_modules/
+ds-knowledge.json
+mimic/
+internal/builds/
+internal/diagnostics/
+*.log
+.DS_Store
