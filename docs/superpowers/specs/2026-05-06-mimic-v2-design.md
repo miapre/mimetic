@@ -117,7 +117,7 @@ The HTML→Figma translation is the entry point. The real value is:
 3. **DS maintenance** — detecting changes, flagging regressions, keeping builds current as the DS evolves
 4. **DS readiness** — helping designers structure their DS for AI tools (Figma Make, Stitch, generative UI) as a side effect of using Mimic
 
-Once Mimic learns the DS, users can also describe screens ("build a dashboard") and Mimic builds them using the learned patterns. The DS knowledge is the product.
+Users can also describe screens ("build a dashboard") and Mimic discovers the DS on the spot and builds with it — no prior builds required. The learning loop makes subsequent builds faster and smarter (cached recipes, proven patterns, known icon mappings), but the first build works too.
 
 ---
 
