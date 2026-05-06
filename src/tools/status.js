@@ -1,5 +1,7 @@
 'use strict';
 
+const { DsDiscovery } = require('../ds/discovery');
+
 const PHASE_LABELS = {
   0: 'idle',
   1: 'discovery',
@@ -72,14 +74,17 @@ function register(server, context) {
       required: ['fileKey'],
     },
     async (args) => {
-      const status = await bridge.send('get_plugin_status', { fileKey: args.fileKey });
+      const discovery = new DsDiscovery(bridge, dsCache, knowledgeStore);
+      const libraryInfo = await discovery.enumerateLibrary();
+
       advancePhase(1);
       session.toolCallCount++;
 
       return {
         phase: session.phase,
         phaseLabel: PHASE_LABELS[session.phase],
-        pluginStatus: status,
+        fileKey: args.fileKey,
+        library: libraryInfo,
         hint: 'Discovery started. Next: preload text styles with figma_preload_styles, preload variables with figma_preload_variables, then call figma_set_session_defaults to finalize inventory.',
       };
     }
