@@ -2,6 +2,7 @@
 
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
 const { Bridge } = require('./src/bridge');
 const { DsCache } = require('./src/ds/cache');
 const { DsResolver } = require('./src/ds/resolver');
@@ -36,6 +37,14 @@ function resetSession() {
   session.cacheHits = 0;
 }
 
+// ── Tool Registry ─────────────────────────────────────────────────────
+const toolRegistry = { tools: [], handlers: {} };
+
+function registerTool(name, description, inputSchema, handler) {
+  toolRegistry.tools.push({ name, description, inputSchema });
+  toolRegistry.handlers[name] = handler;
+}
+
 // Shared instances
 const bridge = new Bridge({ port: 3055 });
 const dsCache = new DsCache();
@@ -60,19 +69,43 @@ const context = {
   requirePhase,
   advancePhase,
   resetSession,
+  registerTool,
 };
 
-// Tool registration — will be populated as each tool file is created
-// require('./src/tools/status').register(server, context);
-// require('./src/tools/ds-setup').register(server, context);
-// require('./src/tools/build').register(server, context);
-// require('./src/tools/components').register(server, context);
-// require('./src/tools/edit').register(server, context);
-// require('./src/tools/inspect').register(server, context);
-// require('./src/tools/learning').register(server, context);
-// require('./src/tools/compliance').register(server, context);
-// require('./src/tools/rendering').register(server, context);
-// require('./src/tools/batch').register(server, context);
+// Tool registration
+require('./src/tools/status').register(server, context);
+require('./src/tools/ds-setup').register(server, context);
+require('./src/tools/build').register(server, context);
+require('./src/tools/components').register(server, context);
+require('./src/tools/edit').register(server, context);
+require('./src/tools/inspect').register(server, context);
+require('./src/tools/batch').register(server, context);
+
+// ── MCP Request Handlers ──────────────────────────────────────────────
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: toolRegistry.tools,
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+  const handler = toolRegistry.handlers[name];
+  if (!handler) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown tool', name }) }],
+    };
+  }
+  try {
+    const result = await handler(args || {});
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result) }],
+    };
+  } catch (err) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify(err.toJSON ? err.toJSON() : { error: err.message }) }],
+    };
+  }
+});
 
 async function main() {
   // Start bridge (auto-starts, invisible to user)
