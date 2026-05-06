@@ -264,7 +264,10 @@ class Bridge {
     this.responseHandlers.delete(data.id);
 
     if (data.error) {
-      const err = new Error(typeof data.error === 'string' ? data.error : data.error.message || JSON.stringify(data.error));
+      const errorMsg = typeof data.error === 'object'
+        ? (data.error.message || JSON.stringify(data.error))
+        : String(data.error);
+      const err = new Error(errorMsg);
       err.pluginError = data.error;
       handler.reject(err);
     } else {

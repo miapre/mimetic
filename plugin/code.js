@@ -467,9 +467,11 @@ handlers.create_text = function (payload) {
       applySolidFill(text, payload.fill);
     }
 
-    // Sizing
-    text.layoutSizingHorizontal = payload.layoutSizingHorizontal || 'HUG';
-    text.layoutSizingVertical = payload.layoutSizingVertical || 'HUG';
+    // Sizing — only set if text will be inside an auto-layout parent
+    // (setting before appendChild to a non-AL parent throws)
+    // Defer to after appendChild, or only set if explicitly requested
+    var deferSizingH = payload.layoutSizingHorizontal;
+    var deferSizingV = payload.layoutSizingVertical;
 
     // Text auto-resize
     if (payload.textAutoResize) text.textAutoResize = payload.textAutoResize;
@@ -484,6 +486,14 @@ handlers.create_text = function (payload) {
 
     // Append to parent
     parent.appendChild(text);
+
+    // Apply sizing after appending (requires auto-layout parent)
+    try {
+      if (deferSizingH) text.layoutSizingHorizontal = deferSizingH;
+      if (deferSizingV) text.layoutSizingVertical = deferSizingV;
+    } catch (e) {
+      // Parent isn't auto-layout — sizing not applicable, ignore
+    }
 
     return {
       nodeId: text.id,
@@ -1763,8 +1773,7 @@ figma.ui.onmessage = function (msg) {
         }
         figma.ui.postMessage({
           id: id,
-          error: typeof errObj === 'string' ? errObj : errObj.error || errObj.message || 'Unknown error',
-          result: typeof errObj === 'object' ? errObj : undefined,
+          error: errObj,
         });
       });
     } else {
@@ -1786,8 +1795,7 @@ figma.ui.onmessage = function (msg) {
     }
     figma.ui.postMessage({
       id: id,
-      error: typeof errObj === 'string' ? errObj : errObj.error || errObj.message || 'Unknown error',
-      result: typeof errObj === 'object' ? errObj : undefined,
+      error: errObj,
     });
   }
 };
