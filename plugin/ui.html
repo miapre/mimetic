@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 120px; height: 28px; overflow: hidden; background: transparent; }
+    .badge {
+      width: 120px;
+      height: 28px;
+      background: rgba(15, 17, 23, 0.82);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    .dot.connected    { background: #22c55e; }
+    .dot.connecting   { background: #f59e0b; }
+    .dot.disconnected { background: #ef4444; }
+    .label {
+      font-family: 'JetBrains Mono', 'Fira Code', 'Menlo', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      color: #e5e5e5;
+      letter-spacing: 0.02em;
+    }
+  </style>
+</head>
+<body>
+  <div class="badge">
+    <div class="dot connecting" id="dot"></div>
+    <span class="label" id="label">Mimic AI...</span>
+  </div>
+
+  <script>
+    const dot = document.getElementById('dot');
+    let ws = null;
+
+    const labels = { connected: 'Mimic AI: On', connecting: 'Mimic AI...', disconnected: 'Mimic AI: Off' };
+
+    function setState(state) {
+      dot.className = 'dot ' + state;
+      document.getElementById('label').textContent = labels[state];
+    }
+
+    function connect() {
+      setState('connecting');
+      // Port must match bridge.js BRIDGE_PORT (default 3055). Plugin cannot read env vars.
+      ws = new WebSocket('ws://localhost:3055');
+
+      ws.onopen = () => {
+        setState('connected');
+        parent.postMessage({ pluginMessage: { type: '__bridge_connected' } }, '*');
+      };
+
+      ws.onclose = () => {
+        setState('disconnected');
+        parent.postMessage({ pluginMessage: { type: '__bridge_disconnected' } }, '*');
+        setTimeout(connect, 3000);
+      };
+
+      ws.onerror = (e) => { console.error('[Mimic AI] WebSocket error', e); };
+
+      ws.onmessage = event => {
+        try {
+          const msg = JSON.parse(event.data);
+          parent.postMessage({ pluginMessage: msg }, '*');
+        } catch (e) {}
+      };
+    }
+
+    window.onmessage = event => {
+      const msg = event.data?.pluginMessage;
+      if (!msg || msg.type === '__bridge_connected' || msg.type === '__bridge_disconnected') return;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    };
+
+    connect();
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "Mimic AI",
+  "id": "mimic-ai",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "permissions": ["teamlibrary"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Connects to the local Mimic AI bridge server (default port 3055) to receive design instructions."
+  }
+}
