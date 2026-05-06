@@ -56,7 +56,9 @@ Intelligence flows down, enforcement flows up. The MCP layer resolves the right 
 ```
 mcp.js                    — Entry point, MCP protocol, tool registry
 src/
-  bridge.js               — Embedded HTTP/WS bridge, auto-lifecycle
+  bridge.js               — Embedded HTTP/WS bridge, auto-lifecycle,
+                            keepalive ping every 15s, auto-reconnect
+                            with 3-attempt backoff, pending-op queue
   tools/
     status.js             — mimic_status, mimic_discover_ds
     ds-setup.js           — preload_styles, preload_variables, session_defaults,
@@ -91,6 +93,12 @@ src/
                             three-trigger model
     gaps.js               — Gap tracking, evidence accumulation,
                             savings estimation, recommendation generation
+  charts/
+    calculator.js         — Chart math engine: bar scaling, donut angles,
+                            SVG path generation, radar trig, scatter positioning.
+                            All geometry computed in Node.js, never by the LLM.
+                            Input: data + chart type + dimensions.
+                            Output: exact coordinates, SVG strings, arc angles.
   utils/
     html-parser.js        — HTML analysis, view detection, CSS extraction
     figma-types.js        — CSS → Figma property mapping reference
@@ -123,7 +131,18 @@ Users can also describe screens ("build a dashboard") and Mimic discovers the DS
 
 ## 3. DS Enforcement Hierarchy
 
-Enforcement is in the Figma plugin — the last gate before anything touches the canvas. The hierarchy is strict:
+Enforcement is in the Figma plugin — the last gate before anything touches the canvas. **Enforcement is graduated, not binary.** Phase 2 inventories what the DS actually provides, and the plugin adapts its enforcement per-category. A DS with text styles but no color variables enforces text styles and accepts raw colors. The first build must always produce output.
+
+### How Graduated Enforcement Works
+
+During Phase 2 (Style & Variable Inventory), the MCP server catalogs what the DS has:
+- Text styles present? → `enforceTextStyles: true`
+- Typography variables present (no text styles)? → `enforceTypographyVars: true`
+- Color variables present? → `enforceColorVars: true`
+- Spacing variables present? → `enforceSpacingVars: true`
+- Radius variables present? → `enforceRadiusVars: true`
+
+This enforcement profile is sent to the plugin via `set_session_defaults`. The plugin gate checks each category independently.
 
 ### Tier 1: Components (always prefer)
 
@@ -131,29 +150,29 @@ If the DS has a component for the element, **use it** — even if the component 
 
 Missing features (like an icon slot that doesn't exist) are not blockers. Use the component, configure what you can, note the gap in the report.
 
-### Tier 2: Text and Color (non-negotiable)
+### Tier 2: Text and Color (enforced when DS provides them)
 
-Every text node gets a DS text style (or typography variables) AND a DS color variable for its fill. Every frame/shape fill gets a DS color variable. Every stroke gets a DS color variable.
+**When the DS has text styles/typography variables:** every text node must use them. Plugin rejects `create_text` without DS text style.
 
-**No exceptions.** Not charts, not grid lines, not dividers, not decorative dots. If the DS has text styles and color variables, nothing escapes them.
+**When the DS has color variables:** every fill and stroke must use them. Plugin rejects `create_frame` fill without DS color variable.
 
-Plugin behavior:
-- `create_text` without DS text style → **hard reject** with available styles listed
-- `create_text` without DS text color variable → **hard reject** with available text color variables listed
-- `create_frame` with fill but no DS color variable → **hard reject** with available bg variables listed
+**When the DS lacks text styles:** accept raw text properties, flag every instance in the build report. "Your DS has no text styles. Adding them would enable consistent typography across builds."
 
-### Tier 3: Spacing and Radius (best-effort)
+**When the DS lacks color variables:** accept raw hex, flag every instance. "Your DS has no color variables. Adding them would enable mode switching (light/dark) and consistent theming."
+
+The enforcement adapts to the DS. The report always shows what's missing and what it would unlock.
+
+### Tier 3: Spacing and Radius (best-effort, always)
 
 Bind padding, gap, and corner radius to DS variables when available. If the DS doesn't have spacing or radius tokens, accept raw values and flag in the build report as a DS gap recommendation.
 
-Plugin behavior:
-- Spacing/radius without DS variable → **accept**, tag as `raw_fallback` for report
-
-### Tier 4: Auto-layout (structural requirement)
+### Tier 4: Auto-layout (structural requirement, always enforced)
 
 Every frame uses auto-layout. Widths are FILL (expand to parent), heights are HUG (shrink to content). Fixed width only for the artboard (1440px).
 
 Cards in a row: all FILL width. Table columns: at least one FILL. Content sections: FILL width, HUG height.
+
+This is structural, not DS-dependent. Enforced regardless of what the DS provides.
 
 ### Error Format
 
@@ -163,7 +182,7 @@ Every plugin rejection includes a recovery path:
 {
   "error": "DS_REQUIRED",
   "property": "textStyle",
-  "message": "Text node requires a DS text style",
+  "message": "Text node requires a DS text style (your DS has 24 text styles)",
   "available": ["Display xl/Semibold", "Text sm/Regular", "Text xs/Medium"],
   "recovery": "Pass textStyleId with one of the available styles"
 }
@@ -171,9 +190,13 @@ Every plugin rejection includes a recovery path:
 
 No dead ends. The LLM always knows what to do next.
 
-### Component-Only DS Exception
+### First Build Always Succeeds
 
-When the DS has components but zero published variables/styles, Tier 2 and 3 open for raw values on primitives. Components carry their own internal styles and render correctly. The build report includes a Token Gap section recommending the user add variable collections.
+Even if the DS has zero tokens (component-only library), the first build produces a complete artboard using whatever the DS provides. Components are used where available. Raw values fill the gaps. The build report then shows exactly what's missing:
+
+> "Built with 12 DS components. 47 text nodes used raw font properties (no text styles in DS). 23 fills used raw hex (no color variables in DS). Adding text styles and color variables would enable full DS compliance, mode switching, and consistent theming across builds."
+
+The tool demonstrates value first, then recommends improvements. Never block the first build.
 
 ---
 
@@ -362,7 +385,13 @@ Gaps accumulate evidence across builds. The build report surfaces them ranked by
 - Map HTML font sizes → DS text styles
 - Map DS color variables by semantic category (text, background, border, icon/foreground)
 - Map spacing and radius variables (note which are available vs missing)
-- Result: complete lookup table for Phase 3
+- **Build enforcement profile** based on what the DS actually has:
+  - `enforceTextStyles`: true if DS has text styles or typography variables
+  - `enforceColorVars`: true if DS has color variables
+  - `enforceSpacingVars`: true if DS has spacing variables
+  - `enforceRadiusVars`: true if DS has radius variables
+- Send enforcement profile to plugin via `set_session_defaults`
+- Result: complete lookup table for Phase 3 + enforcement profile
 
 ### Phase 3 — Build
 
@@ -424,7 +453,15 @@ No screenshots. LLM visual comparison was unreliable in v1 — it said "looks go
 
 Screenshots remain available as a tool (`get_screenshot`) for users to request manually, but they are not part of the automated QA phase.
 
-### Phase 5 — Report & Learn
+### Phase Enforcement (MCP layer)
+
+The MCP server tracks the current build phase mechanically. This is not advisory — it's enforced:
+
+- Phase 3 tools (`create_frame`, `create_text`, `insert_component`, etc.) return an error if Phase 1 (discovery) and Phase 2 (inventory) haven't completed: "DS Discovery not complete. Call mimic_discover_ds first."
+- Phase 5 tools (`generate_build_report`) return an error if no artboard was created in Phase 3.
+- `mimic_status` always returns the current phase and what to do next.
+
+This prevents the LLM from skipping phases under working memory pressure. The enforcement is lightweight — a single phase counter in the MCP session state, reset on each new build. Not the v1 sprawl of 7 independent boolean flags.
 
 **Save to knowledge store:**
 - New component recipes (from first-time configurations)
@@ -518,49 +555,39 @@ Tool responses replace rules. Examples:
 
 ---
 
-## 9. Chart Building — Native Only
+## 9. Chart Building — Native with Calculation Layer
 
-No `figma_create_chart` convenience tool. Charts use the same primitives as everything else.
+No `figma_create_chart` convenience tool. Charts use the same primitives as everything else. **All chart math is computed in Node.js (`src/charts/calculator.js`), never by the LLM.** The LLM provides data + chart type + dimensions. The calculator returns exact coordinates, SVG strings, and arc angles. The LLM passes these to the plugin.
 
-**Per chart type:**
+**Why:** LLMs cannot reliably perform floating-point geometry (angle accumulation, trig, SVG bezier paths). The pre-mortem identified this as a critical failure mode — donuts summing to 340°, bars at wrong heights, radar polygons lopsided. Moving math to Node.js makes chart correctness a testable code path.
 
-**Bar chart (vertical/horizontal/stacked):**
-- HORIZONTAL auto-layout frame with column frames per bar
-- Each column: VERTICAL, `primaryAxisAlignItems: MAX` (bottom-align)
-- Bar = frame with height scaled to data: `height = (value / maxValue) * chartAreaHeight`
-- DS fill variable per bar, DS text style on all labels
-- Bars use `layoutGrow: 1` for even distribution
+**How it works:**
+1. LLM extracts chart data from HTML (labels, values, chart type)
+2. LLM calls an MCP tool (e.g., `mimic_compute_chart`) with data + chart type + dimensions
+3. MCP server computes all geometry in `calculator.js` and returns: exact pixel positions, SVG path strings, arc angles, bar heights
+4. LLM calls standard build tools (`create_frame`, `create_svg`, `create_ellipse`, `create_text`) with the pre-computed values
+5. All text uses DS text styles, all fills use DS color variables — same enforcement as everything else
 
-**Donut/Pie chart:**
-- `create_ellipse` per segment with `arcData: { startingAngle, endingAngle, innerRadius }`
-- Angles in radians, cumulative: `startAngle = sum(previous) * 2π / total`
-- Each segment: DS `fillVariable`
-- Legend: auto-layout frame with dot + label per item
-- Donut: `innerRadius: 0.65`. Pie: `innerRadius: 0`
+**Per chart type — what the calculator returns:**
 
-**Line/Area chart:**
-- Structure: Y-axis labels + plot area + X-axis labels
-- Line: `create_svg` with `<path d="M x1,y1 C cx1,cy1 cx2,cy2 x2,y2 ...">`
-- After SVG import: walk children, apply `strokeVariable` for DS color
-- Area fill: SEPARATE SVG with `fill-opacity` — do NOT apply `fillVariable` (overrides opacity)
-- Data dots: `create_ellipse` at each data point
+**Bar chart:** Array of `{ x, y, width, height }` per bar, scaled to `chartAreaHeight`. Labels array with positions.
 
-**Scatter/Bubble:**
-- `create_ellipse` per data point in a `layoutMode: 'NONE'` container
-- Position via `x`/`y` coordinates
-- Each: DS `fillVariable`, size = data dimension for bubbles
+**Donut/Pie:** Array of `{ startingAngle, endingAngle, innerRadius }` per segment, in radians. Cumulative, sums to exactly 2π. Legend items with labels.
 
-**Radar/Spider:**
-- Vertices: `x = cx + (value/max) * r * cos(angle - π/2)`, `y = cy + (value/max) * r * sin(angle - π/2)`
-- Grid: SVG with concentric hexagonal rings + axis lines
-- Data: SVG polygon from vertex positions
-- Labels: native `create_text` positioned at each vertex
-- Post-import: apply DS color variables to vectors
+**Line/Area:** Complete SVG `<path>` string with cubic bezier commands. Data point coordinates for dots. Axis label positions.
 
-**Heatmap:**
-- Grid of `create_frame` rows, each containing `create_frame` cells
-- Cell fill: DS color variable mapped from intensity to color scale (e.g., brand-50 through brand-600)
-- Auto-layout rows, cells use `layoutGrow: 1` to fill
+**Scatter/Bubble:** Array of `{ x, y, radius }` per point, normalized to plot area dimensions.
+
+**Radar/Spider:** Vertex coordinates per data series (trig pre-computed). Grid ring SVG strings. Axis label positions around the polygon.
+
+**Heatmap:** Grid of `{ row, col, fillIntensity }` mapped to a color scale index.
+
+**What the LLM still does:**
+- Reads the HTML to extract chart data and type
+- Calls the calculator with the right parameters
+- Creates Figma nodes with the returned values
+- Applies DS text styles and color variables to every node
+- Builds the chart container (card wrapper, title, legend) using standard build tools
 
 **Grid lines in all chart types:**
 - Horizontal reference lines: 1px stroke
@@ -640,8 +667,34 @@ Carried from v1 in full. See `docs/v1-VOICE_AND_TONE.md` for the complete refere
 3. **No retry cascades.** Generous timeouts (45s+ for cold imports). Cache failures. Two attempts max.
 4. **No governance sprawl.** ~8 core rules in CLAUDE.md. Intelligence in tool responses.
 5. **No version churn without testing.** Ship when it works, not when we've patched enough.
-6. **No session state flags.** Phases are sequential. If Phase 5 runs, Phase 0-4 happened.
-7. **No monolith files.** Each source file has one responsibility. The plugin is thin.
+6. **No monolith files.** Each source file has one responsibility. The plugin is thin.
+7. **No LLM math.** Chart geometry, SVG paths, angle calculations — all in Node.js. The LLM passes data, receives coordinates.
+8. **No binary enforcement.** Graduated per-category based on what the DS actually provides. First build always produces output.
+
+---
+
+## 15. Pre-Mortem Findings (2026-05-06)
+
+A 7-agent pre-mortem was run against this spec. Full report: `internal/research/premortem-report-20260506.html`.
+
+**Critical risks identified and addressed:**
+- Plugin enforcement too rigid → Graduated enforcement (Section 3)
+- LLM can't do chart math → Calculation layer in Node.js (Section 9)
+- LLM skips phases on complex builds → Phase enforcement in MCP (Section 6)
+- WebSocket drops during long builds → Keepalive + auto-reconnect (Section 1)
+- First build fails on imperfect DSs → First build always succeeds (Section 3)
+
+**Risks acknowledged but not fully mitigable in v2:**
+- Component matching relies on naming conventions — mitigated by learning loop (corrections cache)
+- Setup is complex for non-technical designers — mitigated by install script + documentation
+- Learning loop requires repeated use — mitigated by making single builds valuable on their own
+
+**Pre-build validation checklist:**
+1. Chart math: test all chart types with known data
+2. Imperfect DS: test 4 DS configurations (full tokens, components only, partial tokens, community library)
+3. Complex build: 12 sections, 3 chart types, 20+ components — run 3 times
+4. WebSocket: 5+ minute build, 200+ calls, simulated drop
+5. Onboarding: non-technical designer attempts full setup from zero
 
 ---
 
