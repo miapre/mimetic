@@ -339,8 +339,8 @@ Gaps accumulate evidence across builds. The build report surfaces them ranked by
 - Scan target for existing artboards → calculate placement (rightmost.x + width + 80px, or x:0 if empty)
 - Detect HTML color scheme (dark/light) → set variable mode on artboard after creation
 - Load knowledge store
-- Create artboard: 1440px wide FIXED, auto-layout VERTICAL, HUG height, clipsContent: true
-- Content container inside artboard: 1280px max-width, centered
+- Create artboard: 1440px wide FIXED, auto-layout VERTICAL, HUG height, `clipsContent: true`, `counterAxisAlignItems: 'CENTER'`
+- Create content container inside artboard: FILL width, `maxWidth: 1280`, HUG height, auto-layout VERTICAL, padding 24px (DS spacing variable if available). All build content goes inside this container.
 
 ### Phase 1 — DS Discovery
 
@@ -431,10 +431,9 @@ Full report: [path].
 
 ## 7. Artboard Rules
 
-- **Width:** Always 1440px FIXED — the only fixed-width element in the entire build
-- **Content container:** 1280px max-width, centered (auto-margins via parent `counterAxisAlignItems: CENTER`)
-- **Height:** HUG — grows with content
-- **All nodes are children of the artboard.** Nothing placed on the canvas root.
+- **Artboard:** Always 1440px FIXED width — the only fixed-width element in the entire build. Auto-layout VERTICAL, HUG height, `clipsContent: true`.
+- **Content container:** Every artboard has an immediate child frame that acts as the content wrapper: FILL width, `maxWidth: 1280`, HUG height, auto-layout VERTICAL, centered via artboard's `counterAxisAlignItems: 'CENTER'`. Padding 24px (or closest DS spacing variable). All page content goes inside this container — sections, cards, tables, charts, everything. This maps to the standard CSS pattern `max-width: 1280px; margin: 0 auto; padding: 0 24px`.
+- **All nodes are children of the content container.** Nothing placed directly on the artboard root (except the content container itself) and nothing on the canvas root.
 - **Placement:** If target has existing artboards, new artboard goes at `rightmost.x + rightmost.width + 80px`. Empty target: `x: 0, y: 0`.
 - **Variable mode:** Set on artboard after creation (light or dark, matching HTML color scheme)
 - **Iteration:** User feedback → edit existing artboard in place. Never delete artboards. New artboard only for new screens.
