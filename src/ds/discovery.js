@@ -10,6 +10,47 @@ class DsDiscovery {
     this.bridge = bridge;
     this.dsCache = dsCache;
     this.knowledgeStore = knowledgeStore;
+    this.selectedLibraryKey = null;
+  }
+
+  /**
+   * Set the selected library key. Once set, all searches filter to this library.
+   * @param {string} libraryKey
+   */
+  setLibrary(libraryKey) {
+    this.selectedLibraryKey = libraryKey;
+  }
+
+  /**
+   * Extract unique library names and keys from search results.
+   * Each result is expected to have `libraryName` and `libraryKey` fields
+   * (populated by the Figma MCP search_design_system response).
+   *
+   * @param {Array<{ libraryName?: string, libraryKey?: string }>} searchResults
+   * @returns {Array<{ name: string, libraryKey: string }>}
+   */
+  detectLibraries(searchResults) {
+    const seen = new Map();
+    for (const r of searchResults) {
+      const key = r.libraryKey;
+      const name = r.libraryName;
+      if (key && !seen.has(key)) {
+        seen.set(key, { name: name || 'Unknown', libraryKey: key });
+      }
+    }
+    return Array.from(seen.values());
+  }
+
+  /**
+   * Filter search results to only the selected library.
+   * If no library is selected, returns all results unchanged.
+   *
+   * @param {Array<{ libraryKey?: string }>} searchResults
+   * @returns {Array}
+   */
+  filterByLibrary(searchResults) {
+    if (!this.selectedLibraryKey) return searchResults;
+    return searchResults.filter(r => r.libraryKey === this.selectedLibraryKey);
   }
 
   /**
@@ -17,10 +58,10 @@ class DsDiscovery {
    * Calls bridge to get plugin's view of the library.
    */
   async enumerateLibrary() {
-    const status = await this.bridge.send('get_plugin_status');
-    if (!status.connected) {
+    if (!this.bridge.connected) {
       throw new Error('Plugin not connected. Open Figma, go to Plugins → Development → Mimic AI → Run.');
     }
+    const status = await this.bridge.send('get_plugin_status');
 
     // The actual library enumeration happens via the Figma MCP (read channel)
     // or via the plugin's local variable/style enumeration.
@@ -60,10 +101,34 @@ class DsDiscovery {
     // Generate search terms for the element type
     const searchTerms = this.getSearchTerms(elementType);
 
-    // Search dsCache.components
+    // Collect all matching components from dsCache
+    const matches = [];
     for (const [key, component] of this.dsCache.components) {
       const name = (component.name || '').toLowerCase();
       if (searchTerms.some(term => name.includes(term))) {
+        matches.push({ key, component });
+      }
+    }
+
+    // Check for multiple libraries before filtering
+    if (matches.length > 0) {
+      const libraries = this.detectLibraries(matches.map(m => m.component));
+      if (libraries.length > 1 && !this.selectedLibraryKey) {
+        return {
+          found: false,
+          multipleLibraries: true,
+          libraries,
+          message: 'Multiple DS libraries detected. Which one is your design system?',
+        };
+      }
+
+      // Filter to selected library
+      const filtered = this.selectedLibraryKey
+        ? matches.filter(m => m.component.libraryKey === this.selectedLibraryKey)
+        : matches;
+
+      if (filtered.length > 0) {
+        const { key, component } = filtered[0];
         return {
           found: true,
           componentKey: key,
@@ -129,7 +194,12 @@ class DsDiscovery {
   buildComponentMap(elementTypes) {
     const map = {};
     for (const type of elementTypes) {
-      map[type] = this.searchComponent(type);
+      const result = this.searchComponent(type);
+      // If any search triggers the multi-library prompt, return it immediately
+      if (result.multipleLibraries) {
+        return result;
+      }
+      map[type] = result;
     }
     return map;
   }
