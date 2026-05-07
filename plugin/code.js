@@ -319,9 +319,9 @@ handlers.create_frame = function (payload) {
   // Clip
   if (typeof payload.clipsContent === 'boolean') frame.clipsContent = payload.clipsContent;
 
-  // Position
-  if (typeof payload.x === 'number') frame.x = payload.x;
-  if (typeof payload.y === 'number') frame.y = payload.y;
+  // Position — deferred to after appendChild
+  var deferX = payload.x;
+  var deferY = payload.y;
 
   // ── DS Variable Bindings ──
 
@@ -419,6 +419,10 @@ handlers.create_frame = function (payload) {
     frame.layoutSizingHorizontal = deferSizingH;
     frame.layoutSizingVertical = deferSizingV;
   } catch (e) { /* Page root — sizing not applicable */ }
+
+  // Apply position AFTER appendChild
+  if (typeof deferX === 'number') frame.x = deferX;
+  if (typeof deferY === 'number') frame.y = deferY;
 
   return {
     nodeId: frame.id,
