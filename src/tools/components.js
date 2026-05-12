@@ -49,7 +49,10 @@ function register(server, context) {
         result = await bridge.send('insert_component', insertArgs, 180000);
       } catch (err) {
         const isTimeout = err.message && err.message.includes('timeout');
-        dsCache.markFailed(args.componentKey);
+        if (!isTimeout) {
+          // Only mark permanent failures — timeouts may have succeeded in the plugin
+          dsCache.markFailed(args.componentKey);
+        }
         if (isTimeout) {
           return {
             error: 'INSERT_TIMEOUT',

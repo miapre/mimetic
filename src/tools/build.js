@@ -9,7 +9,7 @@ const PHASE_HINT = 'Complete DS Discovery and Style Inventory first (call mimic_
 const COMPONENT_FIRST_PATTERNS = [
   'header', 'footer', 'sidebar', 'sidenav', 'navigation', 'navbar',
   'top bar', 'bottom bar', 'nav bar', 'app bar',
-  'button', 'card', 'table', 'input', 'textfield', 'text field',
+  'button', 'input', 'textfield', 'text field',
   'tab', 'tabs', 'badge', 'chip', 'tag', 'pill',
 ];
 

@@ -151,8 +151,11 @@ function register(server, context) {
       } = args;
 
       const totalInstances = components.reduce((sum, c) => sum + (c.instances || 0), 0);
+      // Primitives with a reason are intentional (no DS component exists) — don't penalize them
+      const unjustifiedPrimitives = primitives.filter(p => !p.reason || p.reason.length < 10);
       const totalBuiltElements = totalInstances + primitives.length;
-      const componentUsageRatio = totalBuiltElements > 0 ? totalInstances / totalBuiltElements : 1;
+      const penalizedElements = totalInstances + unjustifiedPrimitives.length;
+      const componentUsageRatio = penalizedElements > 0 ? totalInstances / penalizedElements : 1;
       const componentUsagePercent = Math.round(componentUsageRatio * 100);
       const componentQualityGate = componentUsageRatio >= 0.8 ? 'PASS' : 'FAIL';
       const componentNames = components.map((c) => c.name).join(', ');
@@ -178,8 +181,13 @@ function register(server, context) {
         lines.push('');
       }
 
+      const justifiedCount = primitives.length - unjustifiedPrimitives.length;
       lines.push(`## Component-First Quality: ${componentQualityGate} (${componentUsagePercent}% component usage)`);
       lines.push('');
+      if (justifiedCount > 0) {
+        lines.push(`${justifiedCount} of ${primitives.length} primitive(s) are justified (no DS component exists). Only ${unjustifiedPrimitives.length} unjustified primitive(s) counted against the quality gate.`);
+        lines.push('');
+      }
       if (componentQualityGate === 'FAIL') {
         lines.push('Component usage is below the 80% minimum quality gate. Future builds should resolve missing elements with `mimic_map_components`, library search, and `figma_insert_component` before using primitives.');
         lines.push('');
