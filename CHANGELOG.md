@@ -30,6 +30,19 @@ Complete rewrite from scratch.
 - ~20 focused source files (was 1 x 203KB monolith)
 - 75 automated tests (was 31)
 
+### 2.0.0-alpha.5 (2026-05-13)
+
+#### Font-incompatible library handling
+- `figma_insert_component` detects font loading errors (`unloaded font`, `loadFontAsync`) and returns structured `LIBRARY_FONT_INCOMPATIBLE` error instead of throwing
+- Sets `libraryFontIncompatible` flag on the DS cache — persists for the session, resets on `clear()`
+- `figma_create_frame` component-first gate auto-bypasses when flag is set — no more `confirmedNoComponent` + `primitiveOverrideReason` needed on every frame
+- `mimic_status` exposes the flag in `dsCache.libraryFontIncompatible`
+
+#### Variable source mismatch warning
+- After library selection, `mimic_discover_ds` checks if the selected library has any variables cached from the file
+- If no variables belong to the selected library, `completenessWarnings` includes a `VARIABLE SOURCE MISMATCH` warning listing which libraries actually provide the tokens
+- Prevents silent builds where components come from one library but all styling comes from another
+
 ### 2.0.0-alpha.3 (2026-05-13)
 
 #### Community library detection enforced at tool level
