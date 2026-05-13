@@ -68,9 +68,22 @@ function register(server, context) {
         session._pendingInserts.delete(dedupKey);
       } catch (err) {
         const isTimeout = err.message && err.message.includes('timeout');
+        const isFontError = err.message && /unloaded font|loadFontAsync|font.*not.*loaded/i.test(err.message);
         if (!isTimeout) {
           // Only mark permanent failures — timeouts may have succeeded in the plugin
           dsCache.markFailed(args.componentKey);
+        }
+        if (isFontError && !dsCache.libraryFontIncompatible) {
+          dsCache.libraryFontIncompatible = true;
+        }
+        if (isFontError) {
+          return {
+            error: 'LIBRARY_FONT_INCOMPATIBLE',
+            componentKey: args.componentKey,
+            message: `Component requires a font not loaded in this file. All components from this library will fail to import.`,
+            libraryFontIncompatible: true,
+            hint: 'The selected DS library requires fonts not available in this file. Component-first enforcement has been automatically disabled for the rest of this build. You can now create frames with component-like names without confirmedNoComponent/primitiveOverrideReason — the gate will auto-bypass.',
+          };
         }
         if (isTimeout) {
           // Track the timed-out insert so retries are blocked

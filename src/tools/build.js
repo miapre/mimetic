@@ -19,9 +19,19 @@ function getComponentFirstMatch(name) {
   return COMPONENT_FIRST_PATTERNS.find(p => lower.includes(p));
 }
 
-function checkComponentFirstGate(args) {
+function checkComponentFirstGate(args, dsCache) {
   const match = getComponentFirstMatch(args?.name);
   if (!match) return null;
+
+  // Auto-bypass when the selected library's components can't be imported (e.g. missing fonts).
+  // Once a font error is detected, all component-first enforcement is moot — every insert will fail.
+  if (dsCache && dsCache.libraryFontIncompatible) {
+    return {
+      allowed: true,
+      match,
+      warning: `Component-first gate auto-bypassed for "${args.name}" (${match}): library font incompatible — all components from this library fail to import.`,
+    };
+  }
 
   const confirmed = args.confirmedNoComponent === true;
   const reason = typeof args.primitiveOverrideReason === 'string'
@@ -140,7 +150,7 @@ function register(server, context) {
     },
     async (args) => {
       requirePhase(2, PHASE_HINT);
-      const componentGate = checkComponentFirstGate(args);
+      const componentGate = checkComponentFirstGate(args, dsCache);
       if (componentGate && !componentGate.allowed) {
         return componentGate;
       }

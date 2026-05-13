@@ -221,6 +221,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           variables: dsCache.variables.size,
           components: dsCache.components.size,
           failedKeys: dsCache.failedKeys.size,
+          libraryFontIncompatible: dsCache.libraryFontIncompatible,
         },
       };
       // Merge checkpoint into result

@@ -4,6 +4,7 @@ class DsCache {
     this.variables = new Map();
     this.components = new Map();
     this.failedKeys = new Set();
+    this.libraryFontIncompatible = false;
   }
 
   addTextStyle(key, style) { this.textStyles.set(key, style); }
@@ -108,6 +109,7 @@ class DsCache {
     this.variables.clear();
     this.components.clear();
     this.failedKeys.clear();
+    this.libraryFontIncompatible = false;
   }
 }
 module.exports = { DsCache };

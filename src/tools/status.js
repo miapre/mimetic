@@ -301,6 +301,26 @@ function register(server, context) {
         session.pendingCommunityCheck = false;
         advancePhase(2);
 
+        // Check if the selected library has variables/styles in the file.
+        // Variables and text styles come from whatever libraries are enabled
+        // in the file, NOT necessarily from the selected library. If the
+        // selected library contributed no variables, the build will use
+        // another library's tokens — warn about the mismatch.
+        let selectedLibVarCount = 0;
+        const varSourceLibs = new Set();
+        for (const [, v] of dsCache.variables) {
+          if (v.libraryName) varSourceLibs.add(v.libraryName);
+          if (v.libraryName === session.selectedLibraryKey) selectedLibVarCount++;
+        }
+        if (selectedLibVarCount === 0 && variablesCached > 0) {
+          const sourceList = [...varSourceLibs].join(', ');
+          completenessWarnings.push(
+            `⚠ VARIABLE SOURCE MISMATCH: "${session.selectedLibraryKey}" has NO variables imported in this file. ` +
+            `All ${variablesCached} cached variables come from: ${sourceList}. ` +
+            `Components will be imported from "${session.selectedLibraryKey}", but all color/spacing/radius bindings will use tokens from ${sourceList}.`
+          );
+        }
+
         return {
           phase: session.phase,
           phaseLabel: PHASE_LABELS[session.phase],
