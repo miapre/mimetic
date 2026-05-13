@@ -42,59 +42,44 @@ Every build follows 6 phases in order:
 Call `mimic_status` to start. It returns the current state
 and what to do next.
 
-## Phase 1+2 — DS Discovery (ONE CALL)
+## Phase 1+2 — DS Discovery (TWO CALLS)
 
+Discovery is a two-step process that ensures community
+libraries are never missed:
+
+**Step 1 — Plugin discovery:**
 ```
 mimic_discover_ds(fileKey)
 ```
+Discovers variables, text styles, and components via the
+Figma plugin API. Caches everything and computes enforcement
+profile. Stays at Phase 1 (NOT build-ready yet).
 
-This single call does everything:
-1. Discovers all variables from enabled libraries
-2. Discovers all text styles (local + library)
-3. Discovers all components on the page
-4. Preloads variables into the plugin cache
-5. Computes enforcement profile (strict/permissive)
-6. Advances to Phase 2 (build-ready)
+The response includes `communityLibraryCheckRequired: true`
+and `_stopBuild: true`. Build tools are blocked at Phase 1.
 
-If multiple DS libraries are detected, discovery STOPS and
-returns `_userPrompt` with a lettered list (A, B, C...).
-Present this prompt to the user EXACTLY as written — do NOT
-proceed with the build. Wait for the user to pick a letter,
-then re-call `mimic_discover_ds` with `libraryKey` set to
-the chosen library's name from the `options` array.
+If multiple DS libraries are detected by the plugin, discovery
+STOPS with `_userPrompt`. Present the prompt to the user
+EXACTLY as written, wait for their pick, then re-call with
+`libraryKey`.
 
-## Community Library Detection
-
-After `mimic_discover_ds` completes, verify there are no
-additional DS libraries the plugin missed. The Figma plugin
-API cannot detect community libraries — only the Figma REST
-API (via Figma MCP) can see them.
-
-**MANDATORY after every discovery:** Call Figma MCP
-`search_design_system` with query `"color"` and
+**Step 2 — Community library check:**
+Call Figma MCP `search_design_system` with query `"color"`,
 `includeVariables: true, includeComponents: false,
-includeStyles: false` on the fileKey. Check the `libraryName`
-values in the results. If ANY library appears that was NOT
-in `mimic_discover_ds`'s `discoveredLibraries`, STOP and
-present the user with a lettered list of ALL libraries
-(plugin-detected + search-detected) and ask which one to
-use. Format:
-
+includeStyles: false` on the fileKey. Collect all unique
+non-null `libraryName` values from the results. Then:
 ```
-Multiple design system libraries detected on this file.
-Which one should I use for this build?
-
-A) LayerLens Theme (6 collections)
-B) Material UI for Figma (detected via search)
-
-Reply with the letter (e.g. "use A").
+mimic_discover_ds(fileKey, {
+  communitySearchResults: ["LibraryA", "LibraryB", ...]
+})
 ```
+The tool compares search results against plugin-detected
+libraries. If new libraries are found, it returns a
+`_userPrompt` with a lettered list. If no new libraries,
+it advances to Phase 2 (build-ready).
 
-Then re-call `mimic_discover_ds` with `libraryKey` set to
-the chosen library name. If the chosen library was only
-detected via search (community library), discovery will
-use the plugin-detected variables and supplement with
-search results as needed.
+This check is **enforced by the tool** — build tools require
+Phase 2, which only unlocks after community verification.
 
 Check `completenessWarnings` in the response. If components
 were not found on the page, use Figma MCP

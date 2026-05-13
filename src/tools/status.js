@@ -73,22 +73,102 @@ function register(server, context) {
   // ── mimic_discover_ds ─────────────────────────────────────────
   registerTool(
     'mimic_discover_ds',
-    'Complete DS discovery in one call. Discovers variables, text styles, and components from the file\'s enabled libraries. Preloads everything into cache and plugin. Computes enforcement profile. Advances to Phase 2 (build-ready). If multiple DS libraries are detected, returns a prompt — re-call with libraryKey to select one.',
+    'Complete DS discovery in two steps. Step 1: call with fileKey — discovers variables, text styles, components via plugin API, caches everything, stays at Phase 1. Step 2: call again with communitySearchResults (library names from Figma MCP search_design_system) — verifies no community libraries were missed, then advances to Phase 2 (build-ready). Build tools are BLOCKED until Step 2 completes.',
     {
       type: 'object',
       properties: {
         fileKey: { type: 'string', description: 'Figma file key to discover DS from.' },
         libraryKey: { type: 'string', description: 'Library key to use when multiple DS libraries are available. Returned from a previous call that detected multiple libraries.' },
+        communitySearchResults: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Unique library names found via Figma MCP search_design_system (query "color", includeVariables: true). Required after initial discovery to verify no community libraries were missed. Pass only non-null libraryName values.',
+        },
       },
       required: ['fileKey'],
     },
     async (args) => {
       const discovery = new DsDiscovery(bridge, dsCache, knowledgeStore);
 
-      // If a library key was provided (second call), store it
+      // ── Community check confirmation flow ──────────────────────
+      // If plugin discovery already completed and we're waiting for the
+      // community library check, handle that before re-running discovery.
+      if (session.pendingCommunityCheck && args.communitySearchResults) {
+        const pluginNames = (session.discoveredLibraries || []).map(l => l.name);
+        const searchNames = args.communitySearchResults;
+        const newLibraries = searchNames.filter(n => n && !pluginNames.includes(n));
+
+        if (newLibraries.length > 0) {
+          // New libraries found via search — prompt user with full list
+          const allNames = [...new Set([...pluginNames, ...newLibraries])];
+          const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+          const options = allNames.map((name, i) => ({
+            letter: letters[i] || String(i + 1),
+            name,
+            libraryKey: name,
+            source: pluginNames.includes(name) ? 'plugin' : 'search',
+          }));
+          const optionsList = options.map(o =>
+            `${o.letter}) ${o.name}${o.source === 'search' ? ' (detected via search)' : ''}`
+          ).join('\n');
+
+          // Reset pending so re-call with libraryKey triggers fresh discovery
+          session.pendingCommunityCheck = false;
+          session.toolCallCount++;
+
+          return {
+            phase: session.phase,
+            phaseLabel: PHASE_LABELS[session.phase],
+            fileKey: session.discoveryFileKey,
+            multipleLibraries: true,
+            options,
+            _stopBuild: true,
+            _userPrompt: `Multiple design system libraries detected on this file.\nWhich one should I use for this build?\n\n${optionsList}\n\nReply with the letter (e.g. "use A").`,
+            hint: 'STOP — community library check found additional libraries not detected by the plugin. Present _userPrompt to the user EXACTLY as written and wait for their choice. Then re-call mimic_discover_ds with libraryKey set to the chosen library name.',
+          };
+        }
+
+        // No new libraries — safe to advance to Phase 2
+        session.pendingCommunityCheck = false;
+        advancePhase(2);
+        session.toolCallCount++;
+
+        return {
+          phase: session.phase,
+          phaseLabel: PHASE_LABELS[session.phase],
+          fileKey: session.discoveryFileKey,
+          communityCheckPassed: true,
+          selectedLibraryKey: session.selectedLibraryKey || null,
+          discoveredLibraries: session.discoveredLibraries || [],
+          discovery: session.discoveryResults,
+          enforcement: session.enforcementProfile,
+          completenessWarnings: session.completenessWarnings || [],
+          hint: `Community library check passed. ${session.discoveryResults?.variables?.cached || 0} variables, ${session.discoveryResults?.textStyles?.cached || 0} text styles, ${session.discoveryResults?.components?.cached || 0} components. Enforcement: ${session.enforcementProfile?.dsMode || 'unknown'}. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`,
+        };
+      }
+
+      // If community check is pending but no search results provided, remind
+      if (session.pendingCommunityCheck && !args.libraryKey && !args.communitySearchResults) {
+        session.toolCallCount++;
+        return {
+          phase: session.phase,
+          phaseLabel: PHASE_LABELS[session.phase],
+          fileKey: session.discoveryFileKey,
+          communityLibraryCheckRequired: true,
+          _stopBuild: true,
+          discoveredLibraries: session.discoveredLibraries || [],
+          hint: `Community library check still pending. You MUST call Figma MCP search_design_system with query "color", includeVariables: true, includeComponents: false, includeStyles: false on fileKey "${session.discoveryFileKey}". Then re-call mimic_discover_ds with communitySearchResults set to the array of unique non-null libraryName values from the results.`,
+        };
+      }
+
+      // ── Normal discovery flow ─────────────────────────────────
+
+      // If a library key was provided (after multi-library prompt), store it
+      // and reset pending state so fresh discovery runs
       if (args.libraryKey) {
         discovery.setLibrary(args.libraryKey);
         session.selectedLibraryKey = args.libraryKey;
+        session.pendingCommunityCheck = false;
       } else if (session.selectedLibraryKey) {
         discovery.setLibrary(session.selectedLibraryKey);
       }
@@ -200,10 +280,6 @@ function register(server, context) {
         });
       } catch (e) { /* non-fatal */ }
 
-      // Advance to Phase 2 (build-ready)
-      advancePhase(2);
-      session.toolCallCount++;
-
       // Completeness warnings
       const completenessWarnings = [];
       if (variablesCached > 0 && variablesPreloaded < variablesCached * 0.8) {
@@ -215,6 +291,49 @@ function register(server, context) {
       if (componentsCached === 0) {
         completenessWarnings.push('No components found on page. Use Figma MCP search_design_system to find them (search: button, input, badge, table cell, tabs, avatar, dropdown, textarea).');
       }
+
+      session.toolCallCount++;
+
+      // If libraryKey was provided, the user already resolved the multi-library
+      // question (from plugin detection OR community check). Skip the community
+      // check and advance directly to Phase 2.
+      if (args.libraryKey) {
+        session.pendingCommunityCheck = false;
+        advancePhase(2);
+
+        return {
+          phase: session.phase,
+          phaseLabel: PHASE_LABELS[session.phase],
+          fileKey: args.fileKey,
+          library: libraryInfo,
+          selectedLibraryKey: session.selectedLibraryKey || null,
+          discoveredLibraries: varDiscovery.libraries || [],
+          discovery: {
+            variables: { cached: variablesCached, preloaded: variablesPreloaded },
+            textStyles: { cached: stylesCached },
+            components: { cached: componentsCached },
+          },
+          enforcement: session.enforcementProfile,
+          completenessWarnings,
+          hint: completenessWarnings.length > 0
+            ? `Discovery complete with ${completenessWarnings.length} warning(s). Review completenessWarnings. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`
+            : `Discovery complete. ${variablesCached} variables, ${stylesCached} text styles, ${componentsCached} components. Enforcement: ${dsMode}. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`,
+        };
+      }
+
+      // ── Stay at Phase 1 — community library check required ──
+      advancePhase(1);
+
+      // Store intermediate results for community check confirmation
+      session.discoveryFileKey = args.fileKey;
+      session.discoveredLibraries = varDiscovery.libraries || [];
+      session.discoveryResults = {
+        variables: { cached: variablesCached, preloaded: variablesPreloaded },
+        textStyles: { cached: stylesCached },
+        components: { cached: componentsCached },
+      };
+      session.completenessWarnings = completenessWarnings;
+      session.pendingCommunityCheck = true;
 
       return {
         phase: session.phase,
@@ -230,9 +349,9 @@ function register(server, context) {
         },
         enforcement: session.enforcementProfile,
         completenessWarnings,
-        hint: completenessWarnings.length > 0
-          ? `Discovery complete with ${completenessWarnings.length} warning(s). Review completenessWarnings. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`
-          : `Discovery complete. ${variablesCached} variables, ${stylesCached} text styles, ${componentsCached} components. Enforcement: ${dsMode}. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`,
+        communityLibraryCheckRequired: true,
+        _stopBuild: true,
+        hint: `Plugin discovery complete — ${variablesCached} variables, ${stylesCached} text styles, ${componentsCached} components cached. MANDATORY NEXT STEP: Call Figma MCP search_design_system with query "color", includeVariables: true, includeComponents: false, includeStyles: false on fileKey "${args.fileKey}". Collect all unique non-null libraryName values from the results, then re-call mimic_discover_ds with communitySearchResults set to that array. Build tools are BLOCKED until this check completes.`,
       };
     }
   );

@@ -74,6 +74,12 @@ function resetSession() {
   session.phaseToolCalls = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   session.checkpointIssued = false;
   session.bindingFailures = [];
+  // Community library check state
+  session.pendingCommunityCheck = false;
+  session.discoveryFileKey = null;
+  session.discoveredLibraries = null;
+  session.discoveryResults = null;
+  session.completenessWarnings = null;
 }
 
 // ── Tool Registry ─────────────────────────────────────────────────────
