@@ -466,6 +466,11 @@ handlers.discover_library_variables = async function (payload) {
   var libraries = {};
   var allVariables = [];
 
+  // Raw collection metadata — used by MCP server for multi-library detection
+  var _rawCollections = collections.map(function (col) {
+    return { name: col.name, libraryName: col.libraryName, key: col.key };
+  });
+
   for (var c = 0; c < collections.length; c++) {
     var col = collections[c];
     var libName = col.libraryName || 'Unknown';
@@ -493,6 +498,7 @@ handlers.discover_library_variables = async function (payload) {
     variables: allVariables,
     totalCollections: collections.length,
     totalVariables: allVariables.length,
+    _rawCollections: _rawCollections,
   };
 };
 

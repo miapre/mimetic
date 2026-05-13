@@ -108,16 +108,26 @@ function register(server, context) {
       // Multi-library gate: if >1 library and none selected, ask user
       if (!session.selectedLibraryKey && varDiscovery.libraries && varDiscovery.libraries.length > 1) {
         session.toolCallCount++;
-        const libs = varDiscovery.libraries.map(l => l.name);
+        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        const options = varDiscovery.libraries.map((lib, i) => ({
+          letter: letters[i] || String(i + 1),
+          name: lib.name,
+          libraryKey: lib.name,
+          collections: lib.collections || [],
+        }));
+        const optionsList = options.map(o => `${o.letter}) ${o.name}${o.collections.length ? ` (${o.collections.length} collections)` : ''}`).join('\n');
         return {
           phase: session.phase,
           phaseLabel: PHASE_LABELS[session.phase] || 'idle',
           fileKey: args.fileKey,
           library: libraryInfo,
           multipleLibraries: true,
+          options,
           libraries: varDiscovery.libraries,
           discoveredVariables: varDiscovery.totalVariables,
-          hint: `Multiple DS libraries detected: ${libs.join(', ')}. Ask the user which one is their design system, then re-call mimic_discover_ds with the chosen libraryKey set to the library name.`,
+          _stopBuild: true,
+          _userPrompt: `Multiple design system libraries detected on this file. Which one should I use for this build?\n\n${optionsList}\n\nReply with the letter (e.g. "use A").`,
+          hint: 'STOP — do NOT proceed with the build. Present the _userPrompt to the user EXACTLY as written and wait for their choice. Then re-call mimic_discover_ds with libraryKey set to the chosen library name from the options array.',
         };
       }
 

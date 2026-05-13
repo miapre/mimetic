@@ -294,6 +294,7 @@ function register(server, context) {
         discovered: result?.variables?.length || 0,
         totalCached: dsCache.variables.size,
         libraries: result?.libraries || [],
+        _rawCollections: result?._rawCollections || [],
         enforcement,
         hint: 'Variables discovered. Call figma_set_session_defaults to finalize enforcement and advance to build phase.',
       };
