@@ -143,7 +143,7 @@ function register(server, context) {
           discovery: session.discoveryResults,
           enforcement: session.enforcementProfile,
           completenessWarnings: session.completenessWarnings || [],
-          hint: `Community library check passed. ${session.discoveryResults?.variables?.cached || 0} variables, ${session.discoveryResults?.textStyles?.cached || 0} text styles, ${session.discoveryResults?.components?.cached || 0} components. Enforcement: ${session.enforcementProfile?.dsMode || 'unknown'}. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`,
+          hint: `Community library check passed. ${session.discoveryResults?.variables?.cached || 0} variables, ${session.discoveryResults?.textStyles?.cached || 0} text styles, ${session.discoveryResults?.components?.cached || 0} components. Enforcement: ${session.enforcementProfile?.dsMode || 'unknown'}.${session.selectedLibraryKey ? ` Selected library: "${session.selectedLibraryKey}" — ALL components and Figma MCP searches must use ONLY this library.` : ''} NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`,
         };
       }
 
@@ -315,9 +315,10 @@ function register(server, context) {
           },
           enforcement: session.enforcementProfile,
           completenessWarnings,
+          _libraryConstraint: `ALL components and Figma MCP searches must use ONLY "${session.selectedLibraryKey}". Never mix design systems.`,
           hint: completenessWarnings.length > 0
-            ? `Discovery complete with ${completenessWarnings.length} warning(s). Review completenessWarnings. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`
-            : `Discovery complete. ${variablesCached} variables, ${stylesCached} text styles, ${componentsCached} components. Enforcement: ${dsMode}. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`,
+            ? `Discovery complete with ${completenessWarnings.length} warning(s). Review completenessWarnings. Selected library: "${session.selectedLibraryKey}" — use ONLY this library for all components and searches. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`
+            : `Discovery complete. ${variablesCached} variables, ${stylesCached} text styles, ${componentsCached} components. Enforcement: ${dsMode}. Selected library: "${session.selectedLibraryKey}" — use ONLY this library for all components and searches. NEXT: Call mimic_map_components with ALL section-level elements in your design (header, footer, sidebar, etc.) to find DS components BEFORE building. Target ~90% component usage.`,
         };
       }
 

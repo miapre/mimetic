@@ -340,9 +340,10 @@ function register(server, context) {
           variantCount: c.variantCount,
           variantProperties: c.variantProperties?.map(vp => vp.name) || [],
         })),
+        selectedLibrary: session.selectedLibraryKey || null,
         hint: result?.totalFound > 0
-          ? `${result.totalFound} components discovered. Use these keys with figma_insert_component. For components not found here, use Figma MCP search_design_system to find them by name.`
-          : 'No component instances on this page. Use Figma MCP search_design_system to find library components by name (search: button, input, badge, table cell, tabs, avatar, dropdown, textarea).',
+          ? `${result.totalFound} components discovered. Use these keys with figma_insert_component. For components not found here, use Figma MCP search_design_system to find them by name.${session.selectedLibraryKey ? ` ONLY use components from "${session.selectedLibraryKey}".` : ''}`
+          : `No component instances on this page. Use Figma MCP search_design_system to find library components by name (search: button, input, badge, table cell, tabs, avatar, dropdown, textarea).${session.selectedLibraryKey ? ` ONLY use components from "${session.selectedLibraryKey}".` : ''}`,
       };
     }
   );
@@ -407,22 +408,33 @@ function register(server, context) {
       const sectionTypes = ['header', 'footer', 'sidebar', 'navigation', 'nav'];
       const missingSections = missing.filter(m => sectionTypes.some(s => m.elementType.toLowerCase().includes(s)));
 
+      // Build library filter guidance for Figma MCP searches
+      const selectedLib = session.selectedLibraryKey || null;
+      const libFilter = selectedLib
+        ? ` Filter results to ONLY "${selectedLib}" — ignore components from other libraries.`
+        : '';
+      const libSearchNote = selectedLib
+        ? `IMPORTANT: Only use components from "${selectedLib}". When calling Figma MCP search_design_system, check libraryName in results and discard any that don't match.`
+        : '';
+
       return {
         mapped: found.length,
         missing: missing.length,
+        selectedLibrary: selectedLib,
         components: found,
         notFound: missing.map(m => ({
           ...m,
-          fallbackHint: m.fallbackHint || `Search the library using Figma MCP search_design_system with terms: ${m.searchTerms.join(', ')}`,
+          fallbackHint: (m.fallbackHint || `Search the library using Figma MCP search_design_system with terms: ${m.searchTerms.join(', ')}.`) + libFilter,
         })),
         _componentFirstReminder: missing.length > 0
-          ? `Mimic targets ~90% DS component usage. ${missing.length} element type(s) were not found in page instances but may exist in the DS library. You MUST search the library via Figma MCP search_design_system before building custom frames.`
+          ? `Mimic targets ~90% DS component usage. ${missing.length} element type(s) were not found in page instances but may exist in the DS library. You MUST search the library via Figma MCP search_design_system before building custom frames.${libFilter}`
           : undefined,
         _missingSectionWarning: missingSections.length > 0
-          ? `⚠ CRITICAL: ${missingSections.map(m => m.elementType).join(', ')} — section-level elements are almost always in the DS library. Do NOT build custom frames for these without exhaustive library search.`
+          ? `⚠ CRITICAL: ${missingSections.map(m => m.elementType).join(', ')} — section-level elements are almost always in the DS library. Do NOT build custom frames for these without exhaustive library search.${libFilter}`
           : undefined,
+        ...(libSearchNote ? { _libraryConstraint: libSearchNote } : {}),
         hint: missing.length > 0
-          ? `${missing.length} element types not found in page instances. MANDATORY: Search the DS library via Figma MCP search_design_system for: ${missing.map(m => m.elementType).join(', ')}. Do not build custom frames without confirming the DS has no component.`
+          ? `${missing.length} element types not found in page instances. MANDATORY: Search the DS library via Figma MCP search_design_system for: ${missing.map(m => m.elementType).join(', ')}. Do not build custom frames without confirming the DS has no component.${libFilter}`
           : 'All element types mapped to DS components. Use the componentKey values with figma_insert_component.',
       };
     }
