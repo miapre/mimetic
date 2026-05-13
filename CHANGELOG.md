@@ -30,6 +30,16 @@ Complete rewrite from scratch.
 - ~20 focused source files (was 1 x 203KB monolith)
 - 75 automated tests (was 31)
 
+### 2.0.0-alpha.3 (2026-05-13)
+
+#### Community library detection enforced at tool level
+- `mimic_discover_ds` is now a two-step process: plugin discovery (Phase 1) → community library check (Phase 2)
+- Build tools are blocked at Phase 1 until `communitySearchResults` are provided — the LLM cannot skip the check
+- New `communitySearchResults` parameter accepts library names from Figma MCP `search_design_system`
+- If community search finds libraries the plugin missed, auto-generates a multi-library prompt with source labels (plugin vs search)
+- `libraryKey` selection after multi-library prompt advances directly to Phase 2 (no infinite loop)
+- Session state tracks pending community check across calls (`pendingCommunityCheck`, `discoveryFileKey`, `discoveredLibraries`, `discoveryResults`)
+
 ### 2.0.0-alpha.2 (2026-05-08)
 
 #### Binding feedback system
