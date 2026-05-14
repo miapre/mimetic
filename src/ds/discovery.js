@@ -199,18 +199,68 @@ class DsDiscovery {
   }
 
   /**
+   * Ingest component search results from an external source (e.g. Figma MCP
+   * search_design_system) into the dsCache so subsequent searchComponent()
+   * calls can find them.
+   *
+   * Each result must have at least { name, componentKey }.  Optional fields:
+   * libraryName, libraryKey, assetType, description.
+   *
+   * Results are filtered to the selected library before caching.
+   *
+   * @param {Array<{ name: string, componentKey: string, libraryName?: string, libraryKey?: string, assetType?: string }>} results
+   * @returns {number} Number of components ingested
+   */
+  ingestLibrarySearchResults(results) {
+    if (!Array.isArray(results) || results.length === 0) return 0;
+
+    // Filter to selected library
+    const filtered = this.selectedLibraryKey
+      ? results.filter(r => r.libraryName === this.selectedLibraryKey)
+      : results;
+
+    let count = 0;
+    for (const r of filtered) {
+      if (!r.componentKey || !r.name) continue;
+      // Only add if not already cached
+      if (!this.dsCache.components.has(r.componentKey)) {
+        this.dsCache.components.set(r.componentKey, {
+          name: r.name,
+          libraryName: r.libraryName,
+          // Store libraryName as libraryKey too — session.selectedLibraryKey
+          // uses the display name, and searchComponent filters on libraryKey.
+          libraryKey: r.libraryName,
+          isComponentSet: r.assetType === 'component_set',
+        });
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
    * Build a complete component map from an HTML section inventory.
    *
    * @param {string[]} elementTypes - e.g., ['header', 'button', 'tab', 'table', 'badge', 'footer']
+   * @param {{ librarySearchComplete?: boolean }} options - Set librarySearchComplete when
+   *   Figma MCP search has already been performed. Changes "must search" hints to
+   *   "proceed with primitives".
    * @returns {Object} Map of elementType → search result
    */
-  buildComponentMap(elementTypes) {
+  buildComponentMap(elementTypes, options = {}) {
     const map = {};
     for (const type of elementTypes) {
       const result = this.searchComponent(type);
       // If any search triggers the multi-library prompt, return it immediately
       if (result.multipleLibraries) {
         return result;
+      }
+      // When library search is complete, override "not found" results to confirm
+      // no component exists — this breaks the search loop.
+      if (!result.found && options.librarySearchComplete) {
+        result.searchComplete = true;
+        result.fallbackRequired = false;
+        result.fallbackHint = `No DS component exists for "${type}" after library search. Proceed with a primitive frame using DS variables. Use confirmedNoComponent: true and primitiveOverrideReason: "No ${type} component in ${this.selectedLibraryKey || 'DS'} library after search".`;
       }
       map[type] = result;
     }

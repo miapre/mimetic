@@ -67,16 +67,21 @@ EXACTLY as written, wait for their pick, then re-call with
 Call Figma MCP `search_design_system` with query `"color"`,
 `includeVariables: true, includeComponents: false,
 includeStyles: false` on the fileKey. Collect all unique
-non-null `libraryName` values from the results. Then:
+non-null `libraryName` values AND one sample variable `key`
+per library from the results. Then:
 ```
 mimic_discover_ds(fileKey, {
-  communitySearchResults: ["LibraryA", "LibraryB", ...]
+  communitySearchResults: ["LibraryA", "LibraryB", ...],
+  communitySearchVariableKeys: {
+    "LibraryA": "first-variable-key-from-results",
+    "LibraryB": "first-variable-key-from-results"
+  }
 })
 ```
-The tool compares search results against plugin-detected
-libraries. If new libraries are found, it returns a
-`_userPrompt` with a lettered list. If no new libraries,
-it advances to Phase 2 (build-ready).
+The tool validates which libraries are actually enabled in
+the file (filters out phantom libraries from search). If
+multiple real libraries remain, it returns a `_userPrompt`
+with a lettered list. If only one, it auto-selects.
 
 This check is **enforced by the tool** — build tools require
 Phase 2, which only unlocks after community verification.
@@ -87,6 +92,25 @@ were not found on the page, use Figma MCP
 
 After discovery, call `mimic_map_components` with the HTML
 element types to get the exact component keys for the build.
+
+**Component mapping is a TWO-CALL workflow:**
+
+1. **First call:** `mimic_map_components({ elementTypes })` —
+   returns found components + missing types with search terms.
+2. **Search once:** For missing types, call Figma MCP
+   `search_design_system` with the suggested terms. Collect
+   ALL component results (from any library — tool filters).
+   Do ONE search per missing type, not exhaustive loops.
+3. **Second call:** `mimic_map_components({ elementTypes,
+   librarySearchResults: [...all results...] })` — ingests
+   results, re-maps, and confirms gaps. After this call,
+   missing types are **confirmed gaps** — build them as
+   primitives with `confirmedNoComponent: true`. No more
+   searching. Proceed to build.
+
+**Do NOT loop.** Two calls max. If the second call still
+shows missing types, they are confirmed gaps — build with
+primitives.
 
 The individual tools (`figma_discover_library_styles`,
 `figma_discover_library_variables`, etc.) still exist for
@@ -105,8 +129,9 @@ manual use if needed, but `mimic_discover_ds` replaces the
    (see "Font-Incompatible Libraries" below).
 3. Text and color are non-negotiable. Every text node: DS text
    style (textStyleId) + DS color variable (fillVariable).
-   No exceptions. Use fontSizeVariable ONLY if no text style
-   exists for the size.
+   No exceptions. fontSizeVariable is ONLY a fallback when
+   no text styles exist in the DS — when text styles are
+   available, the plugin rejects fontSizeVariable alone.
 4. Spacing/radius: bind to DS variables when available, raw
    values acceptable if DS lacks them.
 5. Auto-layout everywhere. FILL widths, HUG heights.
@@ -153,20 +178,17 @@ manual use if needed, but `mimic_discover_ds` replaces the
 12. Name every node after its HTML role. "Header Section" not
     "Frame". "Card: Total Users" not "Frame". This enables
     iteration — finding nodes by name instead of traversing.
-13. Section-level elements (header, footer, sidebar) MUST use
-    DS components if they exist. `figma_discover_library_components`
-    only scans page instances — if no match is found, you MUST
-    search the library via Figma MCP `search_design_system` before
-    building a custom section. Never build a custom footer/header
-    without first confirming the DS has no component for it.
-14. Section-level DS components are NON-NEGOTIABLE. When
-    `mimic_map_components` returns a component for header, footer,
-    or sidebar — use it. The HTML layout is irrelevant. The DS
-    component IS the authoritative layout. Override text content
-    to match the HTML, but NEVER build a custom section-level
-    frame when a DS component was found. No rationalizing
-    ("layout doesn't match", "too different from HTML"). Intent
-    over pixel-matching — always.
+13. Section-level elements (header, footer, sidebar) should use
+    DS components if they exist. The two-call `mimic_map_components`
+    workflow handles this: first call identifies gaps, you search
+    once via Figma MCP, second call with `librarySearchResults`
+    confirms matches or gaps. After the second call, any remaining
+    missing types are confirmed — build as primitives.
+14. When `mimic_map_components` returns a component for header,
+    footer, or sidebar — use it. The DS component is the
+    authoritative layout. Override text content to match the
+    HTML, but don't build a custom frame when a DS component
+    was found. Intent over pixel-matching.
 15. INSERT_TIMEOUT recovery. When `figma_insert_component`
     returns INSERT_TIMEOUT, the component MAY have been created.
     Before doing anything else: wait 3 seconds, then call
@@ -204,15 +226,42 @@ library — they will all fail for the same font reason.
 ## Variable Source Mismatch
 
 Discovery caches variables from whatever libraries are **enabled
-in the file**, not from the selected library. If the selected
-library has no variables in the file, `completenessWarnings`
-will include a `VARIABLE SOURCE MISMATCH` warning listing which
-libraries actually provide the tokens.
+in the file**, not from the selected library. Two scenarios:
 
-This means components come from one library, but colors/spacing/
-radius bindings come from another. This is expected when using
-a component-only library (e.g. Material UI) on a file that has
-a separate token library (e.g. Untitled UI, LayerLens Theme).
+### Community library (not plugin-discoverable)
+
+The Figma plugin API (`getAvailableLibraryVariableCollections`)
+cannot enumerate variables from some community libraries, even
+when they are enabled and visible in Manage Libraries. When this
+happens, `mimic_discover_ds` returns `communityVariablesRequired:
+true` instead of the mismatch prompt. The fix:
+
+1. Search for the library's variables via Figma MCP
+   `search_design_system` with `includeLibraryKeys` to filter
+   to the selected library. Run multiple queries to cover all
+   variable types: `"color"`, `"spacing"`, `"shape"`,
+   `"typography"`, `"breakpoint"`.
+2. Collect all variable results (name, key, resolvedType,
+   collection/variableCollectionName, libraryName).
+3. Re-call `mimic_discover_ds` with `externalVariables` set to
+   the collected array. The server caches them, preloads in the
+   plugin, and advances to Phase 2.
+
+### Genuine mismatch (plugin-discoverable but 0 variables)
+
+If the selected library WAS discovered by the plugin but
+contributed no variables, `mimic_discover_ds` **stops the build**
+with `_stopBuild: true` and presents a `_userPrompt` with three
+options:
+
+- **A)** Continue with mixed sources (selected library for
+  components, other library for variables)
+- **B)** Switch to the variable source library for everything
+- **C)** Pick a different library
+
+Present the prompt to the user EXACTLY as written. Pass their
+choice (A/B/C) as `libraryKey` in the next `mimic_discover_ds`
+call. The build CANNOT proceed until the user decides.
 
 ## Safety Guardrails
 

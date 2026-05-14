@@ -39,7 +39,14 @@ function coerceArray(val) {
 
 function enforceText(params) {
   if (!enforcementProfile.enforceTextStyles) return;
-  if (params.textStyleId || params.fontSizeVariable) return;
+  // textStyleId always satisfies the requirement
+  if (params.textStyleId) return;
+
+  // fontSizeVariable is only acceptable when NO text styles are cached.
+  // When text styles exist, they carry font family, weight, and line height —
+  // fontSizeVariable alone produces unstyled text at a raw pixel size.
+  var hasTextStyles = styleCache.size > 0;
+  if (params.fontSizeVariable && !hasTextStyles) return;
 
   // Collect available style names for recovery hint
   var available = [];
@@ -47,12 +54,18 @@ function enforceText(params) {
     available.push(style.name);
   });
 
+  var msg = hasTextStyles
+    ? 'textStyleId is required when DS text styles are available. fontSizeVariable alone only sets size — it does not set font family, weight, or line height. Use figma_list_text_styles to find the right style key.'
+    : 'Text style or typography variable required when enforceTextStyles is active.';
+
   throw {
     error: 'DS_REQUIRED',
     property: 'textStyle',
-    message: 'Text style or typography variable required when enforceTextStyles is active.',
+    message: msg,
     available: available.slice(0, 20),
-    recovery: 'Provide textStyleId (from figma_list_text_styles) or fontSizeVariable (DS typography variable path).',
+    recovery: hasTextStyles
+      ? 'Provide textStyleId from figma_list_text_styles. fontSizeVariable is only a fallback when no text styles exist.'
+      : 'Provide textStyleId (from figma_list_text_styles) or fontSizeVariable (DS typography variable path).',
   };
 }
 
@@ -2213,6 +2226,35 @@ handlers.change_page = function (payload) {
 };
 
 // ── Stubs for Task 9 — Validation & Batch ──────────────────────────────────────
+
+handlers.validate_library_access = function (payload) {
+  var candidates = payload.candidates || [];
+  var results = [];
+  var pending = candidates.length;
+  if (pending === 0) return { results: results };
+
+  // Use Promise chain instead of async/await for plugin compatibility
+  var chain = Promise.resolve();
+  for (var i = 0; i < candidates.length; i++) {
+    (function (c) {
+      chain = chain.then(function () {
+        return figma.variables.importVariableByKeyAsync(c.variableKey)
+          .then(function (imported) {
+            results.push({ name: c.name, accessible: !!imported });
+          })
+          .catch(function () {
+            results.push({ name: c.name, accessible: false });
+          });
+      });
+    })(candidates[i]);
+  }
+  return chain.then(function () { return { results: results }; });
+};
+
+handlers.clear_style_cache = function () {
+  styleCache.clear();
+  return { cleared: true, message: 'Style cache cleared.' };
+};
 
 handlers.validate_ds_compliance = function (payload) {
   var node = figma.getNodeById(normalizeNodeId(payload.nodeId));

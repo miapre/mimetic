@@ -351,7 +351,7 @@ function register(server, context) {
   // ── mimic_map_components ──────────────────────────────────────
   registerTool(
     'mimic_map_components',
-    'Maps HTML element types to DS component keys. Pass a list of element types found in the HTML (e.g. button, input, table, badge) and get back the matching DS component key for each, ready to use with figma_insert_component.',
+    'Maps HTML element types to DS component keys. Call once to get initial mapping. If components are missing, search the library via Figma MCP search_design_system, then call AGAIN with librarySearchResults to resolve matches and confirm gaps. The second call closes the loop — after it, proceed to build.',
     {
       type: 'object',
       properties: {
@@ -359,6 +359,19 @@ function register(server, context) {
           type: 'array',
           items: { type: 'string' },
           description: 'List of HTML element types to map (e.g. ["button", "input", "badge", "table", "tab", "avatar", "dropdown", "textarea"]).',
+        },
+        librarySearchResults: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Component name from search results.' },
+              componentKey: { type: 'string', description: 'Component key from search results.' },
+              libraryName: { type: 'string', description: 'Library name the component belongs to.' },
+              assetType: { type: 'string', description: 'Component type: "component" or "component_set".' },
+            },
+          },
+          description: 'Component search results from Figma MCP search_design_system. Pass ALL results from your searches (any library — they will be filtered). This completes the search loop: matched components get cached, unmatched types get confirmed as "no component exists".',
         },
       },
       required: ['elementTypes'],
@@ -370,7 +383,17 @@ function register(server, context) {
         discovery.setLibrary(session.selectedLibraryKey);
       }
 
-      const map = discovery.buildComponentMap(args.elementTypes);
+      // If library search results are provided, ingest them into the cache first.
+      // This closes the feedback loop: search → ingest → re-map → done.
+      let ingested = 0;
+      const searchComplete = Array.isArray(args.librarySearchResults);
+      if (searchComplete) {
+        ingested = discovery.ingestLibrarySearchResults(args.librarySearchResults);
+      }
+
+      const map = discovery.buildComponentMap(args.elementTypes, {
+        librarySearchComplete: searchComplete,
+      });
 
       // If multi-library prompt, return it
       if (map.multipleLibraries) return map;
@@ -393,6 +416,7 @@ function register(server, context) {
             message: result.message,
             fallbackRequired: Boolean(result.fallbackRequired),
             fallbackHint: result.fallbackHint,
+            searchComplete: Boolean(result.searchComplete),
           });
         }
       }
@@ -404,10 +428,6 @@ function register(server, context) {
         notFound: missing,
       };
 
-      // Identify section-level elements that are missing — these are critical
-      const sectionTypes = ['header', 'footer', 'sidebar', 'navigation', 'nav'];
-      const missingSections = missing.filter(m => sectionTypes.some(s => m.elementType.toLowerCase().includes(s)));
-
       // Build library filter guidance for Figma MCP searches
       const selectedLib = session.selectedLibraryKey || null;
       const libFilter = selectedLib
@@ -417,24 +437,51 @@ function register(server, context) {
         ? `IMPORTANT: Only use components from "${selectedLib}". When calling Figma MCP search_design_system, check libraryName in results and discard any that don't match.`
         : '';
 
+      // After search is complete, all missing types are confirmed gaps — no more searching needed
+      if (searchComplete) {
+        const newlyFound = ingested > 0 ? found.filter(f => f.source === 'ds_cache') : [];
+        return {
+          mapped: found.length,
+          missing: missing.length,
+          selectedLibrary: selectedLib,
+          searchComplete: true,
+          componentsIngested: ingested,
+          components: found,
+          notFound: missing.map(m => ({
+            ...m,
+            // Override hints — search is done, proceed with primitives
+            fallbackHint: `No DS component for "${m.elementType}". Build as primitive frame with DS variables. Use confirmedNoComponent: true, primitiveOverrideReason: "No ${m.elementType} component in ${selectedLib || 'DS'} library".`,
+          })),
+          ...(libSearchNote ? { _libraryConstraint: libSearchNote } : {}),
+          hint: missing.length > 0
+            ? `Library search complete. ${found.length} components mapped, ${missing.length} confirmed gaps: ${missing.map(m => m.elementType).join(', ')}. Build these as primitive frames with DS variables — use confirmedNoComponent: true and primitiveOverrideReason for each. Proceed to build.`
+            : 'All element types mapped to DS components. Use the componentKey values with figma_insert_component.',
+        };
+      }
+
+      // First call (no search results yet) — identify section-level elements that are missing
+      const sectionTypes = ['header', 'footer', 'sidebar', 'navigation', 'nav'];
+      const missingSections = missing.filter(m => sectionTypes.some(s => m.elementType.toLowerCase().includes(s)));
+
       return {
         mapped: found.length,
         missing: missing.length,
         selectedLibrary: selectedLib,
+        searchComplete: false,
         components: found,
         notFound: missing.map(m => ({
           ...m,
           fallbackHint: (m.fallbackHint || `Search the library using Figma MCP search_design_system with terms: ${m.searchTerms.join(', ')}.`) + libFilter,
         })),
         _componentFirstReminder: missing.length > 0
-          ? `Mimic targets ~90% DS component usage. ${missing.length} element type(s) were not found in page instances but may exist in the DS library. You MUST search the library via Figma MCP search_design_system before building custom frames.${libFilter}`
+          ? `${missing.length} element type(s) not found in page instances. Search the DS library ONE TIME via Figma MCP search_design_system for the missing types. Then call mimic_map_components AGAIN with the same elementTypes + librarySearchResults containing ALL component results. That second call will finalize the mapping and confirm any gaps.${libFilter}`
           : undefined,
         _missingSectionWarning: missingSections.length > 0
-          ? `⚠ CRITICAL: ${missingSections.map(m => m.elementType).join(', ')} — section-level elements are almost always in the DS library. Do NOT build custom frames for these without exhaustive library search.${libFilter}`
+          ? `Section-level elements missing: ${missingSections.map(m => m.elementType).join(', ')}. Include these in your library search.${libFilter}`
           : undefined,
         ...(libSearchNote ? { _libraryConstraint: libSearchNote } : {}),
         hint: missing.length > 0
-          ? `${missing.length} element types not found in page instances. MANDATORY: Search the DS library via Figma MCP search_design_system for: ${missing.map(m => m.elementType).join(', ')}. Do not build custom frames without confirming the DS has no component.${libFilter}`
+          ? `${missing.length} element types not found in page instances. NEXT STEP: Search the DS library via Figma MCP search_design_system for: ${missing.map(m => m.elementType).join(', ')}. Then call mimic_map_components again with librarySearchResults to close the loop.${libFilter}`
           : 'All element types mapped to DS components. Use the componentKey values with figma_insert_component.',
       };
     }

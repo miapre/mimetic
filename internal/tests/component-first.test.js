@@ -60,18 +60,64 @@ describe('component-first enforcement', () => {
 
     assert.equal(result.found, false);
     assert.equal(result.fallbackRequired, true);
-    assert.match(result.fallbackHint, /MUST search the library/);
+    assert.match(result.fallbackHint, /search the library/i);
     assert.deepEqual(result.searchTerms.slice(0, 2), ['header', 'nav']);
   });
 
-  it('preserves fallback guidance from mimic_map_components', async () => {
+  it('preserves fallback guidance from mimic_map_components (first call)', async () => {
     const result = await setup.handlers.mimic_map_components({ elementTypes: ['header', 'button'] });
 
     assert.equal(result.mapped, 0);
     assert.equal(result.missing, 2);
+    assert.equal(result.searchComplete, false);
     assert.equal(result.notFound[0].fallbackRequired, true);
-    assert.match(result.notFound[0].fallbackHint, /MUST search the library/);
+    assert.match(result.notFound[0].fallbackHint, /search the library/i);
     assert.ok(setup.session.componentMap);
+  });
+
+  it('resolves components from librarySearchResults on second call', async () => {
+    // First call — nothing found
+    const first = await setup.handlers.mimic_map_components({ elementTypes: ['button', 'header', 'badge'] });
+    assert.equal(first.mapped, 0);
+    assert.equal(first.missing, 3);
+    assert.equal(first.searchComplete, false);
+
+    // Second call — provide search results from Figma MCP
+    const second = await setup.handlers.mimic_map_components({
+      elementTypes: ['button', 'header', 'badge'],
+      librarySearchResults: [
+        { name: '<Button>', componentKey: 'btn-key-123', libraryName: 'Material UI', assetType: 'component_set' },
+        { name: 'Some unrelated thing', componentKey: 'unrelated-key', libraryName: 'Other Lib', assetType: 'component' },
+      ],
+    });
+
+    assert.equal(second.searchComplete, true);
+    // Button should now be found (ingested into cache), header and badge confirmed gaps
+    assert.equal(second.mapped, 1);
+    assert.equal(second.missing, 2);
+    assert.equal(second.components[0].elementType, 'button');
+    assert.equal(second.components[0].componentKey, 'btn-key-123');
+    // Missing types should say "proceed with primitives", not "search again"
+    for (const m of second.notFound) {
+      assert.match(m.fallbackHint, /No DS component/);
+      assert.match(m.fallbackHint, /confirmedNoComponent/);
+      assert.doesNotMatch(m.fallbackHint, /MUST search/i);
+    }
+  });
+
+  it('confirms all gaps when librarySearchResults has no matches', async () => {
+    const result = await setup.handlers.mimic_map_components({
+      elementTypes: ['navbar', 'footer'],
+      librarySearchResults: [
+        { name: 'Unrelated Component', componentKey: 'unrelated', libraryName: 'Other Lib', assetType: 'component' },
+      ],
+    });
+
+    assert.equal(result.searchComplete, true);
+    assert.equal(result.mapped, 0);
+    assert.equal(result.missing, 2);
+    assert.match(result.hint, /Library search complete/);
+    assert.match(result.hint, /confirmed gaps/);
   });
 
   it('blocks protected primitive frames until no-component override is documented', async () => {
