@@ -472,7 +472,7 @@ function register(server, context) {
       properties: {
         chartType: {
           type: 'string',
-          enum: ['bar', 'donut', 'line', 'radar', 'scatter', 'heatmap'],
+          enum: ['bar', 'horizontalBar', 'donut', 'line', 'radar', 'scatter', 'heatmap'],
           description: 'The type of chart to compute.',
         },
         data: {
@@ -493,6 +493,9 @@ function register(server, context) {
       switch (chartType) {
         case 'bar':
           result = calc.bar({ data, chartHeight: dimensions.chartHeight, chartWidth: dimensions.chartWidth, barWidthRatio: dimensions.barWidthRatio, yPrefix: dimensions.yPrefix, ySuffix: dimensions.ySuffix });
+          break;
+        case 'horizontalBar':
+          result = calc.horizontalBar({ data, chartWidth: dimensions.chartWidth, barHeight: dimensions.barHeight, barGap: dimensions.barGap, xPrefix: dimensions.xPrefix, xSuffix: dimensions.xSuffix });
           break;
         case 'donut':
           result = calc.donut({ data, outerRadius: dimensions.outerRadius, innerRadius: dimensions.innerRadius });

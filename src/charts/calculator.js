@@ -119,6 +119,52 @@ class ChartCalculator {
   }
 
   /**
+   * Horizontal bar chart geometry.
+   * Each bar extends right from 0. Returns bar widths proportional to values,
+   * Y-axis labels (category names), and X-axis ticks (value scale).
+   *
+   * @param {Object} opts
+   * @param {{ label: string, value: number }[]} opts.data
+   * @param {number} [opts.chartWidth=400]  max bar width in pixels
+   * @param {number} [opts.barHeight=24]  height of each bar
+   * @param {number} [opts.barGap=8]  vertical gap between bars
+   * @param {string} [opts.xPrefix='']  prefix for X-axis labels
+   * @param {string} [opts.xSuffix='']  suffix for X-axis labels
+   * @returns {{ bars: object[], xAxis: object, chartHeight: number }}
+   */
+  horizontalBar({ data, chartWidth = 400, barHeight = 24, barGap = 8, xPrefix = '', xSuffix = '' }) {
+    const maxValue = Math.max(...data.map((d) => d.value));
+    const xAxisInfo = this._niceAxis(0, maxValue, 5);
+    const xRange = xAxisInfo.max - xAxisInfo.min || 1;
+
+    const bars = data.map((d, i) => {
+      const width = (d.value / xRange) * chartWidth;
+      const y = i * (barHeight + barGap);
+      return {
+        label: d.label,
+        value: d.value,
+        width: Math.round(width * 100) / 100,
+        y: Math.round(y * 100) / 100,
+        height: barHeight,
+      };
+    });
+
+    const xAxis = {
+      ticks: xAxisInfo.ticks.map((val) => ({
+        value: val,
+        label: this._formatTick(val, xPrefix, xSuffix),
+        px: Math.round(((val - xAxisInfo.min) / xRange) * chartWidth * 100) / 100,
+      })),
+      min: xAxisInfo.min,
+      max: xAxisInfo.max,
+    };
+
+    const totalHeight = data.length * (barHeight + barGap) - barGap;
+
+    return { bars, xAxis, chartWidth, chartHeight: totalHeight };
+  }
+
+  /**
    * Donut / pie chart geometry.
    * Returns SVG path strings for each segment so the LLM never computes arc math.
    * Center is at (outerRadius, outerRadius) so the SVG viewBox is 0 0 diameter diameter.
