@@ -103,7 +103,8 @@ class DsDiscovery {
     // Generate search terms for the element type
     const searchTerms = this.getSearchTerms(base);
 
-    // Collect all matching components from dsCache
+    // Collect matching components from dsCache
+    // Prefer component_sets (UI components with variants) over single components (icons)
     const matches = [];
     for (const [key, component] of this.dsCache.components) {
       const name = (component.name || '').toLowerCase();
@@ -111,6 +112,12 @@ class DsDiscovery {
         matches.push({ key, component });
       }
     }
+    // Sort: component_sets first (real UI components), single components last (likely icons)
+    matches.sort((a, b) => {
+      const aSet = a.component.isComponentSet ? 0 : 1;
+      const bSet = b.component.isComponentSet ? 0 : 1;
+      return aSet - bSet;
+    });
 
     // Check for multiple libraries before filtering
     if (matches.length > 0) {
