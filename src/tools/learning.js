@@ -287,10 +287,17 @@ function register(server, context) {
         let resolvedKey = comp.componentKey || null;
         if (!resolvedKey && dsCache && dsCache.components) {
           const compName = (comp.name || '').toLowerCase();
+          // Extract the leaf name (e.g. "Buttons/Button" → "button")
+          const leafName = compName.split('/').pop().trim();
+          // Try exact match first, then leaf-name match on component sets
           for (const [key, cached] of dsCache.components) {
-            if ((cached.name || '').toLowerCase() === compName) {
-              resolvedKey = key;
-              break;
+            const cachedName = (cached.name || '').toLowerCase();
+            if (cachedName === compName) { resolvedKey = key; break; }
+          }
+          if (!resolvedKey) {
+            for (const [key, cached] of dsCache.components) {
+              const cachedName = (cached.name || '').toLowerCase();
+              if (cachedName === leafName && cached.isComponentSet !== false) { resolvedKey = key; break; }
             }
           }
         }
