@@ -193,7 +193,8 @@ function register(server, context) {
       properties: {
         name: { type: 'string', description: 'Semantic name describing the HTML role (e.g., "Header Section", "Metrics Row", "Card: Revenue"). Never use generic names like "Frame".' },
         parentId: { type: 'string', description: 'Parent node ID. Omit for page-level.' },
-        direction: { type: 'string', enum: ['HORIZONTAL', 'VERTICAL', 'NONE'], description: 'Auto-layout direction.' },
+        direction: { type: 'string', enum: ['HORIZONTAL', 'VERTICAL', 'NONE'], description: 'Auto-layout direction. Prefer HORIZONTAL or VERTICAL — NONE breaks portability. Use layoutPositioning ABSOLUTE for overlay children instead.' },
+        layoutPositioning: { type: 'string', enum: ['AUTO', 'ABSOLUTE'], description: 'Set to ABSOLUTE to position this frame as an overlay inside an auto-layout parent (out of flow but still contained). Use for grid lines, positioned labels, etc.' },
         width: { type: 'number', description: 'Fixed width in pixels.' },
         height: { type: 'number', description: 'Fixed height in pixels.' },
         layoutSizingHorizontal: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'], description: 'Horizontal sizing mode.' },
@@ -225,6 +226,13 @@ function register(server, context) {
       if (componentGate && !componentGate.allowed) {
         return componentGate;
       }
+
+      // Warn on NONE direction — breaks auto-layout portability
+      let noneWarning;
+      if (args.direction === 'NONE') {
+        noneWarning = 'direction: NONE breaks auto-layout portability. Use VERTICAL or HORIZONTAL with layoutPositioning: ABSOLUTE on overlay children instead.';
+      }
+
       // Validate variable paths before sending to plugin
       const validation = dsCache.validateVariables(args);
       if (!validation.valid) {
@@ -260,9 +268,12 @@ function register(server, context) {
         ...result,
         _placement: !args.parentId ? { x: createArgs.x, y: createArgs.y } : undefined,
         _componentCheck: componentGate?.warning || undefined,
-        hint: result?.bindingFailures
-          ? 'Frame created but some DS bindings FAILED — check warnings above. Fix before continuing.'
-          : 'Frame created. Add children with figma_create_text, figma_create_frame, or figma_insert_component.',
+        _noneWarning: noneWarning || undefined,
+        hint: noneWarning
+          ? noneWarning
+          : result?.bindingFailures
+            ? 'Frame created but some DS bindings FAILED — check warnings above. Fix before continuing.'
+            : 'Frame created. Add children with figma_create_text, figma_create_frame, or figma_insert_component.',
       };
     }
   );
@@ -282,6 +293,7 @@ function register(server, context) {
         fontSizeVariable: { type: 'string', description: 'DS variable path for font size (if no text style).' },
         lineHeightVariable: { type: 'string', description: 'DS variable path for line height.' },
         layoutSizingHorizontal: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'], description: 'Horizontal sizing mode.' },
+        layoutPositioning: { type: 'string', enum: ['AUTO', 'ABSOLUTE'], description: 'Set to ABSOLUTE to overlay this text inside an auto-layout parent.' },
         width: { type: 'number', description: 'Fixed width for the text node.' },
         textAlignHorizontal: { type: 'string', enum: ['LEFT', 'CENTER', 'RIGHT', 'JUSTIFIED'], description: 'Text alignment.' },
       },
@@ -327,6 +339,7 @@ function register(server, context) {
         cornerRadiusVariable: { type: 'string', description: 'DS variable path for corner radius.' },
         strokeVariable: { type: 'string', description: 'DS variable path for stroke color.' },
         strokeWeight: { type: 'number', description: 'Stroke weight in pixels.' },
+        layoutPositioning: { type: 'string', enum: ['AUTO', 'ABSOLUTE'], description: 'Set to ABSOLUTE to overlay this rectangle inside an auto-layout parent (e.g., grid lines behind bars).' },
       },
       required: ['parentId'],
     },

@@ -374,6 +374,26 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     return;
   }
 
+  // Grid lines (absolute-positioned inside AL bars frame — overlay behind bars)
+  for (const tick of yAxis.ticks) {
+    try {
+      await collector.send('create_rectangle', {
+        parentId: barsFrameId,
+        name: `Grid ${tick.label}`,
+        width: 9999,
+        height: 1,
+        fillVariable: theme.gridColor,
+        layoutPositioning: 'ABSOLUTE',
+        x: 0,
+        y: tick.py,
+      });
+      op();
+      results.elements.rectangles++;
+    } catch (err) {
+      fail('grid-line', err);
+    }
+  }
+
   // Individual bars
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];

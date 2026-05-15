@@ -759,6 +759,11 @@ handlers.create_frame = function (payload) {
     frame.layoutSizingVertical = deferSizingV;
   } catch (e) { /* Page root — sizing not applicable */ }
 
+  // Absolute positioning within AL parent (opt-in overlay)
+  if (payload.layoutPositioning === 'ABSOLUTE') {
+    try { frame.layoutPositioning = 'ABSOLUTE'; } catch (e) { /* parent may not be AL */ }
+  }
+
   // Apply position AFTER appendChild
   if (typeof deferX === 'number') frame.x = deferX;
   if (typeof deferY === 'number') frame.y = deferY;
@@ -849,6 +854,11 @@ handlers.create_text = async function (payload) {
     if (payload.layoutSizingHorizontal) text.layoutSizingHorizontal = payload.layoutSizingHorizontal;
     if (payload.layoutSizingVertical) text.layoutSizingVertical = payload.layoutSizingVertical;
   } catch (e) { /* Parent isn't auto-layout */ }
+
+  // Absolute positioning within AL parent (opt-in overlay)
+  if (payload.layoutPositioning === 'ABSOLUTE') {
+    try { text.layoutPositioning = 'ABSOLUTE'; } catch (e) {}
+  }
 
   var bindingResult = bt.result();
   return {
@@ -1029,6 +1039,9 @@ handlers.create_rectangle = function (payload) {
   if (typeof payload.opacity === 'number') rect.opacity = payload.opacity;
 
   parent.appendChild(rect);
+  if (payload.layoutPositioning === 'ABSOLUTE') {
+    try { rect.layoutPositioning = 'ABSOLUTE'; } catch (e) {}
+  }
   try {
     if (deferRectSizingH) rect.layoutSizingHorizontal = deferRectSizingH;
     if (deferRectSizingV) rect.layoutSizingVertical = deferRectSizingV;
@@ -1094,6 +1107,9 @@ handlers.create_ellipse = function (payload) {
   if (typeof payload.opacity === 'number') ellipse.opacity = payload.opacity;
 
   parent.appendChild(ellipse);
+  if (payload.layoutPositioning === 'ABSOLUTE') {
+    try { ellipse.layoutPositioning = 'ABSOLUTE'; } catch (e) {}
+  }
   try {
     if (deferEllipseSizingH) ellipse.layoutSizingHorizontal = deferEllipseSizingH;
     if (deferEllipseSizingV) ellipse.layoutSizingVertical = deferEllipseSizingV;
