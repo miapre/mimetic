@@ -293,37 +293,39 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
   const { bars, yAxis, xAxis, chartWidth } = geometry;
   const chartHeight = dimensions.chartHeight || 200;
 
-  // Chart area container (holds y-axis + plot area side by side)
-  let chartAreaId;
+  // Pure auto-layout approach: Y-axis column + Bars column side by side
+  // No NONE frames, no absolute positioning.
+
+  // Chart body: HORIZONTAL (y-axis labels | bars area)
+  let chartBodyId;
   try {
     const r = await collector.send('create_frame', {
       parentId: cardId,
-      name: 'Chart Area',
+      name: 'Chart Body',
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'FILL',
       layoutSizingVertical: 'HUG',
       gapVariable: 'spacing-md',
-      counterAxisAlignItems: 'MAX',
     });
-    chartAreaId = r?.nodeId;
+    chartBodyId = r?.nodeId;
     op();
     results.elements.frames++;
   } catch (err) {
-    fail('chart-area', err);
+    fail('chart-body', err);
     return;
   }
 
-  // ── Y-axis labels ──
+  // ── Y-axis: VERTICAL, SPACE_BETWEEN, fixed height ──
   let yAxisId;
   try {
     const r = await collector.send('create_frame', {
-      parentId: chartAreaId,
+      parentId: chartBodyId,
       name: 'Y Axis',
-      direction: 'NONE',
-      width: 40,
+      direction: 'VERTICAL',
+      layoutSizingHorizontal: 'HUG',
       height: chartHeight,
-      layoutSizingHorizontal: 'FIXED',
       layoutSizingVertical: 'FIXED',
+      primaryAxisAlignItems: 'SPACE_BETWEEN',
     });
     yAxisId = r?.nodeId;
     op();
@@ -341,8 +343,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
           content: tick.label,
           textStyleId: theme.labelStyle,
           fillVariable: theme.labelColor,
-          x: 0,
-          y: Math.max(0, tick.py - 6), // center text on tick line
+          textAlignHorizontal: 'RIGHT',
         });
         op();
         results.elements.texts++;
@@ -352,58 +353,18 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     }
   }
 
-  // ── Plot area (bars + grid) ──
-  let plotId;
-  try {
-    const r = await collector.send('create_frame', {
-      parentId: chartAreaId,
-      name: 'Plot Area',
-      direction: 'NONE',
-      layoutSizingHorizontal: 'FILL',
-      height: chartHeight,
-      layoutSizingVertical: 'FIXED',
-    });
-    plotId = r?.nodeId;
-    op();
-    results.elements.frames++;
-  } catch (err) {
-    fail('plot-area', err);
-    return;
-  }
-
-  // Grid lines (horizontal)
-  for (const tick of yAxis.ticks) {
-    try {
-      await collector.send('create_rectangle', {
-        parentId: plotId,
-        name: `Grid ${tick.label}`,
-        width: 9999, // will be constrained by parent
-        height: 1,
-        fillVariable: theme.gridColor,
-        x: 0,
-        y: tick.py,
-      });
-      op();
-      results.elements.rectangles++;
-    } catch (err) {
-      fail('grid-line', err);
-    }
-  }
-
-  // Bars frame (horizontal, bottom-aligned for bar alignment)
+  // ── Bars area: HORIZONTAL, bottom-aligned, FILL width ──
   let barsFrameId;
   try {
     const r = await collector.send('create_frame', {
-      parentId: plotId,
+      parentId: chartBodyId,
       name: 'Bars',
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'FILL',
       height: chartHeight,
       layoutSizingVertical: 'FIXED',
-      counterAxisAlignItems: 'MAX', // bottom-align bars
-      gapVariable: 'spacing-xs',
-      x: 0,
-      y: 0,
+      counterAxisAlignItems: 'MAX',
+      primaryAxisAlignItems: 'SPACE_BETWEEN',
     });
     barsFrameId = r?.nodeId;
     op();
