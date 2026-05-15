@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { ChartCalculator } = require('../charts/calculator');
+const { PatternMatcher } = require('../knowledge/patterns');
 
 function register(server, context) {
   const { registerTool, knowledgeStore, buildManifest, dsCache, session, advancePhase } = context;
@@ -167,7 +168,60 @@ function register(server, context) {
 
       const date = new Date().toISOString().slice(0, 10);
 
-      // Build markdown report
+      // ── Persist learning data FIRST so report reflects promoted state ──
+      const promoter = new PatternMatcher();
+      const promotions = [];
+      for (const comp of components) {
+        let resolvedKey = comp.componentKey || null;
+        const compName = comp.name.toLowerCase();
+        if (!resolvedKey && session._componentInsertions) {
+          for (const [key, info] of session._componentInsertions) {
+            const names = (info.names || []).map(n => n.toLowerCase());
+            if (names.some(n => n.includes(compName) || compName.includes(n))) {
+              resolvedKey = key;
+              break;
+            }
+          }
+        }
+        if (!resolvedKey && dsCache && dsCache.components) {
+          const leafName = compName.split('/').pop().trim();
+          for (const [key, cached] of dsCache.components) {
+            const cachedName = (cached.name || '').toLowerCase();
+            if (cachedName === compName) { resolvedKey = key; break; }
+          }
+          if (!resolvedKey) {
+            for (const [key, cached] of dsCache.components) {
+              const cachedName = (cached.name || '').toLowerCase();
+              if (cachedName === leafName && cached.isComponentSet !== false) { resolvedKey = key; break; }
+            }
+          }
+        }
+        const existing = knowledgeStore.getComponent(comp.name);
+        let recipe = existing
+          ? { ...existing, instances: (existing.instances || 0) + (comp.instances || 0), buildCount: (existing.buildCount || 0) + 1, componentKey: existing.componentKey || resolvedKey }
+          : { instances: comp.instances || 0, buildCount: 1, componentKey: resolvedKey, variantConfig: comp.variantConfig || null, confidence: 'new' };
+        if (!recipe.confidence) recipe.confidence = 'new';
+        const before = recipe.confidence;
+        recipe = promoter.maybePromote(recipe);
+        if (before === 'new' && recipe.confidence === 'strong') {
+          promotions.push(comp.name);
+        }
+        knowledgeStore.setComponent(comp.name, recipe);
+      }
+      for (const prim of primitives) {
+        if (prim.reason && prim.reason.length >= 10) {
+          knowledgeStore.addGap(prim.element, {
+            elements: [prim.element],
+            evidence: `${prim.reason}. Screen: ${screenName}`,
+            estimatedSavings: `~7 tool calls per instance if DS component existed`,
+            searchTerms: prim.searchTerms || [],
+          });
+        }
+      }
+      knowledgeStore.incrementBuildCount();
+      knowledgeStore.save();
+
+      // Build markdown report (after learning so confidence tiers are current)
       const lines = [
         `# Build Report — ${screenName}`,
         '',
@@ -251,6 +305,20 @@ function register(server, context) {
       }
       lines.push('');
 
+      lines.push('## Component Confidence');
+      lines.push('');
+      const componentRecipes = Object.entries(knowledgeStore.data.components);
+      if (componentRecipes.length > 0) {
+        componentRecipes.forEach(([name, recipe]) => {
+          const tier = recipe.confidence || 'new';
+          const badge = tier === 'strong' ? '🟢 strong' : '🔵 new';
+          lines.push(`- **${name}**: ${badge} (${recipe.buildCount || 0} builds, ${recipe.instances || 0} instances)`);
+        });
+      } else {
+        lines.push('No component recipes stored.');
+      }
+      lines.push('');
+
       lines.push('## Patterns Learned');
       lines.push('');
       if (patternEntries.length > 0) {
@@ -281,65 +349,17 @@ function register(server, context) {
       // Advance phase to 5 (report)
       advancePhase(5);
 
-      // ── Persist learning data ──────────────────────────────────
-      // Auto-save component usage as recipes (name + instances + keys if available)
-      // If componentKey is missing, auto-resolve from DS cache by searching component name
-      for (const comp of components) {
-        let resolvedKey = comp.componentKey || null;
-        // Strategy 1: Check session insertion tracking (most reliable — actual keys used during build)
-        if (!resolvedKey && session._componentInsertions) {
-          for (const [key, info] of session._componentInsertions) {
-            // Match if any instance name contains the component name or vice versa
-            const names = (info.names || []).map(n => n.toLowerCase());
-            if (names.some(n => n.includes(compName) || compName.includes(n))) {
-              resolvedKey = key;
-              break;
-            }
-          }
-        }
-        // Strategy 2: Search DS cache by name (fallback)
-        if (!resolvedKey && dsCache && dsCache.components) {
-          const leafName = compName.split('/').pop().trim();
-          for (const [key, cached] of dsCache.components) {
-            const cachedName = (cached.name || '').toLowerCase();
-            if (cachedName === compName) { resolvedKey = key; break; }
-          }
-          if (!resolvedKey) {
-            for (const [key, cached] of dsCache.components) {
-              const cachedName = (cached.name || '').toLowerCase();
-              if (cachedName === leafName && cached.isComponentSet !== false) { resolvedKey = key; break; }
-            }
-          }
-        }
-        const existing = knowledgeStore.getComponent(comp.name);
-        const recipe = existing
-          ? { ...existing, instances: (existing.instances || 0) + (comp.instances || 0), buildCount: (existing.buildCount || 0) + 1, componentKey: existing.componentKey || resolvedKey }
-          : { instances: comp.instances || 0, buildCount: 1, componentKey: resolvedKey, variantConfig: comp.variantConfig || null };
-        knowledgeStore.setComponent(comp.name, recipe);
-      }
-
-      // Auto-save primitives as DS gaps with evidence
-      for (const prim of primitives) {
-        if (prim.reason && prim.reason.length >= 10) {
-          knowledgeStore.addGap(prim.element, {
-            elements: [prim.element],
-            evidence: `${prim.reason}. Screen: ${screenName}`,
-            estimatedSavings: `~7 tool calls per instance if DS component existed`,
-            searchTerms: prim.searchTerms || [],
-          });
-        }
-      }
-
-      // Increment build count
-      knowledgeStore.incrementBuildCount();
-      knowledgeStore.save();
+      const promotionSummary = promotions.length > 0
+        ? ` ${promotions.length} component(s) auto-promoted to strong: ${promotions.join(', ')}.`
+        : '';
 
       return {
         reportPath,
         bindingFailureCount: bindingFailures.length,
         componentUsagePercent,
         componentQualityGate,
-        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached). ${gapEntries.length} DS gaps identified. ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}`,
+        promotions,
+        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached). ${gapEntries.length} DS gaps identified. ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${promotionSummary}`,
       };
     }
   );

@@ -41,6 +41,10 @@ class KnowledgeStore {
       this.data = parsed;
       // Backfill new fields for existing stores
       if (!this.data.libraryFileKeys) this.data.libraryFileKeys = {};
+      // Backfill confidence on components that predate the promotion system
+      for (const comp of Object.values(this.data.components || {})) {
+        if (!comp.confidence) comp.confidence = 'new';
+      }
     } catch (err) {
       if (err.code === 'ENOENT') {
         this.data = createEmptyStore();
