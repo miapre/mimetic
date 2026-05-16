@@ -129,8 +129,21 @@ const knowledgeStore = new KnowledgeStore(
   path.join(process.cwd(), 'ds-knowledge.json')
 );
 const buildManifest = new BuildManifest();
-const figmaToken = resolveFigmaToken();
-const figmaRest = figmaToken ? new FigmaRest(figmaToken) : null;
+// Lazy-resolved on each discovery call — re-reads config file so token
+// updates take effect without restarting the MCP server process.
+let _figmaRest = null;
+let _lastToken = null;
+function getFigmaRest() {
+  const token = resolveFigmaToken();
+  if (!token) return null;
+  if (token !== _lastToken) {
+    _figmaRest = new FigmaRest(token);
+    _lastToken = token;
+  }
+  return _figmaRest;
+}
+// Backwards compat for code that references figmaRest directly
+const figmaRest = null; // use getFigmaRest() instead
 
 // MCP Server
 const server = new Server(
@@ -150,7 +163,7 @@ const context = {
   advancePhase,
   resetSession,
   registerTool,
-  figmaRest,
+  get figmaRest() { return getFigmaRest(); },
 };
 
 // Tool registration
