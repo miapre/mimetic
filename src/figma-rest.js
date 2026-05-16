@@ -26,7 +26,7 @@ class FigmaRest {
         res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
           if (res.statusCode === 403) {
-            reject(new Error('FIGMA_ACCESS_DENIED: No access to this file. Make sure the token owner has at least Viewer access to the library.'));
+            reject(new Error('FIGMA_ACCESS_DENIED: No access to this file. The token owner needs at least Viewer access to the file. If the token is new, verify it has all 5 required scopes: current_user:read, file_content:read, file_metadata:read, library_assets:read, library_content:read. Generate at: Figma → Avatar → Settings → Security → Personal access tokens.'));
           } else if (res.statusCode === 404) {
             reject(new Error('FIGMA_NOT_FOUND: File not found. Check the file key — it\'s the part between /design/ and the next / in the URL.'));
           } else if (res.statusCode === 401) {
