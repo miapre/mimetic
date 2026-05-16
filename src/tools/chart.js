@@ -293,10 +293,10 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
   const { bars, yAxis, xAxis, chartWidth } = geometry;
   const chartHeight = dimensions.chartHeight || 200;
 
-  // Pure auto-layout approach: Y-axis column + Bars column side by side
-  // No NONE frames, no absolute positioning.
+  // Auto-layout with ABSOLUTE overlays for pixel-perfect positioning.
+  // Chart body: HORIZONTAL (y-axis | bars area), both FIXED height.
+  // Y-axis labels + grid lines use ABSOLUTE positioning for exact alignment.
 
-  // Chart body: HORIZONTAL (y-axis labels | bars area)
   let chartBodyId;
   try {
     const r = await collector.send('create_frame', {
@@ -304,7 +304,8 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
       name: 'Chart Body',
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'FILL',
-      layoutSizingVertical: 'HUG',
+      height: chartHeight,
+      layoutSizingVertical: 'FIXED',
       gapVariable: 'spacing-md',
     });
     chartBodyId = r?.nodeId;
@@ -315,17 +316,16 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     return;
   }
 
-  // ── Y-axis: VERTICAL, SPACE_BETWEEN, fixed height ──
+  // ── Y-axis: AL frame with ABSOLUTE-positioned labels at exact tick.py ──
   let yAxisId;
   try {
     const r = await collector.send('create_frame', {
       parentId: chartBodyId,
       name: 'Y Axis',
       direction: 'VERTICAL',
-      layoutSizingHorizontal: 'HUG',
-      height: chartHeight,
-      layoutSizingVertical: 'FIXED',
-      primaryAxisAlignItems: 'SPACE_BETWEEN',
+      width: 36,
+      layoutSizingHorizontal: 'FIXED',
+      layoutSizingVertical: 'FILL',
     });
     yAxisId = r?.nodeId;
     op();
@@ -335,9 +335,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
   }
 
   if (yAxisId) {
-    // Reverse: highest value at top, 0 at bottom (SPACE_BETWEEN distributes top→bottom)
-    const reversedTicks = [...yAxis.ticks].reverse();
-    for (const tick of reversedTicks) {
+    for (const tick of yAxis.ticks) {
       try {
         await collector.send('create_text', {
           parentId: yAxisId,
@@ -346,6 +344,9 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
           textStyleId: theme.labelStyle,
           fillVariable: theme.labelColor,
           textAlignHorizontal: 'RIGHT',
+          layoutPositioning: 'ABSOLUTE',
+          x: 0,
+          y: Math.max(0, tick.py - 6),
         });
         op();
         results.elements.texts++;
@@ -355,7 +356,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     }
   }
 
-  // ── Bars area: HORIZONTAL, bottom-aligned, FILL width ──
+  // ── Bars area: HORIZONTAL AL with gap, bottom-aligned ──
   let barsFrameId;
   try {
     const r = await collector.send('create_frame', {
@@ -363,10 +364,9 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
       name: 'Bars',
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'FILL',
-      height: chartHeight,
-      layoutSizingVertical: 'FIXED',
+      layoutSizingVertical: 'FILL',
       counterAxisAlignItems: 'MAX',
-      primaryAxisAlignItems: 'SPACE_BETWEEN',
+      gapVariable: 'spacing-sm',
     });
     barsFrameId = r?.nodeId;
     op();
@@ -376,7 +376,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     return;
   }
 
-  // Grid lines (absolute-positioned inside AL bars frame — overlay behind bars)
+  // Grid lines (ABSOLUTE inside bars frame — pixel-perfect y positions)
   for (const tick of yAxis.ticks) {
     try {
       await collector.send('create_rectangle', {
@@ -396,7 +396,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     }
   }
 
-  // Individual bars
+  // Individual bars — FILL width (equal distribution), FIXED height (proportional)
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
     const color = palette[i % palette.length];
@@ -406,6 +406,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
         name: `Bar: ${bar.label}`,
         height: Math.max(2, bar.height),
         layoutSizingHorizontal: 'FILL',
+        layoutSizingVertical: 'FIXED',
         fillVariable: color,
         radiusVariable: 'radius-xs',
       });
