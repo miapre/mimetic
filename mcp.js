@@ -15,17 +15,20 @@ const fs = require('node:fs');
 
 /**
  * Resolve FIGMA_TOKEN from multiple sources (first match wins):
- * 1. process.env.FIGMA_TOKEN (standard MCP env config)
- * 2. ~/.mimic-ai.json  { "figmaToken": "figd_..." }
+ * 1. ~/.mimic-ai.json  { "figmaToken": "figd_..." }  — hot-reloadable
+ * 2. process.env.FIGMA_TOKEN (standard MCP env config) — set at spawn time
  * 3. null (server starts without REST API — discovery prompts setup)
+ *
+ * Config file wins over env var so token updates take effect without
+ * restarting the MCP server process.
  */
 function resolveFigmaToken() {
-  if (process.env.FIGMA_TOKEN) return process.env.FIGMA_TOKEN;
   try {
     const configPath = path.join(os.homedir(), '.mimic-ai.json');
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     if (cfg.figmaToken) return cfg.figmaToken;
-  } catch { /* file doesn't exist or is invalid — that's fine */ }
+  } catch { /* file doesn't exist or is invalid — fall through to env */ }
+  if (process.env.FIGMA_TOKEN) return process.env.FIGMA_TOKEN;
   return null;
 }
 
