@@ -293,10 +293,12 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
   const { bars, yAxis, xAxis, chartWidth } = geometry;
   const chartHeight = dimensions.chartHeight || 200;
 
-  // Auto-layout with ABSOLUTE overlays for pixel-perfect positioning.
-  // Chart body: HORIZONTAL (y-axis | bars area), both FIXED height.
-  // Y-axis labels + grid lines use ABSOLUTE positioning for exact alignment.
+  // Pure auto-layout bar chart — no ABSOLUTE, no FIXED height battles.
+  // Each bar is a VERTICAL column: transparent spacer + colored rect.
+  // The spacer pushes the bar down proportionally. This is how Figma
+  // designers actually build bar charts.
 
+  // Chart body: HORIZONTAL (y-axis | bars row)
   let chartBodyId;
   try {
     const r = await collector.send('create_frame', {
@@ -306,7 +308,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
       layoutSizingHorizontal: 'FILL',
       height: chartHeight,
       layoutSizingVertical: 'FIXED',
-      gapVariable: 'spacing-md',
+      gapVariable: 'spacing-lg',
     });
     chartBodyId = r?.nodeId;
     op();
@@ -316,16 +318,16 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     return;
   }
 
-  // ── Y-axis: AL frame with ABSOLUTE-positioned labels at exact tick.py ──
+  // ── Y-axis: VERTICAL, SPACE_BETWEEN (highest at top, 0 at bottom) ──
   let yAxisId;
   try {
     const r = await collector.send('create_frame', {
       parentId: chartBodyId,
       name: 'Y Axis',
       direction: 'VERTICAL',
-      width: 36,
-      layoutSizingHorizontal: 'FIXED',
+      layoutSizingHorizontal: 'HUG',
       layoutSizingVertical: 'FILL',
+      primaryAxisAlignItems: 'SPACE_BETWEEN',
     });
     yAxisId = r?.nodeId;
     op();
@@ -335,7 +337,8 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
   }
 
   if (yAxisId) {
-    for (const tick of yAxis.ticks) {
+    const reversedTicks = [...yAxis.ticks].reverse();
+    for (const tick of reversedTicks) {
       try {
         await collector.send('create_text', {
           parentId: yAxisId,
@@ -344,9 +347,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
           textStyleId: theme.labelStyle,
           fillVariable: theme.labelColor,
           textAlignHorizontal: 'RIGHT',
-          layoutPositioning: 'ABSOLUTE',
-          x: 0,
-          y: Math.max(0, tick.py - 6),
+          layoutSizingHorizontal: 'HUG',
         });
         op();
         results.elements.texts++;
@@ -356,7 +357,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     }
   }
 
-  // ── Bars area: HORIZONTAL AL with gap, bottom-aligned ──
+  // ── Bars row: HORIZONTAL, each bar is a VERTICAL column (spacer + rect) ──
   let barsFrameId;
   try {
     const r = await collector.send('create_frame', {
@@ -365,7 +366,6 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'FILL',
       layoutSizingVertical: 'FILL',
-      counterAxisAlignItems: 'MAX',
       gapVariable: 'spacing-sm',
     });
     barsFrameId = r?.nodeId;
@@ -376,39 +376,34 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
     return;
   }
 
-  // Grid lines (ABSOLUTE inside bars frame — pixel-perfect y positions)
-  for (const tick of yAxis.ticks) {
-    try {
-      await collector.send('create_rectangle', {
-        parentId: barsFrameId,
-        name: `Grid ${tick.label}`,
-        width: 9999,
-        height: 1,
-        fillVariable: theme.gridColor,
-        layoutPositioning: 'ABSOLUTE',
-        x: 0,
-        y: tick.py,
-      });
-      op();
-      results.elements.rectangles++;
-    } catch (err) {
-      fail('grid-line', err);
-    }
-  }
-
-  // Individual bars — FILL width (equal distribution), FIXED height (proportional)
+  // Each bar: VERTICAL column (FILL both) with spacer + colored rect
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
     const color = palette[i % palette.length];
+    const spacerHeight = chartHeight - bar.height;
+
     try {
-      await collector.send('create_rectangle', {
+      // Bar column
+      const colResult = await collector.send('create_frame', {
         parentId: barsFrameId,
         name: `Bar: ${bar.label}`,
-        height: Math.max(2, bar.height),
+        direction: 'VERTICAL',
         layoutSizingHorizontal: 'FILL',
-        layoutSizingVertical: 'FIXED',
+        layoutSizingVertical: 'FILL',
+        primaryAxisAlignItems: 'MAX',
+      });
+      const colId = colResult?.nodeId;
+      op();
+      results.elements.frames++;
+
+      // Colored bar (fixed height, proportional to value)
+      await collector.send('create_rectangle', {
+        parentId: colId,
+        name: `Value: ${bar.value}`,
+        height: Math.max(2, Math.round(bar.height)),
+        layoutSizingHorizontal: 'FILL',
         fillVariable: color,
-        radiusVariable: 'radius-xs',
+        cornerRadiusVariable: 'radius-xs',
       });
       op();
       results.elements.rectangles++;
