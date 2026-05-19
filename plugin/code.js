@@ -498,8 +498,13 @@ handlers.preload_styles = async function (payload) {
     for (var i = 0; i < styleKeys.length; i++) {
       var key = styleKeys[i];
       try {
-        // Import from library by key (async)
-        var style = await figma.importStyleByKeyAsync(key);
+        // Import from library by key with timeout
+        var style = await Promise.race([
+          figma.importStyleByKeyAsync(key),
+          new Promise(function (_, reject) {
+            setTimeout(function () { reject(new Error('TEXT_STYLE_IMPORT_TIMEOUT')); }, 10000);
+          })
+        ]);
         if (style && style.type === 'TEXT') {
           styleCache.set(key, style);
           loaded.push({ key: key, name: style.name });
@@ -966,8 +971,13 @@ handlers.create_text = async function (payload) {
     try {
       var style = styleCache.get(payload.textStyleId);
       if (!style) {
-        // Try importing from library by key
-        style = await figma.importStyleByKeyAsync(payload.textStyleId);
+        // Try importing from library by key with timeout
+        style = await Promise.race([
+          figma.importStyleByKeyAsync(payload.textStyleId),
+          new Promise(function (_, reject) {
+            setTimeout(function () { reject(new Error('TEXT_STYLE_IMPORT_TIMEOUT')); }, 10000);
+          })
+        ]);
       }
       if (style && style.type === 'TEXT') {
         text.textStyleId = style.id;
@@ -1096,7 +1106,12 @@ handlers.insert_component = function (payload) {
     });
   }
 
-  return importComponent(payload.componentKey).then(function (imported) {
+  return Promise.race([
+    importComponent(payload.componentKey),
+    new Promise(function (_, reject) {
+      setTimeout(function () { reject({ error: 'INSERT_TIMEOUT', message: 'Component import timed out after 15s for key: ' + payload.componentKey }); }, 15000);
+    })
+  ]).then(function (imported) {
     var instance = imported.createInstance();
     instance.name = payload.name || imported.name;
 
