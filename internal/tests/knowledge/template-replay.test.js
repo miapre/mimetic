@@ -396,3 +396,108 @@ describe('Template Replay — build history', () => {
     try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
   });
 });
+
+describe('Template Replay — end-to-end flow', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('captures variants in build 1, replays in build 2', async () => {
+    // ── Build 1: insert + manual variant ──
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:e2e-1',
+      name: 'Badge',
+      componentKey: 'badge-key-e2e',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    const result1 = await handlers.figma_insert_component({
+      componentKey: 'badge-key-e2e',
+      parentId: 'parent:1',
+    });
+
+    // No recipe yet — should NOT auto-apply
+    assert.strictEqual(result1._autoApplied, undefined);
+
+    // Claude manually sets variant
+    await handlers.figma_set_variant({
+      nodeId: 'node:e2e-1',
+      properties: { Color: 'Success', Size: 'sm' },
+    });
+
+    // Generate build report (persists recipe)
+    session._componentInsertions = new Map([
+      ['badge-key-e2e', { count: 1, names: ['Badge'] }],
+    ]);
+    session.phaseToolCalls[3] = 5;
+
+    await handlers.mimic_generate_build_report({
+      screenName: 'E2E Build 1',
+      components: [{ name: 'Badge', instances: 1, componentKey: 'badge-key-e2e' }],
+      primitives: [],
+      toolCallCount: 10,
+      cacheHits: 0,
+    });
+
+    // Verify recipe was saved with defaultVariants
+    let recipe = knowledgeStore.getComponent('badge-key-e2e');
+    assert.deepStrictEqual(recipe.defaultVariants, { Color: 'Success', Size: 'sm' });
+    assert.strictEqual(recipe.confidence, 'new'); // Only 1 build
+
+    // ── Simulate 2 more builds to reach confirmed ──
+    recipe.buildCount = 3;
+    recipe.confidence = 'confirmed';
+    knowledgeStore.setComponent('badge-key-e2e', recipe);
+
+    // ── Build 2: reset session state, insert same component ──
+    bridge.reset();
+    session.toolCallCount = 0;
+    session.cacheHits = 0;
+    session.replaySavings = 0;
+    session._nodeComponentKeys = new Map();
+    session._variantConfigs = new Map();
+
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:e2e-2',
+      name: 'Badge',
+      componentKey: 'badge-key-e2e',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    const result2 = await handlers.figma_insert_component({
+      componentKey: 'badge-key-e2e',
+      parentId: 'parent:2',
+    });
+
+    // Should have auto-applied
+    assert.ok(result2._autoApplied, 'Should have auto-applied');
+    assert.deepStrictEqual(result2._autoApplied.variants, {
+      Color: 'Success',
+      Size: 'sm',
+    });
+
+    // Verify bridge received set_variant
+    const variantMsgs = bridge.getMessages('set_variant');
+    assert.strictEqual(variantMsgs.length, 1);
+    assert.strictEqual(variantMsgs[0].payload.nodeId, 'node:e2e-2');
+
+    // Verify savings counter
+    assert.strictEqual(session.replaySavings, 1);
+    assert.strictEqual(session.cacheHits, 1);
+  });
+});
