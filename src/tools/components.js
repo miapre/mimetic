@@ -140,6 +140,12 @@ function register(server, context) {
 
       const nodeId = result?.nodeId || result?.id;
 
+      // Track nodeId → componentKey for variant config capture
+      if (!session._nodeComponentKeys) session._nodeComponentKeys = new Map();
+      if (nodeId && args.componentKey) {
+        session._nodeComponentKeys.set(nodeId, args.componentKey);
+      }
+
       // Auto-set FILL width when inserted into a VERTICAL auto-layout parent
       // that has a deterministic width (FIXED or FILL). Skip when:
       // - Parent is HUG — FILL children in HUG create layout conflicts
@@ -352,6 +358,15 @@ function register(server, context) {
       requirePhase(2, PHASE_HINT);
       const result = await bridge.send('set_variant', args);
       session.toolCallCount++;
+
+      // Track variant config for template replay
+      if (!session._variantConfigs) session._variantConfigs = new Map();
+      const compKey = session._nodeComponentKeys?.get(args.nodeId);
+      if (compKey && args.properties) {
+        const existing = session._variantConfigs.get(compKey) || {};
+        session._variantConfigs.set(compKey, { ...existing, ...args.properties });
+      }
+
       return {
         ...result,
         hint: 'Variant set. Use figma_get_component_variants to see all available variants for this component set.',
