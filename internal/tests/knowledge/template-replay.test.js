@@ -397,6 +397,458 @@ describe('Template Replay — build history', () => {
   });
 });
 
+// ─── Edge Case Tests ──────────────────────────────────────────────
+
+describe('Template Replay — override after auto-apply', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('manual set_variant after auto-apply overrides the recipe values', async () => {
+    knowledgeStore.setComponent('btn-override', {
+      names: ['Button'],
+      componentKey: 'btn-override',
+      buildCount: 5,
+      confidence: 'verified',
+      defaultVariants: { Size: 'sm', Hierarchy: 'Primary', Icon: 'Default' },
+    });
+
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:ov-1',
+      name: 'Button',
+      componentKey: 'btn-override',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    const result = await handlers.figma_insert_component({
+      componentKey: 'btn-override',
+      parentId: 'parent:1',
+    });
+
+    // Auto-applied the recipe defaults
+    assert.ok(result._autoApplied);
+    assert.deepStrictEqual(result._autoApplied.variants, {
+      Size: 'sm', Hierarchy: 'Primary', Icon: 'Default',
+    });
+
+    // First set_variant was the auto-apply
+    let variantMsgs = bridge.getMessages('set_variant');
+    assert.strictEqual(variantMsgs.length, 1);
+
+    // Now manually override with different values
+    await handlers.figma_set_variant({
+      nodeId: 'node:ov-1',
+      properties: { Hierarchy: 'Secondary gray' },
+    });
+
+    // Bridge should have received TWO set_variant calls total
+    variantMsgs = bridge.getMessages('set_variant');
+    assert.strictEqual(variantMsgs.length, 2);
+    assert.deepStrictEqual(variantMsgs[1].payload.properties, { Hierarchy: 'Secondary gray' });
+
+    // The session variant config should reflect the merged state
+    // (auto-applied + manual override)
+    assert.deepStrictEqual(
+      session._variantConfigs.get('btn-override'),
+      { Hierarchy: 'Secondary gray' },
+      'manual override recorded in session (only the manual call gets tracked)'
+    );
+  });
+
+  it('applyRecipe: false skips auto-apply, then manual set_variant works normally', async () => {
+    knowledgeStore.setComponent('btn-skip', {
+      names: ['Button'],
+      componentKey: 'btn-skip',
+      buildCount: 5,
+      confidence: 'confirmed',
+      defaultVariants: { Size: 'sm' },
+    });
+
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:skip-1',
+      name: 'Button',
+      componentKey: 'btn-skip',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    const result = await handlers.figma_insert_component({
+      componentKey: 'btn-skip',
+      parentId: 'parent:1',
+      applyRecipe: false,
+    });
+
+    assert.strictEqual(result._autoApplied, undefined);
+    assert.strictEqual(bridge.getMessages('set_variant').length, 0);
+
+    // Manual variant call works
+    await handlers.figma_set_variant({
+      nodeId: 'node:skip-1',
+      properties: { Size: 'lg', Hierarchy: 'Tertiary gray' },
+    });
+
+    assert.strictEqual(bridge.getMessages('set_variant').length, 1);
+    assert.deepStrictEqual(
+      session._variantConfigs.get('btn-skip'),
+      { Size: 'lg', Hierarchy: 'Tertiary gray' }
+    );
+  });
+});
+
+describe('Template Replay — last-write-wins behavior', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('last set_variant call wins when same component used with different configs', async () => {
+    // Insert Badge #1 with Color: Success
+    bridge.setResponse('insert_component', (payload) => ({
+      nodeId: payload.name === 'Badge: Active' ? 'node:b1' : 'node:b2',
+      name: payload.name,
+      componentKey: 'badge-lw',
+      type: 'INSTANCE',
+    }));
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    await handlers.figma_insert_component({
+      componentKey: 'badge-lw',
+      parentId: 'parent:1',
+      name: 'Badge: Active',
+    });
+
+    await handlers.figma_set_variant({
+      nodeId: 'node:b1',
+      properties: { Size: 'sm', Color: 'Success' },
+    });
+
+    // Insert Badge #2 with Color: Warning
+    await handlers.figma_insert_component({
+      componentKey: 'badge-lw',
+      parentId: 'parent:1',
+      name: 'Badge: Warning',
+    });
+
+    await handlers.figma_set_variant({
+      nodeId: 'node:b2',
+      properties: { Size: 'sm', Color: 'Warning' },
+    });
+
+    // Last write wins — Color should be Warning
+    assert.deepStrictEqual(
+      session._variantConfigs.get('badge-lw'),
+      { Size: 'sm', Color: 'Warning' },
+      'last set_variant call should win for the same componentKey'
+    );
+
+    // Persist and verify
+    session._componentInsertions = new Map([
+      ['badge-lw', { count: 2, names: ['Badge'] }],
+    ]);
+    session.phaseToolCalls[3] = 5;
+
+    await handlers.mimic_generate_build_report({
+      screenName: 'LW Test',
+      components: [{ name: 'Badge', instances: 2, componentKey: 'badge-lw' }],
+      primitives: [],
+      toolCallCount: 10,
+      cacheHits: 0,
+    });
+
+    const recipe = knowledgeStore.getComponent('badge-lw');
+    assert.strictEqual(recipe.defaultVariants.Color, 'Warning',
+      'persisted defaultVariants should reflect last-write-wins');
+  });
+});
+
+describe('Template Replay — recipe drift across builds', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('subsequent builds update defaultVariants (recipe evolves)', async () => {
+    // Pre-populate a recipe from a prior build
+    knowledgeStore.setComponent('badge-drift', {
+      names: ['Badge'],
+      componentKey: 'badge-drift',
+      buildCount: 2,
+      confidence: 'new',
+      defaultVariants: { Size: 'sm', Color: 'Success' },
+    });
+
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:drift-1',
+      name: 'Badge',
+      componentKey: 'badge-drift',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    // Insert and set a DIFFERENT color
+    await handlers.figma_insert_component({
+      componentKey: 'badge-drift',
+      parentId: 'parent:1',
+    });
+
+    await handlers.figma_set_variant({
+      nodeId: 'node:drift-1',
+      properties: { Size: 'sm', Color: 'Error' },
+    });
+
+    session._componentInsertions = new Map([
+      ['badge-drift', { count: 1, names: ['Badge'] }],
+    ]);
+    session.phaseToolCalls[3] = 5;
+
+    await handlers.mimic_generate_build_report({
+      screenName: 'Drift Test',
+      components: [{ name: 'Badge', instances: 1, componentKey: 'badge-drift' }],
+      primitives: [],
+      toolCallCount: 10,
+      cacheHits: 0,
+    });
+
+    const recipe = knowledgeStore.getComponent('badge-drift');
+    // New color should overwrite old — recipe evolves with latest usage
+    assert.strictEqual(recipe.defaultVariants.Color, 'Error',
+      'recipe should evolve to reflect latest build variant config');
+    // Size should be preserved (merge, not replace)
+    assert.strictEqual(recipe.defaultVariants.Size, 'sm',
+      'unchanged properties should be preserved');
+  });
+});
+
+describe('Template Replay — error recovery', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('insert succeeds even when auto-apply set_variant fails', async () => {
+    knowledgeStore.setComponent('btn-err', {
+      names: ['Button'],
+      componentKey: 'btn-err',
+      buildCount: 5,
+      confidence: 'confirmed',
+      defaultVariants: { Size: 'sm' },
+    });
+
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:err-1',
+      name: 'Button',
+      componentKey: 'btn-err',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    // Make set_variant throw an error
+    bridge.setResponse('set_variant', () => {
+      throw new Error('Plugin disconnected');
+    });
+
+    const result = await handlers.figma_insert_component({
+      componentKey: 'btn-err',
+      parentId: 'parent:1',
+    });
+
+    // Insert should succeed
+    assert.strictEqual(result.nodeId, 'node:err-1');
+    // Auto-apply should NOT be reported
+    assert.strictEqual(result._autoApplied, undefined);
+    // No replay savings counted
+    assert.strictEqual(session.replaySavings || 0, 0);
+    // Hint should mention the failure
+    assert.ok(result.hints.some(h => h.includes('auto-apply failed')),
+      'hints should mention the failure');
+  });
+});
+
+describe('Template Replay — multiple set_variant calls merge correctly', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('two set_variant calls on same nodeId merge into one recipe entry', async () => {
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:merge-1',
+      name: 'Button',
+      componentKey: 'btn-merge',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    await handlers.figma_insert_component({
+      componentKey: 'btn-merge',
+      parentId: 'parent:1',
+    });
+
+    // First call: set Size
+    await handlers.figma_set_variant({
+      nodeId: 'node:merge-1',
+      properties: { Size: 'sm' },
+    });
+
+    // Second call: set Hierarchy (should merge, not replace)
+    await handlers.figma_set_variant({
+      nodeId: 'node:merge-1',
+      properties: { Hierarchy: 'Secondary gray' },
+    });
+
+    // Third call: override Size (should update)
+    await handlers.figma_set_variant({
+      nodeId: 'node:merge-1',
+      properties: { Size: 'lg' },
+    });
+
+    assert.deepStrictEqual(
+      session._variantConfigs.get('btn-merge'),
+      { Size: 'lg', Hierarchy: 'Secondary gray' },
+      'multiple calls should merge, with later values overriding earlier ones'
+    );
+
+    // Persist and verify
+    session._componentInsertions = new Map([
+      ['btn-merge', { count: 1, names: ['Button'] }],
+    ]);
+    session.phaseToolCalls[3] = 5;
+
+    await handlers.mimic_generate_build_report({
+      screenName: 'Merge Test',
+      components: [{ name: 'Button', instances: 1, componentKey: 'btn-merge' }],
+      primitives: [],
+      toolCallCount: 10,
+      cacheHits: 0,
+    });
+
+    const recipe = knowledgeStore.getComponent('btn-merge');
+    assert.deepStrictEqual(recipe.defaultVariants, { Size: 'lg', Hierarchy: 'Secondary gray' },
+      'persisted recipe should reflect merged variant config');
+  });
+});
+
+describe('Template Replay — empty defaultVariants', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('does NOT auto-apply when defaultVariants is empty object', async () => {
+    knowledgeStore.setComponent('btn-empty', {
+      names: ['Button'],
+      componentKey: 'btn-empty',
+      buildCount: 5,
+      confidence: 'confirmed',
+      defaultVariants: {},
+    });
+
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:empty-1',
+      name: 'Button',
+      componentKey: 'btn-empty',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    const result = await handlers.figma_insert_component({
+      componentKey: 'btn-empty',
+      parentId: 'parent:1',
+    });
+
+    assert.strictEqual(result._autoApplied, undefined);
+    assert.strictEqual(bridge.getMessages('set_variant').length, 0);
+  });
+
+  it('does NOT auto-apply when defaultVariants is missing (null/undefined)', async () => {
+    knowledgeStore.setComponent('btn-null', {
+      names: ['Button'],
+      componentKey: 'btn-null',
+      buildCount: 5,
+      confidence: 'verified',
+      // No defaultVariants field
+    });
+
+    bridge.setResponse('insert_component', {
+      nodeId: 'node:null-1',
+      name: 'Button',
+      componentKey: 'btn-null',
+      type: 'INSTANCE',
+    });
+    bridge.setResponse('get_node_props', {
+      layoutSizingHorizontal: 'FIXED',
+      layoutMode: 'HORIZONTAL',
+    });
+
+    const result = await handlers.figma_insert_component({
+      componentKey: 'btn-null',
+      parentId: 'parent:1',
+    });
+
+    assert.strictEqual(result._autoApplied, undefined);
+    assert.strictEqual(bridge.getMessages('set_variant').length, 0);
+  });
+});
+
 describe('Template Replay — end-to-end flow', () => {
   let handlers, bridge, session, knowledgeStore;
 
