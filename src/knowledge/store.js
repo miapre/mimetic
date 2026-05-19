@@ -138,7 +138,7 @@ class KnowledgeStore {
    * Record a build snapshot for cross-build comparison.
    * Keeps the last 20 entries to avoid unbounded growth.
    */
-  recordBuild({ screenName, toolCalls, cacheHits, componentCount, primitiveCount, bindingFailures, componentUsagePercent }) {
+  recordBuild({ screenName, toolCalls, cacheHits, replaySavings, componentCount, primitiveCount, bindingFailures, componentUsagePercent }) {
     if (!this.data.buildHistory) this.data.buildHistory = [];
     this.data.buildHistory.push({
       screenName,
@@ -146,6 +146,7 @@ class KnowledgeStore {
       date: new Date().toISOString(),
       toolCalls: toolCalls || 0,
       cacheHits: cacheHits || 0,
+      replaySavings: replaySavings || 0,
       componentCount: componentCount || 0,
       primitiveCount: primitiveCount || 0,
       bindingFailures: bindingFailures || 0,
