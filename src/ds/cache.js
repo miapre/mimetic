@@ -5,7 +5,7 @@ class DsCache {
     this.effectStyles = new Map();
     this.variables = new Map();
     this.components = new Map();
-    this.failedKeys = new Set();
+    this.failedKeys = new Map(); // key → { timestamp, permanent }
     this.libraryFontIncompatible = false;
   }
 
@@ -19,8 +19,21 @@ class DsCache {
   getVariable(path) { return this.variables.get(path) || null; }
   addComponent(key, component) { this.components.set(key, component); }
   getComponent(key) { return this.components.get(key) || null; }
-  markFailed(key) { this.failedKeys.add(key); }
-  hasFailed(key) { return this.failedKeys.has(key); }
+  markFailed(key, permanent = true) {
+    this.failedKeys.set(key, { timestamp: Date.now(), permanent });
+  }
+  hasFailed(key) {
+    const entry = this.failedKeys.get(key);
+    if (!entry) return false;
+    if (entry.permanent) return true;
+    // Transient failures (timeouts) allow retry after 30 seconds
+    const COOLDOWN_MS = 30000;
+    if (Date.now() - entry.timestamp >= COOLDOWN_MS) {
+      this.failedKeys.delete(key);
+      return false;
+    }
+    return true;
+  }
 
   /**
    * Finds the closest matching variable paths for a given path.

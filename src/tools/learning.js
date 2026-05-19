@@ -243,8 +243,8 @@ function register(server, context) {
           // This prefix appeared 2+ times in the current build — it's a layout pattern
           const existing = knowledgeStore.getPattern(prefix);
           const updated = existing
-            ? promoter.incrementUsage(existing)
-            : { description: `Recurring frame structure "${prefix}: ..." (${count} instances in ${screenName})`, buildCount: 1, confidence: 'new', screen: screenName };
+            ? { ...promoter.incrementUsage(existing), occurrences: (existing.occurrences || 0) + count }
+            : { description: `Recurring frame structure "${prefix}: ..." (${count} instances in ${screenName})`, buildCount: 1, occurrences: count, confidence: 'new', screen: screenName };
           const promoted = promoter.maybePromote(updated);
           knowledgeStore.setPattern(prefix, promoted);
         }
@@ -252,9 +252,12 @@ function register(server, context) {
 
       // Only increment buildCount when there were actual build operations (Phase 3 tool calls).
       // This prevents drift when the report is called to clear a circuit breaker or other non-build scenarios.
+      // Reset phase3Ops after incrementing so subsequent reports in the same session
+      // (where advancePhase(3) can't move the phase back from 5) don't double-count.
       const phase3Ops = session.phaseToolCalls?.[3] || 0;
       if (phase3Ops > 0) {
         knowledgeStore.incrementBuildCount();
+        session.phaseToolCalls[3] = 0;
       }
       knowledgeStore.save();
 

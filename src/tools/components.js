@@ -67,11 +67,16 @@ function register(server, context) {
         // Success — remove from pending if it was there
         session._pendingInserts.delete(dedupKey);
       } catch (err) {
-        const isTimeout = err.message && err.message.includes('timeout');
+        const isPluginTimeout = err.pluginError && (err.pluginError.error === 'INSERT_TIMEOUT' || /timed?\s*out/i.test(err.message));
+        const isBridgeTimeout = err.message && err.message.includes('timeout');
+        const isTimeout = isPluginTimeout || isBridgeTimeout;
         const isFontError = err.message && /unloaded font|loadFontAsync|font.*not.*loaded/i.test(err.message);
-        if (!isTimeout) {
-          // Only mark permanent failures — timeouts may have succeeded in the plugin
-          dsCache.markFailed(args.componentKey);
+        if (isTimeout) {
+          // Transient failure — allow retry after cooldown (30s)
+          dsCache.markFailed(args.componentKey, false);
+        } else {
+          // Permanent failure — component doesn't exist or library not enabled
+          dsCache.markFailed(args.componentKey, true);
         }
         if (isFontError && !dsCache.libraryFontIncompatible) {
           dsCache.libraryFontIncompatible = true;
