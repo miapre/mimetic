@@ -153,7 +153,7 @@ class Bridge {
    * @returns {Promise<{results: Array, totalOps: number, succeeded: number, failed: number}>}
    */
   sendBatch(operations, timeout) {
-    const CHUNK_SIZE = 10;
+    const CHUNK_SIZE = 50;
 
     // Normalize node IDs but preserve $resultOf references
     const normalizedOps = operations.map(op => {
@@ -168,7 +168,7 @@ class Bridge {
 
     // Single chunk — send directly
     if (normalizedOps.length <= CHUNK_SIZE) {
-      const effectiveTimeout = timeout ?? (this.defaultTimeout + normalizedOps.length * 150);
+      const effectiveTimeout = timeout ?? (this.defaultTimeout + normalizedOps.length * 500);
       const msg = this.formatMessage('batch_execute', { operations: normalizedOps });
 
       return new Promise((resolve, reject) => {
@@ -192,7 +192,7 @@ class Bridge {
    * Cross-chunk $resultOf references are resolved by remapping indices.
    */
   async _sendBatchChunked(operations, timeout) {
-    const CHUNK_SIZE = 10;
+    const CHUNK_SIZE = 50;
     const allResults = [];
     let offset = 0;
 
@@ -224,7 +224,7 @@ class Bridge {
         return { type: op.type, payload };
       });
 
-      const effectiveTimeout = timeout ?? (this.defaultTimeout + remapped.length * 150);
+      const effectiveTimeout = timeout ?? (this.defaultTimeout + remapped.length * 500);
       const msg = this.formatMessage('batch_execute', { operations: remapped });
 
       const chunkResult = await new Promise((resolve, reject) => {

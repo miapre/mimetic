@@ -26,18 +26,31 @@ class ChartCalculator {
     const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
     const residual = roughStep / magnitude;
 
+    const niceSteps = [1 * magnitude, 2 * magnitude, 5 * magnitude, 10 * magnitude];
     let niceStep;
-    if (residual <= 1.5) niceStep = 1 * magnitude;
-    else if (residual <= 3) niceStep = 2 * magnitude;
-    else if (residual <= 7) niceStep = 5 * magnitude;
-    else niceStep = 10 * magnitude;
+    if (residual <= 1.5) niceStep = niceSteps[0];
+    else if (residual <= 3) niceStep = niceSteps[1];
+    else if (residual <= 7) niceStep = niceSteps[2];
+    else niceStep = niceSteps[3];
+
+    // Ensure tick count doesn't exceed target * 1.5 — bump to next step if needed
+    const maxTicks = Math.ceil(targetTicks * 1.5);
+    let stepIdx = niceSteps.indexOf(niceStep);
+    while (stepIdx < niceSteps.length - 1) {
+      const testMin = Math.floor(minVal / niceStep) * niceStep;
+      const testMax = Math.ceil(maxVal / niceStep) * niceStep;
+      const count = Math.round((testMax - testMin) / niceStep) + 1;
+      if (count <= maxTicks) break;
+      stepIdx++;
+      niceStep = niceSteps[stepIdx];
+    }
 
     const niceMin = Math.floor(minVal / niceStep) * niceStep;
     const niceMax = Math.ceil(maxVal / niceStep) * niceStep;
 
     const ticks = [];
     for (let v = niceMin; v <= niceMax + niceStep * 0.01; v += niceStep) {
-      ticks.push(Math.round(v * 1e10) / 1e10); // avoid floating point noise
+      ticks.push(Math.round(v * 1e10) / 1e10);
     }
 
     return { ticks, min: niceMin, max: niceMax, step: niceStep };
@@ -272,7 +285,7 @@ class ChartCalculator {
     const maxDataY = Math.max(...ys);
 
     // Compute nice Y-axis ticks
-    const yAxisInfo = this._niceAxis(Math.min(0, minDataY), maxDataY, 5);
+    const yAxisInfo = this._niceAxis(minDataY, maxDataY, 5);
     const yRange = yAxisInfo.max - yAxisInfo.min || 1;
 
     // X positions: evenly spaced across plotWidth

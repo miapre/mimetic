@@ -644,7 +644,45 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
   const plotWidth = dimensions.plotWidth || 400;
   const plotHeight = dimensions.plotHeight || 200;
 
-  // Chart area (y-axis + plot side by side)
+  // ── Single SVG approach: grid + area + ribbon + dots all in one SVG ──
+  // This avoids NONE frames and absolute positioning issues entirely.
+  // Auto-layout handles Y-axis labels, X-axis labels, and legend natively.
+  // Pad SVG by dot radius so edge dots aren't clipped.
+
+  const pad = 5; // padding for dot radius (4) + 1px breathing room
+  const svgW = plotWidth + pad * 2;
+  const svgH = plotHeight + pad * 2;
+  const svgParts = [];
+
+  // Grid lines (offset by pad)
+  for (const tick of yAxis.ticks) {
+    const y = tick.py + pad;
+    svgParts.push(`<line x1="${pad}" y1="${y}" x2="${plotWidth + pad}" y2="${y}" stroke="#e4e6ee" stroke-width="1"/>`);
+  }
+
+  if (points.length >= 2) {
+    // Area fill (closed path from line to bottom)
+    const areaPathParts = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${(p.px + pad).toFixed(1)},${(p.py + pad).toFixed(1)}`);
+    areaPathParts.push(`L${(points[points.length - 1].px + pad).toFixed(1)},${plotHeight + pad}`);
+    areaPathParts.push(`L${(points[0].px + pad).toFixed(1)},${plotHeight + pad}`);
+    areaPathParts.push('Z');
+    svgParts.push(`<path d="${areaPathParts.join(' ')}" fill="#3b82f6" opacity="0.1"/>`);
+
+    // Data line ribbon (filled polygon, 1.5px above/below)
+    const ribbonThickness = 1.5;
+    const topPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${(p.px + pad).toFixed(1)},${(p.py + pad - ribbonThickness).toFixed(1)}`);
+    const bottomPath = [...points].reverse().map(p => `L${(p.px + pad).toFixed(1)},${(p.py + pad + ribbonThickness).toFixed(1)}`);
+    svgParts.push(`<path d="${[...topPath, ...bottomPath, 'Z'].join(' ')}" fill="#3b82f6"/>`);
+
+    // Data point dots
+    for (const pt of points) {
+      svgParts.push(`<circle cx="${(pt.px + pad).toFixed(1)}" cy="${(pt.py + pad).toFixed(1)}" r="4" fill="#3b82f6"/>`);
+    }
+  }
+
+  const fullSvg = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" fill="none" xmlns="http://www.w3.org/2000/svg">${svgParts.join('')}</svg>`;
+
+  // ── Chart Area: Y-axis labels + SVG plot side by side ──
   let chartAreaId;
   try {
     const r = await collector.send('create_frame', {
@@ -652,8 +690,10 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
       name: 'Chart Area',
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'FILL',
-      layoutSizingVertical: 'HUG',
-      gapVariable: 'spacing-md',
+      height: plotHeight,
+      layoutSizingVertical: 'FIXED',
+      gap: 8,
+      counterAxisAlignItems: 'MIN',
     });
     chartAreaId = r?.nodeId;
     op();
@@ -663,17 +703,16 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
     return;
   }
 
-  // ── Y-axis labels ──
+  // Y-axis labels (VERTICAL + SPACE_BETWEEN)
   let yAxisId;
   try {
     const r = await collector.send('create_frame', {
       parentId: chartAreaId,
       name: 'Y Axis',
-      direction: 'NONE',
-      width: 40,
-      height: plotHeight,
-      layoutSizingHorizontal: 'FIXED',
-      layoutSizingVertical: 'FIXED',
+      direction: 'VERTICAL',
+      layoutSizingHorizontal: 'HUG',
+      layoutSizingVertical: 'FILL',
+      primaryAxisAlignItems: 'SPACE_BETWEEN',
     });
     yAxisId = r?.nodeId;
     op();
@@ -683,7 +722,8 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
   }
 
   if (yAxisId) {
-    for (const tick of yAxis.ticks) {
+    const reversedTicks = [...yAxis.ticks].reverse();
+    for (const tick of reversedTicks) {
       try {
         await collector.send('create_text', {
           parentId: yAxisId,
@@ -691,8 +731,8 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
           content: tick.label,
           textStyleId: theme.labelStyle,
           fillVariable: theme.labelColor,
-          x: 0,
-          y: Math.max(0, tick.py - 6),
+          textAlignHorizontal: 'RIGHT',
+          layoutSizingHorizontal: 'HUG',
         });
         op();
         results.elements.texts++;
@@ -702,178 +742,22 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
     }
   }
 
-  // ── Plot area (NONE direction, fixed size) ──
-  let plotId;
-  try {
-    const r = await collector.send('create_frame', {
-      parentId: chartAreaId,
-      name: 'Plot Area',
-      direction: 'NONE',
-      layoutSizingHorizontal: 'FILL',
-      height: plotHeight,
-      layoutSizingVertical: 'FIXED',
-    });
-    plotId = r?.nodeId;
-    op();
-    results.elements.frames++;
-  } catch (err) {
-    fail('plot-area', err);
-    return;
-  }
-
-  // Grid lines (horizontal rectangles)
-  for (const tick of yAxis.ticks) {
-    try {
-      await collector.send('create_rectangle', {
-        parentId: plotId,
-        name: `Grid ${tick.label}`,
-        width: 9999,
-        height: 1,
-        fillVariable: theme.gridColor,
-        x: 0,
-        y: tick.py,
-      });
-      op();
-      results.elements.rectangles++;
-    } catch (err) {
-      fail('grid-line', err);
-    }
-  }
-
-  // Flush collector before SVG operations (need real nodeIds)
+  // Flush collector, then create SVG via bridge (needs real parent ID)
   await collector.flush(bridge);
-  const realPlotId = collector.getRealNodeId(plotId);
+  const realChartAreaId = collector.getRealNodeId(chartAreaId);
   const realCardIdLine = collector.getRealNodeId(cardId);
 
-  // Area fill SVG (closed polygon, fill only, NO stroke)
-  if (points.length >= 2) {
-    const color = palette[0];
-    // Build closed area path: trace points left to right, then close via bottom
-    const areaPathParts = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.px.toFixed(2)},${p.py.toFixed(2)}`);
-    // Close via bottom-right → bottom-left
-    areaPathParts.push(`L${points[points.length - 1].px.toFixed(2)},${plotHeight}`);
-    areaPathParts.push(`L${points[0].px.toFixed(2)},${plotHeight}`);
-    areaPathParts.push('Z');
-    const areaPath = areaPathParts.join(' ');
-
-    const areaSvg = `<svg viewBox="0 0 ${plotWidth} ${plotHeight}" xmlns="http://www.w3.org/2000/svg"><path d="${areaPath}" fill="#4080ff" opacity="0.15" /></svg>`;
-
-    let areaResult;
-    try {
-      areaResult = await bridge.send('create_svg', {
-        parentId: realPlotId,
-        name: 'Area Fill',
-        svgString: areaSvg,
-        layoutSizingHorizontal: 'FILL',
-        x: 0,
-        y: 0,
-      });
-      op();
-      results.elements.svgs++;
-
-      // Bind area fill vector to DS color
-      const areaChildren = areaResult?.unboundChildren || [];
-      const areaVectors = areaChildren.filter(c => c.type !== 'TEXT');
-      if (areaVectors.length > 0) {
-        try {
-          await bridge.send('set_node_fill', {
-            nodeId: areaVectors[0].nodeId,
-            fillVariable: color,
-          });
-          op();
-          results.elements.bindings++;
-        } catch (err) {
-          fail('area-bind', err);
-        }
-      }
-    } catch (err) {
-      fail('area-svg', err);
-    }
-
-    // Data line ribbon (thin filled shape, 2px thick, NO stroke)
-    const ribbonThickness = 1.5;
-    const ribbonTop = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.px.toFixed(2)},${(p.py - ribbonThickness).toFixed(2)}`);
-    // Reverse bottom
-    const ribbonBottom = [...points].reverse().map((p, i) => `${i === 0 ? 'L' : 'L'}${p.px.toFixed(2)},${(p.py + ribbonThickness).toFixed(2)}`);
-    const ribbonPath = [...ribbonTop, ...ribbonBottom, 'Z'].join(' ');
-
-    const ribbonSvg = `<svg viewBox="0 0 ${plotWidth} ${plotHeight}" xmlns="http://www.w3.org/2000/svg"><path d="${ribbonPath}" fill="#4080ff" /></svg>`;
-
-    let ribbonResult;
-    try {
-      ribbonResult = await bridge.send('create_svg', {
-        parentId: realPlotId,
-        name: 'Data Line',
-        svgString: ribbonSvg,
-        layoutSizingHorizontal: 'FILL',
-        x: 0,
-        y: 0,
-      });
-      op();
-      results.elements.svgs++;
-
-      // Bind ribbon vector to DS color
-      const ribbonChildren = ribbonResult?.unboundChildren || [];
-      const ribbonVectors = ribbonChildren.filter(c => c.type !== 'TEXT');
-      if (ribbonVectors.length > 0) {
-        try {
-          await bridge.send('set_node_fill', {
-            nodeId: ribbonVectors[0].nodeId,
-            fillVariable: color,
-          });
-          op();
-          results.elements.bindings++;
-        } catch (err) {
-          fail('ribbon-bind', err);
-        }
-      }
-    } catch (err) {
-      fail('ribbon-svg', err);
-    }
-
-    // Data points (ellipses at each point position)
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      const pointColor = palette[0];
-      try {
-        await bridge.send('create_ellipse', {
-          parentId: realPlotId,
-          name: `Point: ${pt.label}`,
-          width: 6,
-          height: 6,
-          fillVariable: pointColor,
-          x: pt.px - 3,
-          y: pt.py - 3,
-        });
-        op();
-        results.elements.rectangles++; // count ellipses with rects for simplicity
-      } catch (err) {
-        fail('data-point', err);
-      }
-    }
-
-    // Score labels (native text above each data point)
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      // Format the value for display
-      const displayValue = Number.isInteger(pt.y) ? String(pt.y) : pt.y.toFixed(1);
-      try {
-        await bridge.send('create_text', {
-          parentId: realPlotId,
-          name: `Score: ${pt.label}`,
-          content: displayValue,
-          textStyleId: theme.labelStyle,
-          fillVariable: theme.labelColor,
-          x: pt.px - 12,
-          y: pt.py - 18,
-          textAlignHorizontal: 'CENTER',
-        });
-        op();
-        results.elements.texts++;
-      } catch (err) {
-        fail('score-label', err);
-      }
-    }
+  // Insert the single combined SVG
+  try {
+    await bridge.send('create_svg', {
+      parentId: realChartAreaId,
+      name: 'Plot',
+      svgString: fullSvg,
+    });
+    op();
+    results.elements.svgs++;
+  } catch (err) {
+    fail('plot-svg', err);
   }
 
   // ── X-axis labels ──
@@ -894,7 +778,7 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
   }
 
   if (xAxisId) {
-    // Spacer for y-axis alignment
+    // Spacer to align with y-axis width
     try {
       await collector.send('create_rectangle', {
         parentId: xAxisId,

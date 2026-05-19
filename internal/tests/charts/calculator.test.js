@@ -70,6 +70,24 @@ describe('ChartCalculator', () => {
       assert.ok(result.pathD.startsWith('M'));
     });
 
+    it('does not force zero on y-axis for positive-only data', () => {
+      const result = calc.line({
+        data: [
+          { label: 'T1', value: 151 },
+          { label: 'T2', value: 155 },
+          { label: 'T3', value: 159 },
+          { label: 'T4', value: 161 },
+          { label: 'T5', value: 163 },
+          { label: 'T6', value: 165 },
+        ],
+        plotWidth: 400,
+        plotHeight: 200,
+      });
+      assert.ok(result.yAxis.min >= 140, `yAxis.min should be >= 140, got ${result.yAxis.min}`);
+      assert.ok(result.yAxis.max <= 180, `yAxis.max should be <= 180, got ${result.yAxis.max}`);
+      assert.ok(result.yAxis.max < 200, `yAxis.max should not be 200, got ${result.yAxis.max}`);
+    });
+
     it('returns data point positions for dots', () => {
       const result = calc.line({
         data: [{ x: 0, y: 10 }, { x: 100, y: 50 }],

@@ -531,15 +531,18 @@ handlers.preload_fill_styles = async function (payload) {
           styleCache.set(key, style);
           loaded.push({ key: key, name: style.name });
           preloadedStyles++;
+        } else {
+          failed.push({ key: key, reason: style ? 'type=' + style.type : 'null' });
         }
       } catch (e) {
-        failed.push(key);
+        failed.push({ key: key, reason: e.message || 'import-error' });
       }
     }
   }
   return {
     preloadedFillStyles: preloadedStyles,
     failed: failed.length,
+    failedDetails: failed,
     styleCacheSize: styleCache.size,
     styles: loaded,
   };
