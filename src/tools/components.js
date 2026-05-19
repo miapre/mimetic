@@ -124,10 +124,12 @@ function register(server, context) {
       }
 
       // Check knowledge store for recipes
-      const recipe = knowledgeStore.getComponent(args.name || result?.name);
+      // Check knowledge store for recipes — look up by componentKey first, then by name
+      const recipe = knowledgeStore.getComponent(args.componentKey) || knowledgeStore.getComponent(args.name || result?.name);
       const hints = [];
       if (recipe) {
         hints.push(`Known recipe: ${JSON.stringify(recipe)}`);
+        session.cacheHits++;
       }
       hints.push('After inserting: override ALL text with figma_set_component_text, set semantic properties, configure icons, hide unused slots.');
 

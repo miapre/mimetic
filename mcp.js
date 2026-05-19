@@ -323,9 +323,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: 'text', text: JSON.stringify(result) }],
     };
   } catch (err) {
-    // Only count failures toward circuit breaker for non-exempt tools
+    const { isInfraError } = require('./src/utils/errors');
+    const infraFailure = isInfraError(err);
+
+    // Only count USER errors toward circuit breaker (wrong params, phase errors, bad variable paths).
+    // Infra failures (bridge timeout, parent node disappeared, plugin disconnected) are NOT the
+    // user's fault — reset the counter and warn with retry guidance instead of punishing.
     if (!EXEMPT_TOOLS.has(name)) {
-      session.consecutiveFailures++;
+      if (infraFailure) {
+        session.consecutiveFailures = 0; // reset — don't punish for infra problems
+      } else {
+        session.consecutiveFailures++;
+      }
     }
     session.phaseToolCalls[session.phase] = (session.phaseToolCalls[session.phase] || 0) + 1;
 
@@ -338,8 +347,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (err.pluginError.property) errorPayload.property = err.pluginError.property;
     }
 
-    // Add failure context to help Claude understand the pattern
-    if (session.consecutiveFailures >= 2) {
+    // Infra failures: add recovery guidance instead of circuit breaker warnings
+    if (infraFailure) {
+      errorPayload._infraFailure = {
+        classified: true,
+        message: 'This is an infrastructure failure (plugin/bridge), not a user error. '
+          + 'The circuit breaker counter has been reset. '
+          + 'Retry the operation, or if the plugin is disconnected, ask the user to restart it.',
+        suggestion: /Bridge timeout/i.test(err.message)
+          ? 'Bridge timed out — the plugin may be busy or disconnected. Wait a moment and retry.'
+          : /Parent node not found/i.test(err.message) || /Parent node not found/i.test(err.pluginError?.message || '')
+            ? 'Parent node disappeared — this is a plugin state issue. Verify the parent still exists with figma_get_node_children on its container, then retry.'
+            : /plugin disconnected/i.test(err.message)
+              ? 'Plugin disconnected — ask the user to restart the Figma plugin, then retry.'
+              : 'Infrastructure error detected. Retry or check plugin status.',
+      };
+    }
+
+    // Add failure context for user errors approaching circuit breaker
+    if (!infraFailure && session.consecutiveFailures >= 2) {
       errorPayload._failureContext = {
         consecutiveFailures: session.consecutiveFailures,
         warning: session.consecutiveFailures === 2

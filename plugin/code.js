@@ -2543,8 +2543,39 @@ handlers.batch_execute = async function (payload) {
     return out;
   }
 
-  for (var i = 0; i < operations.length; i++) {
-    var op = operations[i];
+  // Group operations by parentId to yield between cross-parent writes.
+  // Figma's auto-layout engine can drop nodes when children are rapidly
+  // created across different auto-layout parents in the same execution frame.
+  var groups = [];
+  var currentGroup = [];
+  var currentParent = null;
+
+  for (var g = 0; g < operations.length; g++) {
+    var gOp = operations[g];
+    var gPayload = gOp.payload || {};
+    // Determine the effective parent for grouping — use parentId if present,
+    // fall back to nodeId (for mutations on existing nodes), or null.
+    var effectiveParent = gPayload.parentId || gPayload.nodeId || null;
+    // Don't resolve $resultOf refs for grouping — treat each ref string as its own key
+    if (currentParent !== effectiveParent && currentGroup.length > 0) {
+      groups.push(currentGroup);
+      currentGroup = [];
+    }
+    currentGroup.push({ originalIndex: g, op: gOp });
+    currentParent = effectiveParent;
+  }
+  if (currentGroup.length > 0) groups.push(currentGroup);
+
+  for (var gi = 0; gi < groups.length; gi++) {
+    // Yield between parent groups so Figma's layout engine can settle
+    if (gi > 0) {
+      await new Promise(function (r) { setTimeout(r, 0); });
+    }
+
+    var group = groups[gi];
+    for (var j = 0; j < group.length; j++) {
+      var i = group[j].originalIndex;
+      var op = group[j].op;
     var opType = op.type;
     var opPayload = op.payload || {};
 
@@ -2583,6 +2614,7 @@ handlers.batch_execute = async function (payload) {
     } catch (err) {
       var errMsg = (err instanceof Error) ? err.message : (err.message || JSON.stringify(err));
       results.push({ ok: false, index: i, type: opType, error: errMsg });
+    }
     }
   }
 

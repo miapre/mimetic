@@ -196,17 +196,23 @@ function register(server, context) {
             }
           }
         }
-        const existing = knowledgeStore.getComponent(comp.name);
+        // Key by componentKey when available so "Badge: On track" and "Badge: Plateau"
+        // (same componentKey) merge into one entry instead of fragmenting.
+        const storeKey = resolvedKey || comp.name;
+        const existing = knowledgeStore.getComponent(storeKey);
+        // Track all display names seen for this component
+        const existingNames = existing?.names || [];
+        if (!existingNames.includes(comp.name)) existingNames.push(comp.name);
         let recipe = existing
-          ? { ...existing, instances: (existing.instances || 0) + (comp.instances || 0), buildCount: (existing.buildCount || 0) + 1, componentKey: existing.componentKey || resolvedKey }
-          : { instances: comp.instances || 0, buildCount: 1, componentKey: resolvedKey, variantConfig: comp.variantConfig || null, confidence: 'new' };
+          ? { ...existing, names: existingNames, instances: (existing.instances || 0) + (comp.instances || 0), buildCount: (existing.buildCount || 0) + 1, componentKey: existing.componentKey || resolvedKey }
+          : { names: [comp.name], instances: comp.instances || 0, buildCount: 1, componentKey: resolvedKey, variantConfig: comp.variantConfig || null, confidence: 'new' };
         if (!recipe.confidence) recipe.confidence = 'new';
         const before = recipe.confidence;
         recipe = promoter.maybePromote(recipe);
         if (recipe.confidence !== before) {
           promotions.push(`${comp.name} (${before} → ${recipe.confidence})`);
         }
-        knowledgeStore.setComponent(comp.name, recipe);
+        knowledgeStore.setComponent(storeKey, recipe);
       }
       for (const prim of primitives) {
         if (prim.reason && prim.reason.length >= 10) {
@@ -218,7 +224,38 @@ function register(server, context) {
           });
         }
       }
-      knowledgeStore.incrementBuildCount();
+      // ── Pattern extraction from recurring primitive frames ──
+      // Detect repeated frame name patterns (e.g. "Card: Revenue", "Card: Users"
+      // share the pattern "Card:") and store them so future builds can reuse the layout.
+      const frameSections = manifestSections.filter(s => s.type === 'frame' || s.type === 'primitive');
+      const namePatterns = new Map(); // pattern prefix → count
+      for (const section of frameSections) {
+        const name = section.htmlSection || '';
+        // Extract prefix before ":" or before the last word (e.g. "Card: Revenue" → "Card")
+        const colonIdx = name.indexOf(':');
+        const prefix = colonIdx > 0 ? name.slice(0, colonIdx).trim() : null;
+        if (prefix && prefix.length >= 3) {
+          namePatterns.set(prefix, (namePatterns.get(prefix) || 0) + 1);
+        }
+      }
+      for (const [prefix, count] of namePatterns) {
+        if (count >= 2) {
+          // This prefix appeared 2+ times in the current build — it's a layout pattern
+          const existing = knowledgeStore.getPattern(prefix);
+          const updated = existing
+            ? promoter.incrementUsage(existing)
+            : { description: `Recurring frame structure "${prefix}: ..." (${count} instances in ${screenName})`, buildCount: 1, confidence: 'new', screen: screenName };
+          const promoted = promoter.maybePromote(updated);
+          knowledgeStore.setPattern(prefix, promoted);
+        }
+      }
+
+      // Only increment buildCount when there were actual build operations (Phase 3 tool calls).
+      // This prevents drift when the report is called to clear a circuit breaker or other non-build scenarios.
+      const phase3Ops = session.phaseToolCalls?.[3] || 0;
+      if (phase3Ops > 0) {
+        knowledgeStore.incrementBuildCount();
+      }
       knowledgeStore.save();
 
       // Build markdown report (after learning so confidence tiers are current)
@@ -353,10 +390,11 @@ function register(server, context) {
       lines.push('');
       const componentRecipes = Object.entries(knowledgeStore.data.components);
       if (componentRecipes.length > 0) {
-        componentRecipes.forEach(([name, recipe]) => {
+        componentRecipes.forEach(([key, recipe]) => {
+          const displayName = recipe.names?.length > 0 ? recipe.names.join(', ') : key;
           const tier = recipe.confidence || 'new';
           const badge = tier === 'verified' ? '🟢 verified' : tier === 'confirmed' ? '🟡 confirmed' : tier === 'strong' ? '🟡 confirmed' : '🔵 new';
-          lines.push(`- **${name}**: ${badge} (${recipe.buildCount || 0} builds, ${recipe.instances || 0} instances)`);
+          lines.push(`- **${displayName}**: ${badge} (${recipe.buildCount || 0} builds, ${recipe.instances || 0} instances)`);
         });
       } else {
         lines.push('No component recipes stored.');
