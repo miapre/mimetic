@@ -3,6 +3,7 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
 const { MockBridge } = require('../helpers/mock-bridge');
 const { DsCache } = require('../../../src/ds/cache');
 const { DsResolver } = require('../../../src/ds/resolver');
@@ -169,5 +170,42 @@ describe('Template Replay — Variant Config Tracking', () => {
     if (configs) {
       assert.strictEqual(configs.size, 0, 'no variant config should be stored for unknown nodeId');
     }
+  });
+});
+
+const REPLAY_STORE_PATH = path.join(__dirname, '.test-replay.json');
+
+describe('Template Replay — recipe persistence', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const ctx = createTestContext();
+    handlers = ctx.handlers;
+    bridge = ctx.bridge;
+    session = ctx.session;
+    knowledgeStore = ctx.knowledgeStore;
+    try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
+  });
+
+  it('persists variant config as defaultVariants in recipe after build report', async () => {
+    session._componentInsertions = new Map([
+      ['btn-key-123', { count: 2, names: ['Button'] }],
+    ]);
+    session._variantConfigs = new Map([
+      ['btn-key-123', { Size: 'sm', Hierarchy: 'Primary' }],
+    ]);
+    session.phaseToolCalls[3] = 10;
+
+    await handlers.mimic_generate_build_report({
+      screenName: 'Test Screen',
+      components: [{ name: 'Button', instances: 2, componentKey: 'btn-key-123' }],
+      primitives: [],
+      toolCallCount: 25,
+      cacheHits: 0,
+    });
+
+    const recipe = knowledgeStore.getComponent('btn-key-123');
+    assert.ok(recipe, 'Recipe should exist');
+    assert.deepStrictEqual(recipe.defaultVariants, { Size: 'sm', Hierarchy: 'Primary' });
   });
 });

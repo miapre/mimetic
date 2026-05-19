@@ -212,6 +212,13 @@ function register(server, context) {
         if (recipe.confidence !== before) {
           promotions.push(`${comp.name} (${before} → ${recipe.confidence})`);
         }
+        // Merge tracked variant configs into recipe as defaultVariants
+        if (session._variantConfigs && resolvedKey) {
+          const variantConfig = session._variantConfigs.get(resolvedKey);
+          if (variantConfig && Object.keys(variantConfig).length > 0) {
+            recipe.defaultVariants = { ...(existing?.defaultVariants || {}), ...variantConfig };
+          }
+        }
         knowledgeStore.setComponent(storeKey, recipe);
       }
       for (const prim of primitives) {
