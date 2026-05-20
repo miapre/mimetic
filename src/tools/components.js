@@ -176,7 +176,15 @@ function register(server, context) {
       //   row (e.g., a sidebar taking the full artboard width). In HORIZONTAL
       //   parents, components keep their natural width; the caller sets FILL
       //   explicitly on the element that should expand (e.g., main content).
-      if (nodeId && args.parentId) {
+      // - Component is inline (Badge, Breadcrumb, etc.) — these should HUG
+      //   their content, not stretch across the parent.
+      const INLINE_COMPONENTS = [
+        'badge', 'breadcrumb', 'tag', 'chip', 'pill', 'avatar', 'toggle',
+        'checkbox', 'radio', 'switch', 'icon',
+      ];
+      const compName = (result?.name || args.name || '').toLowerCase();
+      const isInline = INLINE_COMPONENTS.some(p => compName.includes(p));
+      if (nodeId && args.parentId && !isInline) {
         try {
           const parentProps = await bridge.send('get_node_props', { nodeId: args.parentId });
           const parentSizing = parentProps?.layoutSizingHorizontal;
@@ -197,6 +205,8 @@ function register(server, context) {
         } catch (_) {
           // Non-critical — parent may not be auto-layout
         }
+      } else if (isInline) {
+        result._autoSized = { skipped: true, reason: `inline component "${compName}" keeps HUG width` };
       }
 
       // Record component in build manifest
