@@ -1,7 +1,9 @@
 # Mimic AI
 
-MCP tool that translates HTML into Figma using the DS present
-on the user's target file. Learns from every build.
+MCP server that builds production-ready Figma using the design
+system on the user's target file. Accepts prompts, HTML, or any
+description. Uses real components, tokens, and auto-layout.
+Learns from every build.
 
 ## Prerequisites
 
