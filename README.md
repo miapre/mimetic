@@ -6,7 +6,7 @@
 
 **Production-ready Figma from your design system. Describe it, build it, ship it.**
 
-Tell Mimic what you need. It builds it in Figma using your actual design system: real components, real tokens, real auto-layout. Give it HTML, a prompt, or a Stitch export. The output uses your DS for everything.
+Tell Mimic what you need. It builds it in Figma using real design system components, tokens, and auto-layout. Give it HTML, a prompt, or a description. The output uses the DS for everything.
 
 After every build, it tells you what your design system is missing.
 
@@ -29,25 +29,43 @@ After every build, it tells you what your design system is missing.
 
 ## Why Mimic exists
 
-You built a design system. Every token, every component, every variable. Intentional.
+Design systems exist to make teams consistent. But when someone needs a screen in Figma, they often start from scratch. Whether it's your own team library, a community kit like Material UI or HeroUI, or a client's published system, the components sit in the library panel. Unused.
 
-Then someone needs a screen and builds it from scratch. Your system sits in the library panel. Unused.
+AI tools don't solve this. Claude Design generates prototypes you have to rebuild in Figma. Figma Make generates interactive demos with raw CSS values instead of real components. The cleanup takes as long as building it yourself.
 
-AI tools make it worse. Claude Design generates prototypes you have to rebuild in Figma. Figma Make generates interactive demos with raw CSS values instead of your actual components. The cleanup takes as long as building it yourself.
-
-Mimic is different. The output is the deliverable: real Figma layers with your published components, your variable bindings, your auto-layout. Nothing to convert. Nothing to swap. Hand it off.
+Mimic is different. The output is the deliverable: real Figma layers with real component instances, variable bindings, and auto-layout. Nothing to convert. Nothing to swap. Hand it off.
 
 ---
 
 ## How it works
 
-Describe what you need:
+Pick any starting point:
 
-> "Dashboard with three metric cards, an activity table, and a status filter"
+> "Build a dashboard with three metric cards and an activity table"
 
-Or give it HTML from any source: your codebase, a Stitch export, a Claude Design prototype, a hand-written mockup.
+> "Here's the HTML from our staging environment, build it in Figma"
 
-Mimic discovers your design system, matches components and tokens, and builds structured Figma that uses your DS for everything. Same system, same rules, regardless of input.
+> "Take this Stitch export and apply our design system"
+
+> "Rebuild this Claude Design prototype with real components"
+
+Mimic discovers the design system on your file, matches components and tokens, and builds structured Figma. Same rules, same output quality, regardless of how you start.
+
+---
+
+## Who it's for
+
+Mimic works with any Figma library: your team's, a community kit, or a client's published system.
+
+- **Designers** who want DS-compliant screens without manual component hunting
+- **Developers** who need a Figma reference that matches their frontend components
+- **Product managers** who want to mock up ideas using the team's DS without waiting for a designer
+- **Agencies and freelancers** picking up a client's library and needing to produce screens fast
+- **New team members** learning a DS by building with it, seeing what components exist and what's missing
+- **DS teams** testing their system by building real screens, surfacing coverage gaps with evidence
+- **Anyone evaluating a DS** by building the same screen with different libraries to compare
+- **DS migration** teams rebuilding existing screens with a new system to assess coverage before committing
+- **Open source library maintainers** generating showcase pages that demonstrate components in real context
 
 ---
 
