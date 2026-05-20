@@ -360,23 +360,16 @@ Intelligence flows down. Binding feedback flows up. The MCP layer validates vari
 
 ---
 
-## Cost and efficiency
+## How Mimic learns
 
-Mimic gets cheaper over time.
+Every build teaches Mimic about your design system.
 
-| Build | Tool calls | Why |
-|---|---|---|
-| 1st (cold) | ~140 | Full DS discovery, no cache, every pattern new |
-| 5th (warm) | ~80 | Most patterns cached, discovery skipped for known components |
-| 10th+ (hot) | ~55 | Nearly everything cached, decisions instant |
+- **Component recipes:** After you configure a component once (variants, booleans, text slots), Mimic replays that configuration automatically on future inserts
+- **Layout patterns:** Frame configs (direction, padding, gap, fills) are captured from your first build and reused when the same pattern appears again
+- **Text batch optimization:** All text overrides on a component instance are set in a single call instead of one-by-one
+- **DS gap tracking:** Patterns built as primitives are tracked across builds. Mimic surfaces recommendations backed by evidence ("Status Badge used 31 times as primitives")
 
-**What drives cost down:**
-- **Cache:** every pattern Mimic learns skips a DS search next time
-- **DS components:** inserting a component = ~3 calls. Building the same thing from primitives = ~10-15 calls
-- **Recipes:** full component configurations replayed from cache, no re-inspection needed
-- **DS gap recommendations:** when Mimic suggests a component, it's also telling you how to make future builds cheaper
-
-Every build report includes tool call counts and efficiency savings.
+Every build report includes component usage stats, binding quality, and DS gap recommendations.
 
 ---
 

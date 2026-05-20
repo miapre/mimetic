@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 (unreleased)
+## 2.0.0 (2026-05-20)
 
 Complete rewrite from scratch.
 
@@ -16,7 +16,7 @@ Complete rewrite from scratch.
 - Variable path validation — all `*Variable` params checked against DS cache before plugin; returns suggestions on mismatch
 - Circuit breaker — 3 consecutive failures blocks build tools, forces report generation
 - Build checkpoint — after 20 Phase 3 operations, prompts verification before continuing
-- Build limit — 200 Phase 3 calls triggers forced stop
+- Build limit — 300 Phase 3 calls triggers forced stop
 - `figma_set_all_variable_modes` — sets default mode on all collections at once (no collection name guessing)
 - Plugin error surfacing — recovery hints and available options from plugin errors now visible to the LLM
 - Component import timeout increased to 120s (was 60s) for cold library imports
@@ -27,8 +27,16 @@ Complete rewrite from scratch.
 - 7-step component configuration protocol with icon library detection
 - DS gap tracking with savings estimates across builds
 - Three-trigger learning model (correction → confirmation → auto-promote)
-- ~20 focused source files (was 1 x 203KB monolith)
-- 109 automated tests (was 31)
+- Template replay — confirmed component recipes auto-applied on insert (variants, booleans)
+- Layout structure replay — frame configs (direction, padding, gap, fill) learned and reused per pattern
+- Text batch optimization — `figma_batch_set_component_text` sets all text overrides in one call
+- Text style name-to-key resolution — text styles matched by name when exact key unavailable
+- Inline component sizing — Badge, Avatar, and similar components skip auto-FILL, keep HUG
+- DS gap noise filtering — layout containers excluded from gap tracking
+- REST API discovery — library components and text styles fetched via Figma REST API (replaces page scanning)
+- DS change detection — fingerprint-based comparison surfaces new/removed components between builds
+- ~26 focused source files (was 1 x 203KB monolith)
+- 207 automated tests (was 31)
 
 ### 2.0.0-alpha.6 (2026-05-15)
 
