@@ -92,17 +92,53 @@ function register(server, context) {
           };
         }
         if (isTimeout) {
-          // Track the timed-out insert so retries are blocked
-          session._pendingInserts.set(dedupKey, {
-            timestamp: Date.now(),
-            componentKey: args.componentKey,
-            parentId: args.parentId,
-          });
-          return {
-            error: 'INSERT_TIMEOUT',
-            componentKey: args.componentKey,
-            hint: 'Component insertion timed out. The component MAY have been created in Figma — check the canvas before retrying. If it exists, use figma_get_node_children on the parent to find it. Do NOT call insert again for this component+parent — a dedup guard will block it.',
-          };
+          // Auto-retry once after a short pause. Large libraries (5000+ components)
+          // often timeout on the first import because Figma loads the library's font
+          // and asset data lazily. The second attempt usually succeeds because the
+          // library is now warm in memory.
+          if (!session._timeoutRetries) session._timeoutRetries = new Map();
+          const retryCount = session._timeoutRetries.get(dedupKey) || 0;
+
+          if (retryCount === 0) {
+            session._timeoutRetries.set(dedupKey, 1);
+            // Clear the transient failure so retry is allowed
+            dsCache.failedKeys.delete(args.componentKey);
+            // Wait 3 seconds for Figma to finish loading, then retry
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            try {
+              result = await bridge.send('insert_component', insertArgs, 180000);
+              session._pendingInserts.delete(dedupKey);
+              // Fall through to normal success handling below
+            } catch (retryErr) {
+              // Second attempt also failed — give up with clear guidance
+              session._pendingInserts.set(dedupKey, {
+                timestamp: Date.now(),
+                componentKey: args.componentKey,
+                parentId: args.parentId,
+              });
+              return {
+                error: 'INSERT_TIMEOUT',
+                componentKey: args.componentKey,
+                retriesExhausted: true,
+                message: 'Component import timed out twice. This typically happens with large libraries (5000+ components) on the first import of a session. The library may still be loading in Figma.',
+                hint: 'Wait 10 seconds, then call figma_get_node_children on the parent to check if the component appeared. If it did, proceed with configuration. If not, try a different component from the same library first (to warm the library cache), then come back to this one.',
+              };
+            }
+          } else {
+            // Already retried once — don't retry again
+            session._pendingInserts.set(dedupKey, {
+              timestamp: Date.now(),
+              componentKey: args.componentKey,
+              parentId: args.parentId,
+            });
+            return {
+              error: 'INSERT_TIMEOUT',
+              componentKey: args.componentKey,
+              retriesExhausted: true,
+              message: 'Component import timed out. This component may require fonts or assets that Figma is still loading.',
+              hint: 'Wait 10 seconds, then call figma_get_node_children on the parent to check if the component appeared. If it did, proceed with configuration. If not, try a different component from the same library first (to warm the library cache), then come back to this one.',
+            };
+          }
         }
         throw err;
       }
