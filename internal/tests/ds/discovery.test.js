@@ -59,6 +59,121 @@ describe('DsDiscovery.searchComponent', () => {
     assert.equal(result.found, false);
   });
 
+  it('prioritizes component sets over icons with same search term', () => {
+    const cache = new DsCache();
+    // Icon: short lowercase name containing "button" via alias match
+    cache.addComponent('icon-help-key', {
+      name: 'help-octagon',
+      libraryKey: 'lib-1',
+      source: 'rest_api',
+      // REST API does not set isComponentSet
+    });
+    // Real UI component set
+    cache.addComponent('button-set-key', {
+      name: 'Buttons/Button',
+      libraryKey: 'lib-1',
+      isComponentSet: true,
+    });
+    const ks = makeKnowledgeStore();
+    const discovery = new DsDiscovery(null, cache, ks);
+    discovery.setLibrary('lib-1');
+    const result = discovery.searchComponent('button');
+    assert.equal(result.found, true);
+    assert.equal(result.componentKey, 'button-set-key');
+    assert.equal(result.componentName, 'Buttons/Button');
+  });
+
+  it('prioritizes structured names over icon-style names from REST API', () => {
+    const cache = new DsCache();
+    // REST API components without isComponentSet
+    cache.addComponent('icon-filter-key', {
+      name: 'filter-lines',
+      libraryKey: 'lib-1',
+      source: 'rest_api',
+    });
+    cache.addComponent('divider-set-key', {
+      name: 'Content divider',
+      libraryKey: 'lib-1',
+      source: 'rest_api',
+    });
+    const ks = makeKnowledgeStore();
+    const discovery = new DsDiscovery(null, cache, ks);
+    discovery.setLibrary('lib-1');
+    const result = discovery.searchComponent('divider');
+    assert.equal(result.found, true);
+    assert.equal(result.componentKey, 'divider-set-key');
+    assert.equal(result.componentName, 'Content divider');
+  });
+
+  it('prioritizes exact name match over substring match', () => {
+    const cache = new DsCache();
+    // "award-badge-01" contains "badge" but is an icon
+    cache.addComponent('award-badge-key', {
+      name: 'award-badge-01',
+      libraryKey: 'lib-1',
+      source: 'rest_api',
+    });
+    // "Badge" is the real component
+    cache.addComponent('badge-set-key', {
+      name: 'Badge',
+      libraryKey: 'lib-1',
+      source: 'rest_api',
+    });
+    const ks = makeKnowledgeStore();
+    const discovery = new DsDiscovery(null, cache, ks);
+    discovery.setLibrary('lib-1');
+    const result = discovery.searchComponent('badge');
+    assert.equal(result.found, true);
+    assert.equal(result.componentKey, 'badge-set-key');
+  });
+
+  it('prioritizes variant-syntax names over plain icons', () => {
+    const cache = new DsCache();
+    cache.addComponent('icon-input-key', {
+      name: 'text-input',
+      libraryKey: 'lib-1',
+      source: 'rest_api',
+    });
+    cache.addComponent('input-set-key', {
+      name: 'Input field',
+      libraryKey: 'lib-1',
+      source: 'rest_api',
+    });
+    const ks = makeKnowledgeStore();
+    const discovery = new DsDiscovery(null, cache, ks);
+    discovery.setLibrary('lib-1');
+    const result = discovery.searchComponent('input');
+    assert.equal(result.found, true);
+    assert.equal(result.componentKey, 'input-set-key');
+    assert.equal(result.componentName, 'Input field');
+  });
+
+  it('ingestLibrarySearchResults upgrades isComponentSet on existing entries', () => {
+    const cache = new DsCache();
+    // REST API cached without isComponentSet
+    cache.addComponent('badge-key', {
+      name: 'badge-icon',
+      libraryKey: 'MyLib',
+      source: 'rest_api',
+    });
+    const ks = makeKnowledgeStore();
+    const discovery = new DsDiscovery(null, cache, ks);
+    discovery.setLibrary('MyLib');
+
+    // Figma MCP search confirms it's a component set with a better name
+    const ingested = discovery.ingestLibrarySearchResults([{
+      name: 'Badge',
+      componentKey: 'badge-key',
+      libraryName: 'MyLib',
+      assetType: 'component_set',
+    }]);
+
+    assert.equal(ingested, 1);
+    const cached = cache.components.get('badge-key');
+    assert.equal(cached.isComponentSet, true);
+    assert.equal(cached.name, 'Badge');
+  });
+
   it('filters DS cache results by selectedLibraryKey', () => {
     const cache = new DsCache();
     cache.addComponent('wrong-lib-key', {

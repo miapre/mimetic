@@ -103,21 +103,53 @@ class DsDiscovery {
     // Generate search terms for the element type
     const searchTerms = this.getSearchTerms(base);
 
-    // Collect matching components from dsCache
-    // Prefer component_sets (UI components with variants) over single components (icons)
+    // Collect matching components from dsCache with quality scoring.
+    // The key problem: REST API returns 5000+ components (icons + UI components)
+    // and name.includes() matches icons whose names happen to contain the term.
+    // Scoring ensures UI component sets rank above individual icon components.
     const matches = [];
     for (const [key, component] of this.dsCache.components) {
       const name = (component.name || '').toLowerCase();
+      const frame = (component.containingFrame || '').toLowerCase();
       if (searchTerms.some(term => name.includes(term))) {
-        matches.push({ key, component });
+        // Score: higher = better match
+        let score = 0;
+
+        // Tier 1: Is it a known component set? (from Figma MCP search or plugin)
+        if (component.isComponentSet) score += 100;
+
+        // Tier 2: Infer component set from naming patterns.
+        // Real UI components have structured names: "Buttons/Button", "Input field",
+        // "Table cell", "Badge". Icons have short lowercase names: "help-octagon",
+        // "chevron-selector-vertical", "filter-lines", "menu-04".
+        const hasSlash = name.includes('/');
+        const hasSpace = name.includes(' ');
+        const hasEquals = name.includes('=');   // variant syntax: "Size=md, Type=Default"
+        const looksLikeIcon = !hasSlash && !hasSpace && !hasEquals && /^[a-z0-9-]+$/.test(name);
+        if (hasEquals) score += 80;             // variant syntax = definitely a component set variant
+        if (hasSlash) score += 60;              // "Buttons/Button" = structured name
+        if (hasSpace && !looksLikeIcon) score += 40; // "Input field", "Table cell"
+        if (looksLikeIcon) score -= 50;         // "help-octagon", "filter-lines" = likely icon
+
+        // Tier 3: Exact name match vs substring match.
+        // "Badge" matching component named "Badge" >> "Badge" matching "check-verified-badge-02"
+        const exactMatch = searchTerms.some(term => {
+          // Exact match: name IS the term, or final segment after "/" is the term
+          const segments = name.split('/');
+          const lastName = segments[segments.length - 1].trim();
+          return lastName === term || name === term;
+        });
+        if (exactMatch) score += 50;
+
+        // Tier 4: containingFrame hints (REST API provides this).
+        // A component inside "Buttons" frame is likely a Button variant.
+        if (frame && searchTerms.some(term => frame.includes(term))) score += 30;
+
+        matches.push({ key, component, score });
       }
     }
-    // Sort: component_sets first (real UI components), single components last (likely icons)
-    matches.sort((a, b) => {
-      const aSet = a.component.isComponentSet ? 0 : 1;
-      const bSet = b.component.isComponentSet ? 0 : 1;
-      return aSet - bSet;
-    });
+    // Sort by score descending
+    matches.sort((a, b) => b.score - a.score);
 
     // Check for multiple libraries before filtering
     if (matches.length > 0) {
@@ -229,16 +261,22 @@ class DsDiscovery {
     let count = 0;
     for (const r of filtered) {
       if (!r.componentKey || !r.name) continue;
-      // Only add if not already cached
-      if (!this.dsCache.components.has(r.componentKey)) {
+      const existing = this.dsCache.components.get(r.componentKey);
+      const isSet = r.assetType === 'component_set';
+      if (!existing) {
+        // New component — add to cache
         this.dsCache.components.set(r.componentKey, {
           name: r.name,
           libraryName: r.libraryName,
-          // Store libraryName as libraryKey too — session.selectedLibraryKey
-          // uses the display name, and searchComponent filters on libraryKey.
           libraryKey: r.libraryName,
-          isComponentSet: r.assetType === 'component_set',
+          isComponentSet: isSet,
         });
+        count++;
+      } else if (isSet && !existing.isComponentSet) {
+        // Upgrade: search confirmed this is a component_set but the
+        // REST API cache didn't know. Update the flag so scoring works.
+        existing.isComponentSet = true;
+        existing.name = r.name;
         count++;
       }
     }
