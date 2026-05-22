@@ -76,13 +76,21 @@ function register(server, context) {
           type: 'object',
           description: 'Variant overrides for all header cells (e.g. {"Checkbox": "False"}). Applied to every header.',
         },
+        firstColumnPaddingLeft: {
+          type: 'string',
+          description: 'DS spacing variable path for extra left padding on header cells and data cells of the FIRST column. Use when the table is inside a card to create visual inset (e.g., 24px/spacing-3xl). Applied via paddingLeftVariable on cells.',
+        },
+        lastColumnPaddingRight: {
+          type: 'string',
+          description: 'DS spacing variable path for extra right padding on header cells and data cells of the LAST column. Use when the table is inside a card to create visual inset (e.g., 24px/spacing-3xl). Applied via paddingRightVariable on cells.',
+        },
       },
       required: ['parentId', 'columns', 'rows'],
     },
     async (args) => {
       requirePhase(2, 'Complete DS Discovery first.');
 
-      const { parentId, columns, rows, cellHeight, headerVariant } = args;
+      const { parentId, columns, rows, cellHeight, headerVariant, firstColumnPaddingLeft, lastColumnPaddingRight } = args;
 
       // ── Validate input ──
       if (!columns || columns.length === 0) {
@@ -237,6 +245,20 @@ function register(server, context) {
               layoutSizingHorizontal: 'FILL',
             }));
 
+            // Apply first/last column padding to header cells
+            if (colIdx === 0 && firstColumnPaddingLeft) {
+              headerOps.push(bridge.send('set_node_props', {
+                nodeId: headerResult.nodeId,
+                paddingLeftVariable: firstColumnPaddingLeft,
+              }).catch(() => {}));
+            }
+            if (colIdx === columns.length - 1 && lastColumnPaddingRight) {
+              headerOps.push(bridge.send('set_node_props', {
+                nodeId: headerResult.nodeId,
+                paddingRightVariable: lastColumnPaddingRight,
+              }).catch(() => {}));
+            }
+
             await Promise.all(headerOps);
             results.totalOperations += 3;
             results.headerCells++;
@@ -345,6 +367,26 @@ function register(server, context) {
                 await collector.send('set_layout_sizing', sizingPayload);
                 results.totalOperations++;
               } catch { /* non-fatal */ }
+
+              // Apply first/last column padding to data cells
+              if (colIdx === 0 && firstColumnPaddingLeft) {
+                try {
+                  await bridge.send('set_node_props', {
+                    nodeId: cellResult.nodeId,
+                    paddingLeftVariable: firstColumnPaddingLeft,
+                  });
+                  results.totalOperations++;
+                } catch { /* non-fatal */ }
+              }
+              if (colIdx === columns.length - 1 && lastColumnPaddingRight) {
+                try {
+                  await bridge.send('set_node_props', {
+                    nodeId: cellResult.nodeId,
+                    paddingRightVariable: lastColumnPaddingRight,
+                  });
+                  results.totalOperations++;
+                } catch { /* non-fatal */ }
+              }
 
               results.dataCells++;
             }

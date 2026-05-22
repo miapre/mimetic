@@ -166,12 +166,30 @@ manual use if needed, but `mimic_discover_ds` replaces the
    no text styles exist in the DS — when text styles are
    available, the plugin rejects fontSizeVariable alone.
 4. Spacing/radius: bind to DS variables when available, raw
-   values acceptable if DS lacks them.
-5. Auto-layout everywhere. FILL widths, HUG heights.
+   values acceptable if DS lacks them. When the DS has radius
+   variables (`enforceRadiusVars: true`), ALWAYS use
+   `cornerRadiusVariable` — never raw `cornerRadius`.
+5. Variable categories are semantic. Use the right category:
+   - `text-*` variables for text fills (fillVariable on text)
+   - `bg-*` variables for frame/container fills (fillVariable)
+   - `border-*` variables for strokes (strokeVariable)
+   - `fg-*` variables for icon/shape fills
+   Never cross categories (e.g., never use `bg-secondary` as
+   a strokeVariable — use `border-secondary` instead).
+6. Color semantics: Brand, Success, Warning, and Error colors
+   are reserved for their semantic purpose ONLY.
+   - Brand → links and brand-related elements only
+   - Success/Warning/Error → status indicators and alerts only
+   - NEVER use these on charts, decorative elements, or data
+     visualization. Use neutral utility colors (Indigo, Purple,
+     Blue, Cyan, Pink, Orange, etc.) instead.
+   - Avoid green, red, and orange on charts — they visually
+     conflict with Success, Error, and Warning.
+7. Auto-layout everywhere. FILL widths, HUG heights.
    Fixed width only on the artboard (1440px).
-6. Cards in a horizontal row: layoutSizingVertical = FILL so
+8. Cards in a horizontal row: layoutSizingVertical = FILL so
    they match height. Never HUG on cards in a row.
-7. After inserting any component — read `configurationChecklist`
+9. After inserting any component — read `configurationChecklist`
    in the response. It tells you EXACTLY what to do. The steps
    are always:
    a. Read `configurationChecklist` — it has
@@ -202,36 +220,42 @@ manual use if needed, but `mimic_discover_ds` replaces the
    CRITICAL: If `disabledBooleans` is empty in the response,
    auto-disable did not run — manually disable all booleans
    the HTML doesn't show.
-8. Dividers and separators: ALWAYS search for a DS component
+10. Dividers and separators: ALWAYS search for a DS component
    first. Search terms: "content divider", "divider",
    "separator". Never use raw rectangles for visual
    separators — if the DS has a divider component, use it.
    After inserting, set FILL width, check variantProperties
    for the right type, and override any text.
-9. HTML is the source of truth for content. Same text, same
-   structure, same order. Don't invent or improve.
-10. Feedback means iterate the existing artboard.
+11. HTML is the source of truth for content. **NEVER invent,
+   rephrase, shorten, or improve text.** Every label, value,
+   heading, subtitle, stat, badge, and CTA must match the
+   HTML source EXACTLY — character for character. Same text,
+   same structure, same order. If the HTML says "Total Revenue"
+   the Figma text must say "Total Revenue", not "Revenue" or
+   "Total Rev." or anything else. This is a critical bug when
+   violated.
+12. Feedback means iterate the existing artboard.
     Never delete artboards.
-11. Every build MUST end with `mimic_generate_build_report`.
+13. Every build MUST end with `mimic_generate_build_report`.
     This is NOT optional — it is the tool's key differentiator.
     The report teaches users about DS usage, gaps, patterns,
     and efficiency. A build without a report is incomplete.
     Call it BEFORE responding to the user with build results.
-12. Name every node after its HTML role. "Header Section" not
+14. Name every node after its HTML role. "Header Section" not
     "Frame". "Card: Total Users" not "Frame". This enables
     iteration — finding nodes by name instead of traversing.
-13. Section-level elements (header, footer, sidebar) should use
+15. Section-level elements (header, footer, sidebar) should use
     DS components if they exist. The two-call `mimic_map_components`
     workflow handles this: first call identifies gaps, you search
     once via Figma MCP, second call with `librarySearchResults`
     confirms matches or gaps. After the second call, any remaining
     missing types are confirmed — build as primitives.
-14. When `mimic_map_components` returns a component for header,
+16. When `mimic_map_components` returns a component for header,
     footer, or sidebar — use it. The DS component is the
     authoritative layout. Override text content to match the
     HTML, but don't build a custom frame when a DS component
     was found. Intent over pixel-matching.
-15. INSERT_TIMEOUT recovery. When `figma_insert_component`
+17. INSERT_TIMEOUT recovery. When `figma_insert_component`
     returns INSERT_TIMEOUT, the component MAY have been created.
     Before doing anything else: wait 3 seconds, then call
     `figma_get_node_children` on the parent. If the component
@@ -240,14 +264,17 @@ manual use if needed, but `mimic_discover_ds` replaces the
     the insert if the component is confirmed absent after both
     checks. NEVER retry without checking — duplicates are hard
     to detect and fix.
-16. Build report presentation. After calling
+18. Build report presentation. After calling
     `mimic_generate_build_report`, ALWAYS present a formatted
     summary to the user. Include: DS component instances table,
     primitives with justifications, binding quality, efficiency
-    stats (tool calls, cache hits), and DS gap recommendations.
-    The report file is for persistence — the user must SEE the
-    full results in the conversation. A build without a visible
-    report is incomplete.
+    stats (tool calls, cache hits), DS gap recommendations,
+    AND any user recommendations (missing variables, category
+    mismatches). After the summary, ALWAYS offer: "Would you
+    like the full report as an HTML file?" The report file is
+    for persistence — the user must SEE the full results in
+    the conversation. A build without a visible report is
+    incomplete.
 
 ## Template Replay
 
@@ -372,6 +399,11 @@ Key rules:
   guidance on creating them — it does NOT fall back silently.
 - Column `style` maps to the Table cell's Style variant
   (Text, Lead text, Lead avatar, Badge, etc.).
+- **Tables inside cards:** Use `firstColumnPaddingLeft` and
+  `lastColumnPaddingRight` with DS spacing variables (e.g.,
+  the 24px spacing variable) to create visual inset on the
+  first and last columns. This applies padding to all header
+  cells and data cells of those columns.
 
 ## Bulk Chart Builder
 
@@ -493,6 +525,18 @@ call. The build CANNOT proceed until the user decides.
   continuing.
 - **Build limit**: 300 tool calls in Phase 3 → forced stop.
   Generate the report and assess.
+- **Plugin disconnect during build**: If any tool returns
+  `PLUGIN_DISCONNECTED` or `BUILD_INTERRUPTED` during an
+  active build, **STOP ALL BUILDING IMMEDIATELY.** Do NOT
+  use other Figma tools (Figma MCP, use_figma,
+  generate_figma_design, etc.) as a fallback — they bypass
+  DS enforcement entirely and produce output without
+  components, variables, or text styles. Tell the user the
+  plugin disconnected. After they reconnect it, call
+  `mimic_status` to clear the interruption flag and verify
+  session state before resuming. The build session is
+  preserved — you can continue where you left off once the
+  plugin is back.
 
 ## Artboard Setup
 
@@ -535,6 +579,42 @@ Key principles (details in tool response):
 - NEVER put `<text>` in SVGs — use native Figma text nodes
 - NEVER use `●` in text for chart legends — use colored rectangles
 - Bind ALL vector children to DS variables after creation
+
+## Design Rules (Persistent Learning)
+
+The knowledge store has a `rules` section for user-defined
+design rules that persist across builds. Rules are loaded
+at the start of every build via `mimic_status` and MUST be
+followed during the build.
+
+**When to save a rule:** When the user corrects your build
+behavior and the correction is generalizable (not a one-off
+fix). Examples:
+- "Cards always have a card header component + content frame"
+- "Progress bars: use the Label boolean, don't add separate text"
+- "Tables in cards: 24px left padding on first column"
+- Color usage rules, spacing conventions, structural patterns
+
+**How to save:** Call `mimic_ai_knowledge_write` with:
+```
+type: "rule"
+id: "descriptive-kebab-id"
+data: {
+  category: "structure|color|variable|component|spacing",
+  rule: "The actual rule text",
+  reason: "Why (user's original correction)",
+  scope: "Optional — where this applies (e.g. 'cards', 'charts')"
+}
+```
+
+**When the user corrects the same thing 2+ times:** Proactively
+offer to save it as a persistent rule: "I've been corrected on
+this before. Would you like me to save this as a design rule so
+it applies to all future builds?" If they confirm, save it.
+
+Rules are injected into `mimic_status` response, so every build
+session starts with the full rule set. Follow ALL stored rules —
+they override default behavior.
 
 ## Security
 

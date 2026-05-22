@@ -19,6 +19,7 @@ function register(server, context) {
         components: knowledgeStore.data.components,
         patterns: knowledgeStore.data.patterns,
         gaps: knowledgeStore.data.gaps,
+        rules: knowledgeStore.data.rules || {},
         meta: knowledgeStore.data.meta,
       };
     }
@@ -33,8 +34,8 @@ function register(server, context) {
       properties: {
         type: {
           type: 'string',
-          enum: ['component', 'pattern', 'gap'],
-          description: 'Type of knowledge entry to save.',
+          enum: ['component', 'pattern', 'gap', 'rule'],
+          description: 'Type of knowledge entry to save. Use "rule" for user-defined design rules that should be followed on every build (e.g., color semantics, card structure, component usage patterns).',
         },
         id: {
           type: 'string',
@@ -59,6 +60,9 @@ function register(server, context) {
           break;
         case 'gap':
           knowledgeStore.addGap(id, data);
+          break;
+        case 'rule':
+          knowledgeStore.setRule(id, data);
           break;
         default:
           return { error: `Unknown type: ${type}. Use component, pattern, or gap.` };
@@ -466,6 +470,47 @@ function register(server, context) {
         }
       }
 
+      // ── User Recommendations ──
+      // Actionable suggestions for the user to improve their DS.
+      // Includes: missing variables found during builds, semantic color misuse, etc.
+      const recommendations = [];
+
+      // 1. Missing variable categories detected from binding failures
+      const missingVarCategories = new Set();
+      for (const bf of bindingFailures) {
+        for (const varPath of bf.failedBindings) {
+          const lower = varPath.toLowerCase();
+          if (lower.includes('border') && lower.includes('success')) missingVarCategories.add('border-success');
+          if (lower.includes('border') && lower.includes('warning')) missingVarCategories.add('border-warning');
+          if (lower.includes('border') && lower.includes('error')) missingVarCategories.add('border-error');
+          if (lower.includes('border') && lower.includes('brand')) missingVarCategories.add('border-brand');
+        }
+      }
+      if (missingVarCategories.size > 0) {
+        recommendations.push(
+          `**Add missing DS variables:** ${[...missingVarCategories].join(', ')}. ` +
+          `These were needed during the build but don't exist in the DS. ` +
+          `Add them to your DS library so future builds can bind to them.`
+        );
+      }
+
+      // 2. Category mismatches detected during build (from session tracking)
+      const categoryMismatches = session.categoryMismatches || [];
+      if (categoryMismatches.length > 0) {
+        const uniqueMismatches = [...new Set(categoryMismatches)].slice(0, 5);
+        recommendations.push(
+          `**Variable category mismatches:** ${uniqueMismatches.length} instance(s) where a variable was used outside its semantic category (e.g., bg-* for strokes instead of border-*). ` +
+          `This was auto-corrected during the build.`
+        );
+      }
+
+      if (recommendations.length > 0) {
+        lines.push('## Recommendations');
+        lines.push('');
+        recommendations.forEach(r => lines.push(`- ${r}`));
+        lines.push('');
+      }
+
       lines.push('## Patterns Learned');
       lines.push('');
       if (patternEntries.length > 0) {
@@ -476,6 +521,94 @@ function register(server, context) {
         lines.push('No new patterns recorded.');
       }
       lines.push('');
+
+      // ── Rule Compliance Audit ──
+      // Check if the build followed stored design rules.
+      const storedRules = Object.entries(knowledgeStore.data.rules || {});
+      const ruleViolations = [];
+      if (storedRules.length > 0) {
+        const compNames = components.map(c => c.name.toLowerCase());
+        const primNames = primitives.map(p => (p.element || '').toLowerCase());
+        const allNames = [...compNames, ...primNames];
+
+        for (const [ruleId, rule] of storedRules) {
+          const ruleText = (rule.rule || '').toLowerCase();
+          const ruleScope = (rule.scope || '').toLowerCase();
+
+          // Structure rules: check if expected components were used
+          if (rule.category === 'structure') {
+            // Extract component names mentioned in the rule
+            const mentionedComponents = [];
+            const componentPatterns = ['card header', 'badge', 'button', 'input', 'tab', 'progress bar', 'divider', 'sidebar', 'footer', 'header', 'avatar', 'dropdown', 'table'];
+            for (const cp of componentPatterns) {
+              if (ruleText.includes(cp)) mentionedComponents.push(cp);
+            }
+            // Check if any mentioned components were built as primitives instead
+            for (const mc of mentionedComponents) {
+              const builtAsPrimitive = primNames.some(p => p.includes(mc));
+              const builtAsComponent = compNames.some(c => c.toLowerCase().includes(mc));
+              if (builtAsPrimitive && !builtAsComponent) {
+                ruleViolations.push({
+                  ruleId,
+                  rule: rule.rule,
+                  violation: `"${mc}" was built as a primitive but rule requires it as a DS component.`,
+                  severity: 'WARN',
+                });
+              }
+            }
+          }
+
+          // Component rules: check if mentioned component was used
+          if (rule.category === 'component') {
+            const scopeWords = ruleScope.split(/[\s,]+/).filter(w => w.length >= 3);
+            const ruleApplies = scopeWords.length === 0 || scopeWords.some(w => allNames.some(n => n.includes(w)));
+            // If rule scope matches built elements but element was a primitive, flag it
+            if (ruleApplies && scopeWords.length > 0) {
+              for (const sw of scopeWords) {
+                const asPrimitive = primNames.some(p => p.includes(sw));
+                if (asPrimitive) {
+                  ruleViolations.push({
+                    ruleId,
+                    rule: rule.rule,
+                    violation: `Element matching "${sw}" built as primitive. Rule suggests using a DS component with specific configuration.`,
+                    severity: 'WARN',
+                  });
+                }
+              }
+            }
+          }
+
+          // Color rules: check if category mismatches involved semantic colors
+          if (rule.category === 'color' && categoryMismatches.length > 0) {
+            const semanticTerms = ['brand', 'success', 'warning', 'error'];
+            const violatingMismatches = categoryMismatches.filter(m => {
+              const lower = m.toLowerCase();
+              return semanticTerms.some(t => lower.includes(t));
+            });
+            if (violatingMismatches.length > 0) {
+              ruleViolations.push({
+                ruleId,
+                rule: rule.rule,
+                violation: `${violatingMismatches.length} instance(s) of semantic color misuse detected.`,
+                severity: 'WARN',
+              });
+            }
+          }
+        }
+      }
+
+      if (ruleViolations.length > 0) {
+        lines.push(`## ⚠ Rule Compliance: ${ruleViolations.length} violation(s)`);
+        lines.push('');
+        for (const rv of ruleViolations) {
+          lines.push(`- **${rv.ruleId}**: ${rv.violation}`);
+          lines.push(`  - Rule: ${rv.rule}`);
+        }
+        lines.push('');
+      } else if (storedRules.length > 0) {
+        lines.push(`## ✓ Rule Compliance: All ${storedRules.length} rule(s) followed`);
+        lines.push('');
+      }
 
       // ── Post-Build Structural Validation ──
       // Runs automatically before report to catch broken layouts.
@@ -616,6 +749,12 @@ function register(server, context) {
         ? ` ${promotions.length} component(s) auto-promoted to strong: ${promotions.join(', ')}.`
         : '';
 
+      const ruleComplianceSummary = ruleViolations.length > 0
+        ? ` ⚠ ${ruleViolations.length} rule violation(s).`
+        : storedRules.length > 0
+          ? ` All ${storedRules.length} rule(s) followed.`
+          : '';
+
       return {
         reportPath,
         bindingFailureCount: bindingFailures.length,
@@ -625,7 +764,15 @@ function register(server, context) {
         validationStatus,
         validationResults,
         promotions,
-        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified. ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''} Structural validation: ${validationStatus}.${promotionSummary}`,
+        ruleViolations: ruleViolations.length > 0 ? ruleViolations : undefined,
+        rulesChecked: storedRules.length,
+        recommendations: recommendations.length > 0 ? recommendations : undefined,
+        _presentationRules: [
+          'Present the FULL build report to the user in the conversation — components table, primitives, binding quality, efficiency stats, rule compliance, recommendations, and DS gaps.',
+          'After the summary, OFFER to generate an HTML version: "Would you like the full report as an HTML file?"',
+          'The report file is for persistence — the user must SEE the results in the conversation.',
+        ],
+        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified.${recommendations.length > 0 ? ` ${recommendations.length} recommendation(s) for DS improvements.` : ''}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''} Structural validation: ${validationStatus}.${promotionSummary}`,
       };
     }
   );
@@ -763,14 +910,21 @@ function register(server, context) {
       result._chartColorHint = {
         message: 'After creating this chart with figma_create_svg, check the configurationChecklist in the response — it lists every unbound child node that MUST receive DS variable bindings. Pass layoutSizingHorizontal: "FILL" to figma_create_svg so the chart stretches to the container width.',
         suggestedPalette: [
-          'Component colors/Utility/Brand/utility-brand-500',
-          'Component colors/Utility/Success/utility-success-500',
-          'Component colors/Utility/Warning/utility-warning-500',
-          'Component colors/Utility/Error/utility-error-500',
           'Component colors/Utility/Indigo/utility-indigo-500',
           'Component colors/Utility/Purple/utility-purple-500',
           'Component colors/Utility/Blue/utility-blue-500',
+          'Component colors/Utility/Cyan/utility-cyan-500',
+          'Component colors/Utility/Pink/utility-pink-500',
           'Component colors/Utility/Orange/utility-orange-500',
+          'Component colors/Utility/Blue light/utility-blue-light-500',
+          'Component colors/Utility/Fuchsia/utility-fuchsia-500',
+        ],
+        colorRules: [
+          'NEVER use Brand, Success, Warning, or Error colors for chart data — these are semantic and reserved.',
+          'Brand is ONLY for links and brand-related elements.',
+          'Success/Warning/Error are ONLY for status indicators, validation states, and alerts.',
+          'For charts, use neutral utility colors: Indigo, Purple, Blue, Cyan, Pink, Orange, Blue light, Fuchsia.',
+          'If you need more than 8 colors, extend with other non-semantic utility colors. Avoid green, red, and orange as they resemble Success, Error, and Warning.',
         ],
         gridColor: 'Colors/Border/border-secondary',
         labelColor: 'Colors/Text/text-tertiary (600)',

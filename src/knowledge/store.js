@@ -12,6 +12,7 @@ function createEmptyStore() {
     components: {},
     patterns: {},
     gaps: {},
+    rules: {},
     libraryFileKeys: {},
     buildHistory: [],
     meta: {
@@ -43,6 +44,7 @@ class KnowledgeStore {
       // Backfill new fields for existing stores
       if (!this.data.libraryFileKeys) this.data.libraryFileKeys = {};
       if (!this.data.buildHistory) this.data.buildHistory = [];
+      if (!this.data.rules) this.data.rules = {};
       // Backfill confidence on components that predate the promotion system
       for (const comp of Object.values(this.data.components || {})) {
         if (!comp.confidence) comp.confidence = 'new';
@@ -118,6 +120,77 @@ class KnowledgeStore {
 
   getGaps() {
     return { ...this.data.gaps };
+  }
+
+  // ── Rules ───────────────────────────────────────────────────
+  // User-defined design rules that persist across builds.
+  // Categories: color, variable, structure, component, spacing.
+  // Rules are injected into build tool responses so the LLM
+  // follows them automatically.
+
+  /**
+   * Add or update a design rule.
+   * @param {string} id - Unique rule ID (e.g. "color-brand-links-only")
+   * @param {{ category: string, rule: string, reason?: string, scope?: string }} ruleData
+   */
+  setRule(id, ruleData) {
+    if (!this.data.rules) this.data.rules = {};
+    this.data.rules[id] = {
+      ...ruleData,
+      createdAt: this.data.rules[id]?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    return this;
+  }
+
+  getRule(id) {
+    return this.data.rules?.[id] || null;
+  }
+
+  removeRule(id) {
+    if (this.data.rules) delete this.data.rules[id];
+    return this;
+  }
+
+  /**
+   * Get all rules, optionally filtered by category.
+   * @param {string} [category] - Filter by category (color, variable, structure, component, spacing)
+   * @returns {Object} Map of id → rule
+   */
+  getRules(category) {
+    const rules = this.data.rules || {};
+    if (!category) return { ...rules };
+    const filtered = {};
+    for (const [id, rule] of Object.entries(rules)) {
+      if (rule.category === category) filtered[id] = rule;
+    }
+    return filtered;
+  }
+
+  /**
+   * Find rules relevant to a given context. Matches by:
+   * - scope substring match against context keywords
+   * - category match
+   * - rule text containing any context keyword
+   *
+   * @param {string[]} keywords - Context words (e.g., ['card', 'revenue', 'badge'])
+   * @param {string} [category] - Optional category filter
+   * @returns {Array<{id: string, rule: string, category: string, reason?: string}>}
+   */
+  findMatchingRules(keywords, category) {
+    const rules = this.data.rules || {};
+    const lowerKeywords = keywords.map(k => k.toLowerCase());
+    const matches = [];
+    for (const [id, r] of Object.entries(rules)) {
+      if (category && r.category !== category) continue;
+      const scope = (r.scope || '').toLowerCase();
+      const ruleText = (r.rule || '').toLowerCase();
+      const hit = lowerKeywords.some(k =>
+        scope.includes(k) || ruleText.includes(k)
+      );
+      if (hit) matches.push({ id, rule: r.rule, category: r.category, reason: r.reason });
+    }
+    return matches;
   }
 
   // ── Library File Keys ──────────────────────────────────────

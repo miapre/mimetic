@@ -141,11 +141,16 @@ class Bridge {
     const promise = new Promise((resolve, reject) => {
       if (!this.connected || !this.ws) {
         // Fail fast — don't queue indefinitely when the plugin is disconnected.
-        // The user gets a clear error and can reconnect the plugin and retry.
+        // CRITICAL: The error message explicitly forbids fallback to other Figma tools.
+        // Without this, the LLM pivots to non-Mimic Figma MCP tools that have zero
+        // DS enforcement — producing garbage output with raw hex, no components, no variables.
         reject(new Error(
           `PLUGIN_DISCONNECTED: Cannot execute "${type}" — the Figma plugin is not connected. ` +
-          `Open Figma and run the Mimic AI plugin (Plugins > Development > Mimic AI > Run), ` +
-          `then retry the operation.`
+          `STOP ALL BUILDING. Do NOT use other Figma tools (Figma MCP, use_figma, etc.) as a fallback — ` +
+          `they bypass DS enforcement and produce output without components, variables, or text styles. ` +
+          `Tell the user the plugin disconnected. They must reopen Figma and run the Mimic AI plugin ` +
+          `(Plugins > Development > Mimic AI > Run). After reconnection, call mimic_status to verify ` +
+          `the session before continuing the build.`
         ));
         return;
       }
@@ -188,7 +193,9 @@ class Bridge {
         if (!this.connected || !this.ws) {
           reject(new Error(
             `PLUGIN_DISCONNECTED: Cannot execute batch — the Figma plugin is not connected. ` +
-            `Open Figma and run the Mimic AI plugin, then retry.`
+            `STOP ALL BUILDING. Do NOT use other Figma tools as a fallback — ` +
+            `they bypass DS enforcement. Tell the user to reconnect the plugin, ` +
+            `then call mimic_status to resume.`
           ));
           return;
         }
@@ -244,7 +251,9 @@ class Bridge {
         if (!this.connected || !this.ws) {
           reject(new Error(
             `PLUGIN_DISCONNECTED: Cannot execute batch chunk — the Figma plugin is not connected. ` +
-            `Open Figma and run the Mimic AI plugin, then retry.`
+            `STOP ALL BUILDING. Do NOT use other Figma tools as a fallback — ` +
+            `they bypass DS enforcement. Tell the user to reconnect the plugin, ` +
+            `then call mimic_status to resume.`
           ));
           return;
         }
@@ -369,6 +378,8 @@ class Bridge {
         this.connected = false;
         this.ws = null;
         this.stopKeepalive();
+        // Notify disconnect listener (used by session to flag build interruption)
+        if (this._onDisconnect) this._onDisconnect();
       }
     });
 

@@ -77,6 +77,10 @@ const session = {
   variableSourceConfirmed: null,
   // Report enforcement — blocks new builds until report is generated
   buildsSinceReport: 0,
+  // Plugin disconnect during active build — blocks all build tools until mimic_status is called
+  buildInterrupted: false,
+  // Variable category mismatches — accumulated during Phase 3 for the build report
+  categoryMismatches: [],
 };
 
 // Circuit breaker constants
@@ -129,6 +133,8 @@ function resetSession() {
   session.bindingFailures = [];
   session.componentTextTracker = new Map();
   session.buildsSinceReport = 0;
+  session.buildInterrupted = false;
+  session.categoryMismatches = [];
   // Community library check state
   session.pendingCommunityCheck = false;
   session.discoveryFileKey = null;
@@ -151,6 +157,14 @@ function registerTool(name, description, inputSchema, handler) {
 
 // Shared instances
 const bridge = new Bridge({ port: 3056 });
+
+// Flag active build as interrupted when plugin disconnects mid-build.
+// Build tools are blocked until mimic_status clears the flag after reconnection.
+bridge._onDisconnect = () => {
+  if (session.phase >= 3 && session.phase < 5) {
+    session.buildInterrupted = true;
+  }
+};
 const dsCache = new DsCache();
 const dsResolver = new DsResolver(dsCache);
 const knowledgeStore = new KnowledgeStore(
@@ -239,6 +253,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     'figma_read_variable_values', 'figma_list_text_styles',
   ]);
 
+  // Build interrupt guard: plugin disconnected during an active build.
+  // ALL build tools are blocked until the plugin reconnects and mimic_status is called.
+  // This prevents the LLM from continuing with Mimic tools in a corrupted session state.
+  if (session.buildInterrupted && !EXEMPT_TOOLS.has(name)) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        error: 'BUILD_INTERRUPTED',
+        message: 'The Figma plugin disconnected during an active build. This build session is paused. '
+          + 'STOP ALL BUILDING — do NOT use other Figma tools (Figma MCP, use_figma, etc.) as a fallback. '
+          + 'They bypass DS enforcement and produce output without components, variables, or text styles. '
+          + 'The user must reconnect the plugin, then call mimic_status to resume.',
+        recovery: 'Ask the user to run the Mimic AI plugin in Figma, then call mimic_status.',
+        phase: session.phase,
+        toolCallCount: session.toolCallCount,
+      }) }],
+    };
+  }
+
   // Circuit breaker: check if too many consecutive failures
   if (session.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && !EXEMPT_TOOLS.has(name)) {
     return {
@@ -283,6 +315,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         failedBindings,
         warnings: result.warnings || [],
       });
+    }
+
+    // Track category mismatches for the build report
+    if (result && typeof result === 'object' && result._categoryWarnings) {
+      session.categoryMismatches.push(...result._categoryWarnings);
     }
 
     // Phase 3 checkpoint: after N build operations, insert a progress summary
@@ -347,17 +384,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (err.pluginError.property) errorPayload.property = err.pluginError.property;
     }
 
+    // Plugin disconnect during active build: set interrupt flag
+    const isDisconnect = /PLUGIN_DISCONNECTED/i.test(err.message);
+    if (isDisconnect && session.phase >= 3 && session.phase < 5) {
+      session.buildInterrupted = true;
+    }
+
     // Infra failures: add recovery guidance instead of circuit breaker warnings
     if (infraFailure) {
       errorPayload._infraFailure = {
         classified: true,
-        message: 'This is an infrastructure failure (plugin/bridge), not a user error. '
-          + 'The circuit breaker counter has been reset. '
-          + 'Retry the operation, or if the plugin is disconnected, ask the user to restart it.',
-        suggestion: /Bridge timeout/i.test(err.message)
-          ? 'Bridge timed out — the plugin may be busy or disconnected. Wait a moment and retry.'
-          : /Parent node not found/i.test(err.message) || /Parent node not found/i.test(err.pluginError?.message || '')
-            ? 'Parent node disappeared — this is a plugin state issue. Verify the parent still exists with figma_get_node_children on its container, then retry.'
+        message: isDisconnect
+          ? 'PLUGIN DISCONNECTED during active build. STOP ALL BUILDING. '
+            + 'Do NOT use other Figma tools (Figma MCP, use_figma, etc.) as a fallback — '
+            + 'they bypass DS enforcement and produce output without components, variables, or text styles. '
+            + 'Tell the user the plugin disconnected. After reconnection, call mimic_status to resume.'
+          : 'This is an infrastructure failure (plugin/bridge), not a user error. '
+            + 'The circuit breaker counter has been reset. '
+            + 'Retry the operation, or if the plugin is disconnected, ask the user to restart it.',
+        suggestion: isDisconnect
+          ? 'STOP. Ask the user to reconnect the Figma plugin. Then call mimic_status to resume the build.'
+          : /Bridge timeout/i.test(err.message)
+            ? 'Bridge timed out — the plugin may be busy or disconnected. Wait a moment and retry.'
+            : /Parent node not found/i.test(err.message) || /Parent node not found/i.test(err.pluginError?.message || '')
+              ? 'Parent node disappeared — this is a plugin state issue. Verify the parent still exists with figma_get_node_children on its container, then retry.'
             : /plugin disconnected/i.test(err.message)
               ? 'Plugin disconnected — ask the user to restart the Figma plugin, then retry.'
               : 'Infrastructure error detected. Retry or check plugin status.',

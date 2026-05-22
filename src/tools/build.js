@@ -40,8 +40,35 @@ function isSectionLevel(match) {
   return SECTION_LEVEL_ELEMENTS.includes(match);
 }
 
-function checkComponentFirstGate(args, dsCache, session) {
+function checkComponentFirstGate(args, dsCache, session, knowledgeStore) {
   const match = getComponentFirstMatch(args?.name);
+
+  // If no hardcoded pattern match, check if the knowledge store has a
+  // confirmed/verified component recipe whose name matches this frame name.
+  // This catches learned components not in the hardcoded list (e.g., "progress bar",
+  // "card header", "divider" after they've been used in previous builds).
+  if (!match && knowledgeStore) {
+    const lower = (args?.name || '').toLowerCase();
+    for (const [, recipe] of Object.entries(knowledgeStore.data?.components || {})) {
+      if (!recipe.componentKey || !recipe.confidence) continue;
+      if (recipe.confidence !== 'confirmed' && recipe.confidence !== 'verified') continue;
+      const recipeNames = (recipe.names || []).map(n => n.toLowerCase());
+      const recipeMatch = recipeNames.some(rn => lower.includes(rn) || rn.includes(lower.split(':')[0].trim()));
+      if (recipeMatch) {
+        return {
+          allowed: false,
+          match: recipeNames[0],
+          error: 'KNOWN_COMPONENT_EXISTS',
+          message: `"${args?.name}" matches a known DS component "${recipe.names[0]}" (${recipe.confidence}, used in ${recipe.buildCount} builds). Use figma_insert_component with componentKey "${recipe.componentKey}" instead of creating a primitive frame.`,
+          recovery: {
+            componentKey: recipe.componentKey,
+            action: `Call figma_insert_component with componentKey: "${recipe.componentKey}" instead of figma_create_frame.`,
+          },
+        };
+      }
+    }
+  }
+
   if (!match) return null;
 
   // Auto-bypass when the selected library's components can't be imported (e.g. missing fonts).
@@ -289,7 +316,7 @@ function register(server, context) {
     },
     async (args) => {
       requirePhase(2, PHASE_HINT);
-      const componentGate = checkComponentFirstGate(args, dsCache, session);
+      const componentGate = checkComponentFirstGate(args, dsCache, session, knowledgeStore);
       if (componentGate && !componentGate.allowed) {
         return componentGate;
       }
@@ -319,13 +346,24 @@ function register(server, context) {
 
       // Validate variable paths before sending to plugin
       const validation = dsCache.validateVariables(args);
-      if (!validation.valid) {
+      if (validation.hasPathErrors) {
         return {
           error: 'INVALID_VARIABLE_PATHS',
           warnings: validation.warnings,
           message: 'Fix the variable paths and try again. Do not proceed with invalid paths.',
         };
       }
+      const categoryWarnings = validation.categoryMismatches || [];
+
+      // Warn when raw values are used but DS has variables for them
+      const enforcement = session.enforcementProfile || dsCache.getEnforcementProfile();
+      if (enforcement.enforceRadiusVars && args.cornerRadius !== undefined && !args.cornerRadiusVariable) {
+        categoryWarnings.push(
+          `cornerRadius: raw value ${args.cornerRadius}px used but the DS has radius variables. ` +
+          `Use cornerRadiusVariable instead. Check figma_read_variable_values with category "radius" for available paths.`
+        );
+      }
+
       // Default page-level artboards (VERTICAL, no parent) to CENTER
       // counter-axis alignment so content containers center automatically.
       if (!args.parentId && (!args.counterAxisAlignItems) &&
@@ -360,6 +398,14 @@ function register(server, context) {
         }
       }
 
+      // ── Contextual rule injection ─────────────────────────
+      // Find stored design rules relevant to this frame's name/role.
+      // Injected at point of use so Claude sees them when building,
+      // not just at session start.
+      const frameName = createArgs.name || '';
+      const nameWords = frameName.toLowerCase().split(/[\s:,]+/).filter(w => w.length >= 3);
+      const matchingRules = knowledgeStore.findMatchingRules(nameWords);
+
       return {
         nodeId,
         ...result,
@@ -367,6 +413,11 @@ function register(server, context) {
         _layoutReplay: layoutReplay || undefined,
         _componentCheck: componentGate?.warning || undefined,
         _noneWarning: noneWarning || undefined,
+        _categoryWarnings: categoryWarnings.length > 0 ? categoryWarnings : undefined,
+        _rules: matchingRules.length > 0 ? matchingRules : undefined,
+        _rulesNote: matchingRules.length > 0
+          ? `${matchingRules.length} design rule(s) apply to "${frameName}". Follow ALL of them — they are user-defined and override defaults.`
+          : undefined,
         hint: layoutReplay
           ? `Frame created with layout replay from "${prefix}" pattern (${Object.keys(layoutReplay).length} properties auto-applied). Override with explicit params if this instance needs different values.`
           : noneWarning
@@ -413,7 +464,7 @@ function register(server, context) {
       }
       // Validate variable paths before sending to plugin
       const validation = dsCache.validateVariables(args);
-      if (!validation.valid) {
+      if (validation.hasPathErrors) {
         return {
           error: 'INVALID_VARIABLE_PATHS',
           warnings: validation.warnings,
@@ -424,12 +475,16 @@ function register(server, context) {
       session.toolCallCount++;
       advancePhase(3);
       surfaceBindingFeedback(result, args.name || 'create_text');
+      const catWarnings = validation.categoryMismatches || [];
       return {
         nodeId: result?.nodeId || result?.id,
         ...result,
+        _categoryWarnings: catWarnings.length > 0 ? catWarnings : undefined,
         hint: result?.bindingFailures
           ? 'Text node created but some DS bindings FAILED — check warnings. Text style or color variable may not be applied.'
-          : 'Text node created.',
+          : catWarnings.length > 0
+            ? `Text node created. ⚠ CATEGORY MISMATCH: ${catWarnings[0]}`
+            : 'Text node created.',
       };
     }
   );
@@ -462,7 +517,7 @@ function register(server, context) {
     async (args) => {
       requirePhase(2, PHASE_HINT);
       const validation = dsCache.validateVariables(args);
-      if (!validation.valid) {
+      if (validation.hasPathErrors) {
         return {
           error: 'INVALID_VARIABLE_PATHS',
           warnings: validation.warnings,
@@ -473,9 +528,11 @@ function register(server, context) {
       session.toolCallCount++;
       advancePhase(3);
       surfaceBindingFeedback(result, args.name || 'create_rectangle');
+      const catWarnings = validation.categoryMismatches || [];
       return {
         nodeId: result?.nodeId || result?.id,
         ...result,
+        _categoryWarnings: catWarnings.length > 0 ? catWarnings : undefined,
       };
     }
   );
@@ -507,7 +564,7 @@ function register(server, context) {
     async (args) => {
       requirePhase(2, PHASE_HINT);
       const validation = dsCache.validateVariables(args);
-      if (!validation.valid) {
+      if (validation.hasPathErrors) {
         return {
           error: 'INVALID_VARIABLE_PATHS',
           warnings: validation.warnings,
@@ -545,7 +602,7 @@ function register(server, context) {
     async (args) => {
       requirePhase(2, PHASE_HINT);
       const validation = dsCache.validateVariables(args);
-      if (!validation.valid) {
+      if (validation.hasPathErrors) {
         return {
           error: 'INVALID_VARIABLE_PATHS',
           warnings: validation.warnings,

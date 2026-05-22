@@ -92,21 +92,63 @@ class DsCache {
   validateVariables(args) {
     if (!args || typeof args !== 'object') return { valid: true, warnings: [] };
     const warnings = [];
+    const categoryMismatches = [];
     const varFields = Object.keys(args).filter(k => k.endsWith('Variable'));
     for (const field of varFields) {
       const path = args[field];
       if (!path || typeof path !== 'string') continue;
-      if (this.variables.has(path)) continue;
-      // Determine expected category from field name
-      let category = null;
-      if (field.startsWith('fill')) category = 'background';
-      if (field.startsWith('stroke')) category = 'border';
-      if (field === 'fillVariable' && args.content !== undefined) category = 'text'; // text node fill → text color
-      if (field.startsWith('padding') || field.startsWith('gap')) category = 'spacing';
-      if (field.startsWith('cornerRadius')) category = 'radius';
 
-      const suggestions = this.suggestVariable(path, category);
-      const altSuggestions = suggestions.length === 0 && category
+      // Determine expected category from field name
+      let expectedCategory = null;
+      if (field.startsWith('fill')) expectedCategory = 'background';
+      if (field.startsWith('stroke')) expectedCategory = 'border';
+      if (field === 'fillVariable' && args.content !== undefined) expectedCategory = 'text'; // text node fill → text color
+      if (field.startsWith('padding') || field.startsWith('gap')) expectedCategory = 'spacing';
+      if (field.startsWith('cornerRadius')) expectedCategory = 'radius';
+
+      const cached = this.variables.get(path);
+      if (cached) {
+        // Variable exists — check category match.
+        // Category mismatches produce warnings but don't block (the variable IS valid,
+        // just semantically wrong). Common violations:
+        //   - bg-* used as strokeVariable (should be border-*)
+        //   - bg-* used as fillVariable on text nodes (should be text-*)
+        //   - fg-* used as fillVariable on frames (should be bg-*)
+        if (expectedCategory && cached.category && cached.category !== expectedCategory) {
+          // Allow 'color' (generic) and 'foreground' for fills — these are ambiguous
+          const isAmbiguous = cached.category === 'color'
+            || (expectedCategory === 'background' && cached.category === 'foreground')
+            || (expectedCategory === 'text' && cached.category === 'foreground');
+          if (!isAmbiguous) {
+            const CATEGORY_LABELS = {
+              text: 'text-*',
+              background: 'bg-*',
+              border: 'border-*',
+              foreground: 'fg-*',
+              spacing: 'spacing variables',
+              radius: 'radius variables',
+            };
+            const expectedLabel = CATEGORY_LABELS[expectedCategory] || expectedCategory;
+            const actualLabel = CATEGORY_LABELS[cached.category] || cached.category;
+            const suggestion = this.suggestVariable(
+              path.replace(/^[^-/]+-/, ''), // strip prefix to find alternatives
+              expectedCategory
+            );
+            const fix = suggestion.length > 0
+              ? ` Use instead: ${suggestion[0]}`
+              : '';
+            categoryMismatches.push(
+              `${field}: '${path}' is a ${actualLabel} variable but used for ${expectedCategory}. ` +
+              `${expectedCategory} properties should use ${expectedLabel} variables.${fix}`
+            );
+          }
+        }
+        continue;
+      }
+
+      // Variable not found — suggest alternatives
+      const suggestions = this.suggestVariable(path, expectedCategory);
+      const altSuggestions = suggestions.length === 0 && expectedCategory
         ? this.suggestVariable(path, null) // try without category filter
         : [];
       const allSuggestions = [...new Set([...suggestions, ...altSuggestions])].slice(0, 5);
@@ -118,7 +160,16 @@ class DsCache {
         warnings.push(`${field}: '${path}' not found in DS (${count} variables cached). Use figma_read_variable_values to see available variables.`);
       }
     }
-    return { valid: warnings.length === 0, warnings };
+    // Category mismatches are warnings, not blocking errors — variable paths
+    // are valid but semantically wrong. They're surfaced so the LLM corrects
+    // them, but the build isn't blocked (the variable WILL bind in Figma).
+    const pathErrors = warnings.filter(w => !categoryMismatches.includes(w));
+    return {
+      valid: pathErrors.length === 0,
+      warnings: [...pathErrors, ...categoryMismatches],
+      categoryMismatches,
+      hasPathErrors: pathErrors.length > 0,
+    };
   }
 
   getEnforcementProfile() {
