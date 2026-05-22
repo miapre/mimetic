@@ -325,11 +325,29 @@ function register(server, context) {
         });
       }
 
+      // ── Contextual rule injection ─────────────────────────
+      // Find stored rules relevant to this component type.
+      const compNameLower = compName || '';
+      const compWords = compNameLower.split(/[\s:,/]+/).filter(w => w.length >= 3);
+      const matchingRules = knowledgeStore.findMatchingRules(compWords, 'component');
+      // Also check structure rules (e.g., "cards must have card header")
+      const structureRules = knowledgeStore.findMatchingRules(compWords, 'structure');
+      const allRules = [...matchingRules, ...structureRules];
+
+      if (allRules.length > 0) {
+        checklist.push({
+          action: 'APPLY_DESIGN_RULES',
+          message: `${allRules.length} user-defined design rule(s) apply to this component. Follow ALL of them.`,
+          rules: allRules.map(r => r.rule),
+        });
+      }
+
       return {
         nodeId,
         ...result,
         configurationChecklist: checklist.length > 0 ? checklist : undefined,
         _autoApplied: Object.keys(autoApplied).length > 0 ? autoApplied : undefined,
+        _rules: allRules.length > 0 ? allRules : undefined,
         hints,
       };
     }

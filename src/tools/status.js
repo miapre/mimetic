@@ -34,11 +34,20 @@ function register(server, context) {
         pluginConnected = bridge.connected;
       } catch { /* ignore */ }
 
+      // Clear build interruption when plugin has reconnected.
+      // The user called mimic_status after reconnecting — safe to resume.
+      if (session.buildInterrupted && pluginConnected) {
+        session.buildInterrupted = false;
+      }
+
       const enforcement = dsCache.getEnforcementProfile();
+      const rules = knowledgeStore.getRules();
+      const ruleCount = Object.keys(rules).length;
       const knowledgeSummary = {
         components: Object.keys(knowledgeStore.data.components).length,
         patterns: Object.keys(knowledgeStore.data.patterns).length,
         gaps: Object.keys(knowledgeStore.data.gaps).length,
+        rules: ruleCount,
         buildCount: knowledgeStore.data.meta.buildCount,
       };
 
@@ -46,11 +55,23 @@ function register(server, context) {
       const buildOps = session.phaseToolCalls[3] || 0;
       const reportPending = session.phase >= 3 && session.phase < 5 && buildOps > 0;
 
+      // Build interruption recovery info
+      const interruptInfo = session.buildInterrupted
+        ? {
+          buildInterrupted: true,
+          buildInterruptedWarning: pluginConnected
+            ? 'Build was interrupted by a plugin disconnect but the plugin is now reconnected. Session resumed — you can continue building.'
+            : '⚠ BUILD INTERRUPTED: Plugin disconnected during an active build. STOP ALL BUILDING. Do NOT use other Figma tools as a fallback. Reconnect the plugin and call mimic_status again.',
+        }
+        : {};
+
       return {
         pluginConnected,
         phase: session.phase,
         phaseLabel: PHASE_LABELS[session.phase] || 'unknown',
-        hint: PHASE_HINTS[session.phase] || 'Unknown phase.',
+        hint: session.buildInterrupted && !pluginConnected
+          ? 'Plugin disconnected during build. Reconnect the plugin, then call mimic_status to resume.'
+          : PHASE_HINTS[session.phase] || 'Unknown phase.',
         artboardId: session.artboardId,
         enforcementProfile: session.enforcementProfile || enforcement,
         toolCallCount: session.toolCallCount,
@@ -62,6 +83,18 @@ function register(server, context) {
           failedKeys: dsCache.failedKeys.size,
         },
         knowledge: knowledgeSummary,
+        // Inject user-defined design rules so they're visible at build start.
+        // These are persistent rules the user defined during previous builds.
+        ...(ruleCount > 0 ? {
+          _designRules: Object.entries(rules).map(([id, r]) => ({
+            id,
+            category: r.category,
+            rule: r.rule,
+            reason: r.reason || undefined,
+          })),
+          _designRulesNote: `${ruleCount} user-defined design rule(s) loaded from knowledge store. Follow ALL of these during the build — they override default behavior.`,
+        } : {}),
+        ...interruptInfo,
         ...(reportPending ? {
           reportPending: true,
           reportWarning: `⚠ BUILD REPORT REQUIRED: ${buildOps} build operations completed but no report generated. The build is NOT complete until you call mimic_generate_build_report. This is the tool's key differentiator — it teaches users about their DS usage, gaps, and patterns.`,

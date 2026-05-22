@@ -66,7 +66,7 @@ function buildConfigurationChecklist(result) {
 }
 
 function register(server, context) {
-  const { bridge, dsCache, session, requirePhase, registerTool } = context;
+  const { bridge, dsCache, knowledgeStore, session, requirePhase, registerTool } = context;
 
   registerTool(
     'figma_batch',
@@ -108,7 +108,7 @@ function register(server, context) {
       for (const op of args.operations) {
         try {
           if (op.type === 'create_frame') {
-            const componentGate = checkComponentFirstGate(op.payload || {}, dsCache, session);
+            const componentGate = checkComponentFirstGate(op.payload || {}, dsCache, session, knowledgeStore);
             if (componentGate && !componentGate.allowed) {
               results.push({
                 ok: false,
@@ -133,7 +133,7 @@ function register(server, context) {
           const result = await bridge.send(op.type, payload);
 
           if (op.type === 'create_frame' && result) {
-            const componentGate = checkComponentFirstGate(op.payload || {}, dsCache, session);
+            const componentGate = checkComponentFirstGate(op.payload || {}, dsCache, session, knowledgeStore);
             if (componentGate?.allowed) {
               result._componentCheck = componentGate.warning;
             }

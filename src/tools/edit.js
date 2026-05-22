@@ -228,15 +228,33 @@ function register(server, context) {
   // ── figma_delete_node ─────────────────────────────────────────
   registerTool(
     'figma_delete_node',
-    'Deletes a node from the Figma document. Use carefully — never delete artboards.',
+    'Deletes a node from the Figma document. NEVER deletes artboards (top-level frames) — only child nodes within an artboard. To rebuild a screen, create a NEW artboard alongside the existing one.',
     {
       type: 'object',
       properties: {
-        nodeId: { type: 'string', description: 'Node ID to delete.' },
+        nodeId: { type: 'string', description: 'Node ID to delete. Must NOT be a top-level artboard.' },
       },
       required: ['nodeId'],
     },
     async (args) => {
+      // Guard: prevent deletion of top-level frames (artboards).
+      // Artboards are never deleted — iterate or build new ones alongside.
+      try {
+        const parentInfo = await bridge.send('get_node_parent', { nodeId: args.nodeId });
+        const parentType = parentInfo?.type || parentInfo?.parentType;
+        if (parentType === 'PAGE') {
+          return {
+            error: 'ARTBOARD_DELETE_BLOCKED',
+            nodeId: args.nodeId,
+            message: 'Cannot delete a top-level artboard. Artboards are NEVER deleted — '
+              + 'only users remove artboards. To rebuild, create a NEW artboard alongside '
+              + 'the existing one. To iterate, edit the existing artboard in place.',
+          };
+        }
+      } catch (_) {
+        // If we can't check the parent, allow the delete — the node may
+        // already be gone or deeply nested. The guard is best-effort.
+      }
       const result = await bridge.send('delete_node', args);
       session.toolCallCount++;
       return { ...result };
