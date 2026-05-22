@@ -118,19 +118,26 @@ Claude Design is great for ideation. Figma Make is great for interactive prototy
 
 ---
 
-## It learns
+## It learns and enforces
 
-The first build scans the design system. By the third, recurring components auto-verify. Patterns lock in. Corrections become permanent rules.
+The first build scans the design system. By the third, recurring components auto-verify. Patterns lock in. Corrections become permanent rules that are enforced in code.
 
 **What it learns:**
-- **Component recipes:** Configure a component once (variants, booleans, text slots), Mimic replays that configuration on every future insert
-- **Layout patterns:** Frame configs (direction, padding, gap, fills) captured from the first build and reused when the same pattern appears
-- **DS gaps:** Patterns built as primitives are tracked across builds. Mimic surfaces recommendations backed by evidence ("Status Badge used 31 times as primitives across 5 builds")
+- **Component recipes:** Configure a component once (variants, booleans, text slots), Mimic replays that configuration on every future insert. After 3 builds, the recipe is confirmed and auto-applied.
+- **Layout patterns:** Frame configs (direction, padding, gap, fills) captured from the first build and reused when the same pattern appears.
+- **Design rules:** Correct Mimic once ("brand color is only for links", "cards must have a card header component"), it saves the rule and enforces it on every future build. Rules are injected into tool responses at the exact moment they're relevant.
+- **DS gaps:** Patterns built as primitives are tracked across builds. Mimic surfaces recommendations backed by evidence ("Status Badge used 31 times as primitives across 5 builds").
+
+**How it enforces:**
+- **Variable categories.** Uses bg-* for a stroke? Mimic warns and suggests border-*. Uses bg-* as text color? Warns and suggests text-*. The variable still binds (it's valid), but the mismatch is flagged.
+- **Component-first from experience.** If Mimic has used a Badge component in 3+ builds and you try to build one as a raw frame, it blocks with the component key and says "use this instead."
+- **Rule compliance.** Every build report audits stored rules against what was built. Violations are listed with evidence. Clean builds get an all-clear.
+- **Chart color semantics.** Brand, Success, Warning, and Error colors are excluded from chart palettes. Only neutral utility colors suggested for data visualization.
 
 **How it compounds:**
 - **Correct it once.** Tell Mimic: "That's not the right Badge, use Tag/Neutral." The mapping updates permanently. Every future build uses it.
 - **DS evolves, Mimic keeps up.** New components, renamed tokens, updated variants, all detected at the start of every build.
-- **Every build is a DS review.** After each build, Mimic reports what components were used, what was built from primitives and why, and what the DS is missing. Recommendations come as questions, backed by evidence.
+- **Every build is a DS review.** After each build, Mimic reports what components were used, what was built from primitives and why, what rules were followed or violated, and what the DS is missing.
 
 **Efficiency features:**
 - **Text batch:** All text overrides on a component instance set in a single call
@@ -140,16 +147,19 @@ The first build scans the design system. By the third, recurring components auto
 
 ## What gets checked automatically
 
-Every build enforces 16 quality rules across 6 sequential phases.
+Every build enforces 18 quality rules across 6 sequential phases.
 
 - Text uses DS text styles, not raw font properties
 - Colors bound to DS variables, not hardcoded
-- Spacing bound to DS tokens where available
+- Variable categories enforced: text-* for text, bg-* for fills, border-* for strokes
+- Semantic colors (Brand, Success, Warning, Error) restricted to their intended use
+- Spacing and radius bound to DS tokens where available
 - Every frame uses auto-layout
-- Content matches the source exactly, nothing invented
-- DS components used wherever a match exists
+- Content matches the source exactly, character for character
+- DS components used wherever a match exists, including learned components from prior builds
 - Components fully configured: text overrides, variants, icon slots
-- Build report with component usage %, binding quality, and DS gap recommendations
+- User-defined design rules enforced at point of use and audited in the build report
+- Build report with component usage %, binding quality, rule compliance, and DS gap recommendations
 
 Full specification: [`CLAUDE.md`](CLAUDE.md)
 

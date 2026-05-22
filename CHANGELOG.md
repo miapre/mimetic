@@ -1,5 +1,67 @@
 # Changelog
 
+## 2.0.2 (2026-05-22)
+
+### Learning enforcement
+
+The learning system now enforces what it learns, not just stores it.
+
+#### Design rules engine
+- User-defined rules persist in the knowledge store and are enforced during builds
+- Rules are injected at point of use: `figma_create_frame` and `figma_insert_component` surface matching rules in their responses based on frame name and component type
+- Rules also loaded at session start via `mimic_status` for full visibility
+- Build report audits rule compliance: violations detected for structure, component, and color rules with evidence
+- Five rule categories: color, variable, structure, component, spacing
+- Save via `mimic_ai_knowledge_write` with `type: "rule"`
+
+#### Variable category enforcement
+- `validateVariables` detects category mismatches: bg-* used for strokes warns (should be border-*), bg-* on text warns (should be text-*), border-* on fills warns (should be bg-*)
+- fg-* treated as ambiguous (no warning)
+- Mismatches produce warnings but don't block builds (the variable path IS valid)
+- Session tracks mismatches for the build report recommendations section
+- Raw `cornerRadius` warns when the DS has radius variables (`enforceRadiusVars`)
+
+#### Component-first gate from knowledge store
+- Confirmed and verified component recipes block primitive frame creation with `KNOWN_COMPONENT_EXISTS`
+- Returns the stored `componentKey` in recovery guidance so the LLM uses the real component
+- Catches component types not in the hardcoded pattern list (e.g., "Progress Bar", "Metric Card") once they've been used in 3+ builds
+
+#### Build guards
+- Plugin disconnect during active build (Phase 3-4) sets `buildInterrupted` flag, blocks all non-exempt tools
+- Bridge error messages explicitly say "do NOT use other Figma tools as a fallback"
+- `mimic_status` clears the flag when plugin reconnects
+- `figma_delete_node` checks parent type: PAGE children (artboards) are blocked with `ARTBOARD_DELETE_BLOCKED`
+
+#### Build report
+- New "Recommendations" section: missing variable categories, category mismatches detected during build
+- New "Rule Compliance" section: violations or all-clear message with rules-checked count
+- Response includes `_presentationRules` instructing the LLM to offer an HTML report
+- Chart `suggestedPalette` no longer includes Brand, Success, Warning, or Error colors
+- New `colorRules` array in chart responses with explicit semantic color restrictions
+
+#### Table builder
+- `firstColumnPaddingLeft` and `lastColumnPaddingRight` parameters for card-inset tables
+- Applied to all header cells and data cells of the first/last columns
+
+#### CLAUDE.md
+- 18 core rules (was 16): added variable categories (rule 5) and color semantics (rule 6)
+- Content fidelity rule strengthened: "character for character" matching mandate
+- Build report presentation rule updated: always offer HTML format
+- Plugin disconnect rule in Safety Guardrails
+- New "Design Rules" section documenting persistent rules engine usage
+
+### Test count: 384 (was 212)
+
+---
+
+## 2.0.1 (2026-05-21)
+
+### Bug fixes
+- Auto-retry on first component import timeout for large libraries (5000+ components)
+- Score-based component matching: component sets rank above icons in REST API cache
+
+---
+
 ## 2.0.0 (2026-05-20)
 
 Complete rewrite from scratch.
