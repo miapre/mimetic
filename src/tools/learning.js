@@ -62,9 +62,15 @@ function register(server, context) {
         case 'gap':
           knowledgeStore.addGap(id, data);
           break;
-        case 'rule':
-          knowledgeStore.setRule(id, data);
+        case 'rule': {
+          const existingRule = knowledgeStore.getRule(id);
+          if (existingRule && data.status && Object.keys(data).length === 1) {
+            knowledgeStore.setRule(id, { ...existingRule, status: data.status });
+          } else {
+            knowledgeStore.setRule(id, data);
+          }
           break;
+        }
         default:
           return { error: `Unknown type: ${type}. Use component, pattern, or gap.` };
       }
