@@ -41,7 +41,7 @@ function register(server, context) {
       }
 
       const enforcement = dsCache.getEnforcementProfile();
-      const rules = knowledgeStore.getRules();
+      const rules = knowledgeStore.getActiveRules();
       const ruleCount = Object.keys(rules).length;
       const knowledgeSummary = {
         components: Object.keys(knowledgeStore.data.components).length,
@@ -94,6 +94,23 @@ function register(server, context) {
           })),
           _designRulesNote: `${ruleCount} user-defined design rule(s) loaded from knowledge store. Follow ALL of these during the build — they override default behavior.`,
         } : {}),
+        // Surface stale recipes so the LLM knows which components may have changed
+        ...((() => {
+          const staleRecipes = Object.entries(knowledgeStore.data.components)
+            .filter(([, r]) => r.stale)
+            .map(([key, r]) => ({
+              key,
+              names: r.names || [],
+              reason: r.staleReason,
+              lastUsed: r.lastUsed,
+              action: 'Will skip auto-replay until used successfully. No action needed.',
+            }));
+          if (staleRecipes.length === 0) return {};
+          return {
+            _staleRecipes: staleRecipes,
+            _staleRecipesNote: `${staleRecipes.length} recipe(s) may be outdated since DS changed. They won't auto-apply until re-validated by a successful build.`,
+          };
+        })()),
         ...interruptInfo,
         ...(reportPending ? {
           reportPending: true,
