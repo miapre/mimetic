@@ -269,6 +269,61 @@ class KnowledgeStore {
     return this;
   }
 
+  // ── Staleness ───────────────────────────────────────────────
+
+  markRecipeStale(key, reason) {
+    const recipe = this.data.components[key];
+    if (!recipe) return this;
+    recipe.stale = true;
+    recipe.staleReason = reason;
+    recipe.staleAt = new Date().toISOString();
+    return this;
+  }
+
+  clearRecipeStale(key) {
+    const recipe = this.data.components[key];
+    if (!recipe) return this;
+    delete recipe.stale;
+    delete recipe.staleReason;
+    delete recipe.staleAt;
+    return this;
+  }
+
+  getActiveRules() {
+    const rules = this.data.rules || {};
+    const active = {};
+    for (const [id, rule] of Object.entries(rules)) {
+      if (!rule.source) { active[id] = rule; continue; }
+      if (rule.status === 'active') { active[id] = rule; }
+    }
+    return active;
+  }
+
+  checkStaleness(dsComponentKeys, dsVariantProperties) {
+    const results = [];
+    for (const [key, recipe] of Object.entries(this.data.components)) {
+      if (!recipe.componentKey) continue;
+      if (recipe.stale) continue;
+
+      if (!dsComponentKeys.has(recipe.componentKey)) {
+        this.markRecipeStale(key, 'component_removed');
+        results.push({ key, names: recipe.names || [], reason: 'component_removed' });
+        continue;
+      }
+
+      if (recipe.defaultVariants && dsVariantProperties[recipe.componentKey]) {
+        const currentProps = Object.keys(dsVariantProperties[recipe.componentKey]);
+        const storedProps = Object.keys(recipe.defaultVariants);
+        const missing = storedProps.filter(p => !currentProps.includes(p));
+        if (missing.length > 0) {
+          this.markRecipeStale(key, 'variants_changed');
+          results.push({ key, names: recipe.names || [], reason: 'variants_changed' });
+        }
+      }
+    }
+    return results;
+  }
+
   // ── Meta ────────────────────────────────────────────────────
 
   incrementBuildCount() {
