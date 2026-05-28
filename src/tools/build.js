@@ -52,6 +52,7 @@ function checkComponentFirstGate(args, dsCache, session, knowledgeStore) {
     for (const [, recipe] of Object.entries(knowledgeStore.data?.components || {})) {
       if (!recipe.componentKey || !recipe.confidence) continue;
       if (recipe.confidence !== 'confirmed' && recipe.confidence !== 'verified') continue;
+      if (recipe.stale) continue;
       const recipeNames = (recipe.names || []).map(n => n.toLowerCase());
       const recipeMatch = recipeNames.some(rn => lower.includes(rn) || rn.includes(lower.split(':')[0].trim()));
       if (recipeMatch) {

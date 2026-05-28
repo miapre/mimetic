@@ -178,6 +178,7 @@ function register(server, context) {
 
         // Auto-apply confirmed/verified recipes unless explicitly opted out
         const isReplayable = (recipe.confidence === 'confirmed' || recipe.confidence === 'verified')
+          && !recipe.stale
           && recipe.defaultVariants
           && Object.keys(recipe.defaultVariants).length > 0
           && args.applyRecipe !== false;
@@ -198,6 +199,12 @@ function register(server, context) {
         }
       }
       hints.push('After inserting: override ALL text with figma_set_component_text, set semantic properties, configure icons, hide unused slots.');
+
+      // Self-heal: if insert succeeded and recipe was stale, clear the stale flag
+      if (recipe && recipe.stale && nodeId) {
+        knowledgeStore.clearRecipeStale(args.componentKey);
+        hints.push(`Stale recipe cleared for "${recipe.names?.[0] || args.componentKey}" — component still exists in DS.`);
+      }
 
       // Track nodeId → componentKey for variant config capture
       if (!session._nodeComponentKeys) session._nodeComponentKeys = new Map();
