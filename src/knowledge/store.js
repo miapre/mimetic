@@ -15,6 +15,7 @@ function createEmptyStore() {
     rules: {},
     libraryFileKeys: {},
     buildHistory: [],
+    signals: [],
     meta: {
       buildCount: 0,
       lastBuild: null,
@@ -45,6 +46,7 @@ class KnowledgeStore {
       if (!this.data.libraryFileKeys) this.data.libraryFileKeys = {};
       if (!this.data.buildHistory) this.data.buildHistory = [];
       if (!this.data.rules) this.data.rules = {};
+      if (!this.data.signals) this.data.signals = [];
       // Backfill confidence on components that predate the promotion system
       for (const comp of Object.values(this.data.components || {})) {
         if (!comp.confidence) comp.confidence = 'new';
@@ -235,6 +237,36 @@ class KnowledgeStore {
   /** Returns build history array (most recent last). */
   getBuildHistory() {
     return this.data.buildHistory || [];
+  }
+
+  // ── Signals ─────────────────────────────────────────────────
+
+  addSignal({ type, key, context, buildNumber }) {
+    if (!this.data.signals) this.data.signals = [];
+    const dedupKey = `${type}:${key}:${buildNumber}`;
+    const exists = this.data.signals.some(
+      s => `${s.type}:${s.key}:${s.buildNumber}` === dedupKey
+    );
+    if (exists) return this;
+    this.data.signals.push({
+      type, key, context, buildNumber,
+      date: new Date().toISOString(),
+    });
+    if (this.data.signals.length > 200) {
+      this.data.signals = this.data.signals.slice(-200);
+    }
+    return this;
+  }
+
+  getSignals() {
+    return this.data.signals || [];
+  }
+
+  evictOldSignals(currentBuildNumber) {
+    if (!this.data.signals) return this;
+    const cutoff = currentBuildNumber - 20;
+    this.data.signals = this.data.signals.filter(s => s.buildNumber > cutoff);
+    return this;
   }
 
   // ── Meta ────────────────────────────────────────────────────
