@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ChartCalculator } = require('../charts/calculator');
 const { PatternMatcher } = require('../knowledge/patterns');
+const { compileNoGoods } = require('../knowledge/compiler');
 
 function register(server, context) {
   const { registerTool, knowledgeStore, buildManifest, dsCache, session, advancePhase } = context;
@@ -298,6 +299,43 @@ function register(server, context) {
         knowledgeStore.incrementBuildCount();
         session.phaseToolCalls[3] = 0;
       }
+      // ── Flush session signals to knowledge store ──
+      const currentBuildNumber = knowledgeStore.data.meta.buildCount;
+      if (session._signals && session._signals.size > 0) {
+        for (const [, signal] of session._signals) {
+          knowledgeStore.addSignal({ ...signal, buildNumber: currentBuildNumber });
+        }
+        session._signals.clear();
+      }
+      knowledgeStore.evictOldSignals(currentBuildNumber);
+
+      // ── Compile no-goods ──
+      const allSignals = knowledgeStore.getSignals();
+      const allRules = knowledgeStore.getRules();
+      const compiled = compileNoGoods(allSignals, allRules);
+
+      // Write new candidate rules
+      for (const candidate of compiled.candidates) {
+        knowledgeStore.setRule(candidate.id, {
+          category: candidate.category,
+          rule: candidate.rule,
+          reason: candidate.reason,
+          scope: '',
+          source: candidate.source,
+          status: candidate.status,
+          compiledFrom: candidate.compiledFrom,
+          compiledAt: candidate.compiledAt,
+        });
+      }
+
+      // Auto-promote candidates
+      for (const ruleId of compiled.promotions) {
+        const rule = knowledgeStore.getRule(ruleId);
+        if (rule) {
+          knowledgeStore.setRule(ruleId, { ...rule, status: 'active' });
+        }
+      }
+
       knowledgeStore.save();
 
       // Build markdown report (after learning so confidence tiers are current)
@@ -439,7 +477,8 @@ function register(server, context) {
           const displayName = recipe.names?.length > 0 ? recipe.names.join(', ') : key;
           const tier = recipe.confidence || 'new';
           const badge = tier === 'verified' ? '🟢 verified' : tier === 'confirmed' ? '🟡 confirmed' : tier === 'strong' ? '🟡 confirmed' : '🔵 new';
-          lines.push(`- **${displayName}**: ${badge} (${recipe.buildCount || 0} builds, ${recipe.instances || 0} instances)`);
+          const staleTag = recipe.stale ? ` ⚠ STALE (${recipe.staleReason})` : '';
+          lines.push(`- **${displayName}**: ${badge}${staleTag} (${recipe.buildCount || 0} builds, ${recipe.instances || 0} instances)`);
         });
       } else {
         lines.push('No component recipes stored.');
@@ -608,6 +647,31 @@ function register(server, context) {
       } else if (storedRules.length > 0) {
         lines.push(`## ✓ Rule Compliance: All ${storedRules.length} rule(s) followed`);
         lines.push('');
+      }
+
+      // ── Rule Candidates (from no-good compilation) ──
+      if (compiled.candidates.length > 0 || compiled.promotions.length > 0) {
+        lines.push('## Rule Candidates (auto-compiled from repeated failures)');
+        lines.push('');
+        if (compiled.candidates.length > 0) {
+          lines.push(`${compiled.candidates.length} new candidate(s) compiled from recurring build failures:`);
+          lines.push('');
+          for (const c of compiled.candidates) {
+            lines.push(`- **${c.id}** (${c.compiledFrom[0]}, 3+ builds): ${c.rule}`);
+            lines.push(`  Confirm: call mimic_ai_knowledge_write with id "${c.id}", type "rule", data { status: "active" }`);
+            lines.push(`  Dismiss: call mimic_ai_knowledge_write with id "${c.id}", type "rule", data { status: "dismissed" }`);
+          }
+          lines.push('');
+        }
+        if (compiled.promotions.length > 0) {
+          lines.push(`${compiled.promotions.length} candidate(s) auto-promoted to active (6+ occurrences without dismissal):`);
+          lines.push('');
+          for (const ruleId of compiled.promotions) {
+            const rule = knowledgeStore.getRule(ruleId);
+            lines.push(`- **${ruleId}**: ${rule?.rule || 'Unknown rule'}`);
+          }
+          lines.push('');
+        }
       }
 
       // ── Post-Build Structural Validation ──
