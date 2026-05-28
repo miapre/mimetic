@@ -318,6 +318,12 @@ function register(server, context) {
       requirePhase(2, PHASE_HINT);
       const componentGate = checkComponentFirstGate(args, dsCache, session, knowledgeStore);
       if (componentGate && !componentGate.allowed) {
+        // Emit signal for no-good compilation
+        if (session._signals && componentGate.match) {
+          session._signals.set(`gate_hit:${componentGate.match}`, {
+            type: 'gate_hit', key: componentGate.match, context: `${args.name} blocked by component-first gate`,
+          });
+        }
         return componentGate;
       }
 

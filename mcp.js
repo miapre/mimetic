@@ -81,6 +81,8 @@ const session = {
   buildInterrupted: false,
   // Variable category mismatches — accumulated during Phase 3 for the build report
   categoryMismatches: [],
+  // Failure signals — accumulated during build for no-good compilation
+  _signals: new Map(),
 };
 
 // Circuit breaker constants
@@ -135,6 +137,7 @@ function resetSession() {
   session.buildsSinceReport = 0;
   session.buildInterrupted = false;
   session.categoryMismatches = [];
+  session._signals = new Map();
   // Community library check state
   session.pendingCommunityCheck = false;
   session.discoveryFileKey = null;
@@ -315,11 +318,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         failedBindings,
         warnings: result.warnings || [],
       });
+      // Emit signals for no-good compilation
+      for (const varPath of failedBindings) {
+        session._signals.set(`binding_failure:${varPath}`, {
+          type: 'binding_failure', key: varPath, context: `${name}: ${varPath} not found`,
+        });
+      }
     }
 
     // Track category mismatches for the build report
     if (result && typeof result === 'object' && result._categoryWarnings) {
       session.categoryMismatches.push(...result._categoryWarnings);
+      // Emit signals for no-good compilation
+      for (const warning of result._categoryWarnings) {
+        const varMatch = warning.match(/^[^:]+:\s*'([^']+)'.+for (\w+)/);
+        if (varMatch) {
+          const signalKey = `${varMatch[1]}->${varMatch[2]}`;
+          session._signals.set(`category_mismatch:${signalKey}`, {
+            type: 'category_mismatch', key: signalKey, context: warning,
+          });
+        }
+      }
     }
 
     // Phase 3 checkpoint: after N build operations, insert a progress summary
