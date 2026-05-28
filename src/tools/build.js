@@ -70,6 +70,44 @@ function checkComponentFirstGate(args, dsCache, session, knowledgeStore) {
     }
   }
 
+  // ── Fix 2: Check mapped components from mimic_map_components ──
+  // If a frame name semantically matches a component that was mapped and available,
+  // block it. This catches cases where the hardcoded pattern list doesn't include
+  // the element type but mimic_map_components found a DS component for it.
+  // Matching is strict: the frame name prefix (before ":") must match the full
+  // elementType or componentName — not just contain a substring. This avoids
+  // false positives like "Card: Revenue" matching "card header".
+  if (!match && session?.componentMap?.components?.length && !args?.confirmedNoComponent) {
+    const nameLower = (args?.name || '').toLowerCase().trim();
+    const namePrefix = nameLower.split(':')[0].trim();
+    const matchedMapped = session.componentMap.components.find(c => {
+      const type = (c.elementType || '').toLowerCase().trim();
+      const compName = (c.componentName || '').toLowerCase().trim();
+      // Strict match: frame name or its prefix must equal the mapped type/name,
+      // or the frame name must contain the FULL multi-word type as a phrase.
+      return (
+        namePrefix === type
+        || namePrefix === compName
+        || nameLower === type
+        || nameLower === compName
+        || (type.includes(' ') && nameLower.includes(type))
+        || (compName.includes(' ') && nameLower.includes(compName))
+      );
+    });
+    if (matchedMapped) {
+      return {
+        allowed: false,
+        match: matchedMapped.elementType,
+        error: 'MAPPED_COMPONENT_AVAILABLE',
+        message: `"${args?.name}" matches mapped DS component "${matchedMapped.componentName}" (elementType: "${matchedMapped.elementType}"). Use figma_insert_component with componentKey "${matchedMapped.componentKey}" instead of creating a primitive frame.`,
+        recovery: {
+          componentKey: matchedMapped.componentKey,
+          action: `Call figma_insert_component with componentKey: "${matchedMapped.componentKey}" instead of figma_create_frame.`,
+        },
+      };
+    }
+  }
+
   if (!match) return null;
 
   // Auto-bypass when the selected library's components can't be imported (e.g. missing fonts).

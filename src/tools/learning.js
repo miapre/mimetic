@@ -384,6 +384,26 @@ function register(server, context) {
         lines.push('');
       }
 
+      // ── Unused mapped components audit ──
+      // Cross-reference mimic_map_components results with actual insertions.
+      // Flag any component that was mapped (available in DS) but never inserted.
+      const unusedMappedComponents = [];
+      if (session?.componentMap?.components?.length) {
+        const insertedKeys = session._componentInsertions
+          ? new Set([...session._componentInsertions.keys()])
+          : new Set();
+        // Also check the caller-provided components list for name matches
+        const reportedNames = new Set(components.map(c => c.name.toLowerCase()));
+        for (const mapped of session.componentMap.components) {
+          const wasInserted = insertedKeys.has(mapped.componentKey);
+          const wasReported = reportedNames.has((mapped.componentName || '').toLowerCase())
+            || reportedNames.has((mapped.elementType || '').toLowerCase());
+          if (!wasInserted && !wasReported) {
+            unusedMappedComponents.push(mapped);
+          }
+        }
+      }
+
       // Binding failures (from session tracking)
       const bindingFailures = session.bindingFailures || [];
 
@@ -423,6 +443,18 @@ function register(server, context) {
         }
       } else {
         lines.push('## DS Binding Quality: All bindings succeeded');
+        lines.push('');
+      }
+
+      // ── Unused mapped components section ──
+      if (unusedMappedComponents.length > 0) {
+        lines.push(`## Unused Mapped Components: ${unusedMappedComponents.length} mapped but never inserted`);
+        lines.push('');
+        lines.push('These components were found by `mimic_map_components` but were never used via `figma_insert_component`. Consider using them instead of primitives in future builds.');
+        lines.push('');
+        unusedMappedComponents.forEach(c => {
+          lines.push(`- **${c.componentName}** (elementType: "${c.elementType}", componentKey: \`${c.componentKey}\`)`);
+        });
         lines.push('');
       }
 
@@ -825,10 +857,18 @@ function register(server, context) {
           ? ` All ${storedRules.length} rule(s) followed.`
           : '';
 
+      const unusedMappedSummary = unusedMappedComponents.length > 0
+        ? ` ⚠ ${unusedMappedComponents.length} mapped component(s) never used.`
+        : '';
+
       return {
         reportPath,
         bindingFailureCount: bindingFailures.length,
         unoverriddenTextCount: unoverriddenCount,
+        unusedMappedComponentCount: unusedMappedComponents.length,
+        unusedMappedComponents: unusedMappedComponents.length > 0
+          ? unusedMappedComponents.map(c => ({ componentName: c.componentName, elementType: c.elementType, componentKey: c.componentKey }))
+          : undefined,
         componentUsagePercent,
         componentQualityGate,
         validationStatus,
@@ -842,7 +882,7 @@ function register(server, context) {
           'After the summary, OFFER to generate an HTML version: "Would you like the full report as an HTML file?"',
           'The report file is for persistence — the user must SEE the results in the conversation.',
         ],
-        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified.${recommendations.length > 0 ? ` ${recommendations.length} recommendation(s) for DS improvements.` : ''}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''} Structural validation: ${validationStatus}.${promotionSummary}`,
+        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified.${recommendations.length > 0 ? ` ${recommendations.length} recommendation(s) for DS improvements.` : ''}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''}${unusedMappedSummary} Structural validation: ${validationStatus}.${promotionSummary}`,
       };
     }
   );
