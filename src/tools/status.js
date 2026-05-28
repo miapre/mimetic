@@ -825,6 +825,21 @@ function register(server, context) {
         knowledgeStore.save();
       }
 
+      // ── Staleness detection ──
+      // Compare stored recipes against live DS cache to detect orphaned/drifted recipes.
+      const dsComponentKeys = new Set(dsCache.components.keys());
+      const dsVariantProperties = {};
+      for (const [key, comp] of dsCache.components) {
+        if (comp.variantProperties) {
+          dsVariantProperties[key] = comp.variantProperties;
+        }
+      }
+      const staleResults = knowledgeStore.checkStaleness(dsComponentKeys, dsVariantProperties);
+      if (staleResults.length > 0) {
+        knowledgeStore.save();
+        dsChanges.push(`${staleResults.length} recipe(s) marked stale: ${staleResults.map(r => `${r.names[0] || r.key} (${r.reason})`).join(', ')}`);
+      }
+
       // Completeness warnings
       const completenessWarnings = [];
       if (variablesCached > 0 && variablesPreloaded < variablesCached * 0.8) {
