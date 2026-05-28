@@ -267,4 +267,124 @@ describe('component-first enforcement', () => {
     assert.equal(message.payload.textNodeId, 'Icomponent:1;child:2');
     assert.equal(result.characters, 'Run verification');
   });
+
+  // ── Fix 2: MAPPED_COMPONENT_AVAILABLE enforcement ──
+
+  it('blocks frame creation when name matches a mapped component from mimic_map_components', async () => {
+    // Map "alert" and "tooltip" to DS components (names NOT in hardcoded COMPONENT_FIRST_PATTERNS)
+    setup.dsCache.addComponent('ck-alert', { name: 'Alert', isComponentSet: true });
+    setup.dsCache.addComponent('ck-tooltip', { name: 'Tooltip', isComponentSet: true });
+
+    await setup.handlers.mimic_map_components({
+      elementTypes: ['alert', 'tooltip'],
+      librarySearchResults: [],
+    });
+
+    // "Alert" should be blocked — exact match on mapped elementType
+    const blocked = await setup.handlers.figma_create_frame({
+      name: 'Alert',
+      parentId: 'parent:1',
+    });
+    assert.equal(blocked.error, 'MAPPED_COMPONENT_AVAILABLE');
+    assert.ok(blocked.message.includes('Alert'));
+    assert.ok(blocked.recovery.componentKey);
+    assert.equal(setup.bridge.getMessages('create_frame').length, 0);
+
+    // "Tooltip: Help" should also be blocked — prefix "tooltip" matches mapped "tooltip"
+    const blocked2 = await setup.handlers.figma_create_frame({
+      name: 'Tooltip: Help text',
+      parentId: 'parent:1',
+    });
+    assert.equal(blocked2.error, 'MAPPED_COMPONENT_AVAILABLE');
+  });
+
+  it('does NOT block frames whose name only partially overlaps a mapped component', async () => {
+    setup.dsCache.addComponent('ck-card-header', { name: 'Card header', isComponentSet: true });
+
+    await setup.handlers.mimic_map_components({
+      elementTypes: ['card header'],
+      librarySearchResults: [],
+    });
+
+    // "Card: Revenue" should NOT be blocked — "card" != "card header"
+    const allowed = await setup.handlers.figma_create_frame({
+      name: 'Card: Revenue',
+      parentId: 'parent:1',
+    });
+    assert.ok(allowed.nodeId, 'Frame should be created — "Card" is not "Card header"');
+    assert.equal(setup.bridge.getMessages('create_frame').length, 1);
+  });
+
+  it('allows frame creation with confirmedNoComponent even when mapped component exists', async () => {
+    setup.dsCache.addComponent('ck-alert', { name: 'Alert', isComponentSet: true });
+
+    await setup.handlers.mimic_map_components({
+      elementTypes: ['alert'],
+      librarySearchResults: [],
+    });
+
+    // confirmedNoComponent bypasses the mapped check
+    const allowed = await setup.handlers.figma_create_frame({
+      name: 'Alert Section',
+      parentId: 'parent:1',
+      confirmedNoComponent: true,
+      primitiveOverrideReason: 'Custom alert layout not matching DS component structure',
+    });
+    // The hardcoded pattern list doesn't have "alert", so confirmedNoComponent
+    // is only checked by the hardcoded gate. The mapped check skips when
+    // confirmedNoComponent is true.
+    assert.ok(allowed.nodeId);
+  });
+
+  // ── Fix 1: Unused mapped components in build report ──
+
+  it('reports unused mapped components in the build report', async () => {
+    setup.dsCache.addComponent('ck-card-header', { name: 'Card header', isComponentSet: true });
+    setup.dsCache.addComponent('ck-alert', { name: 'Alert', isComponentSet: true });
+    setup.dsCache.addComponent('ck-badge', { name: 'Badge', isComponentSet: true });
+
+    await setup.handlers.mimic_map_components({
+      elementTypes: ['card header', 'alert', 'badge'],
+      librarySearchResults: [],
+    });
+
+    // Only report Badge as used — Card header and Alert were mapped but never inserted
+    const report = await setup.handlers.mimic_generate_build_report({
+      screenName: 'Unused Components Test',
+      components: [{ name: 'Badge', instances: 2, componentKey: 'ck-badge' }],
+      primitives: [{ element: 'Custom Section', reason: 'No DS component for coverage matrix layout' }],
+    });
+
+    assert.equal(report.unusedMappedComponentCount, 2);
+    assert.ok(report.unusedMappedComponents);
+    assert.equal(report.unusedMappedComponents.length, 2);
+    const unusedNames = report.unusedMappedComponents.map(c => c.componentName);
+    assert.ok(unusedNames.includes('Card header'));
+    assert.ok(unusedNames.includes('Alert'));
+    assert.ok(report.summary.includes('mapped component(s) never used'));
+  });
+
+  it('does not flag unused components when all mapped components were inserted', async () => {
+    setup.dsCache.addComponent('ck-badge', { name: 'Badge', isComponentSet: true });
+
+    await setup.handlers.mimic_map_components({
+      elementTypes: ['badge'],
+      librarySearchResults: [],
+    });
+
+    // Simulate insertion tracking
+    setup.session._componentInsertions = new Map([
+      ['ck-badge', { names: ['Badge'], instances: 3 }],
+    ]);
+
+    const report = await setup.handlers.mimic_generate_build_report({
+      screenName: 'All Used Test',
+      components: [{ name: 'Badge', instances: 3, componentKey: 'ck-badge' }],
+      primitives: [],
+    });
+
+    assert.equal(report.unusedMappedComponentCount, 0);
+    assert.equal(report.unusedMappedComponents, undefined);
+    assert.ok(!report.summary.includes('mapped component(s) never used'));
+  });
 });
