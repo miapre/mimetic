@@ -2,6 +2,14 @@
   "name": "@miapre/mimic-ai",
   "version": "2.0.2",
   "description": "Mimic AI: MCP server that builds production-ready Figma using your design system",
+  "homepage": "https://github.com/miapre/mimic-ai#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miapre/mimic-ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/miapre/mimic-ai/issues"
+  },
   "main": "mcp.js",
   "bin": {
     "mimic-ai": "mcp.js"
