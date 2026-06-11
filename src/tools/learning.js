@@ -547,9 +547,48 @@ function register(server, context) {
         }
       }
 
+      // ── DS Changes ──
+      // Summarize stale recipes (component removals, variant changes) with impact.
+      const staleRecipes = Object.entries(knowledgeStore.data.components)
+        .filter(([, recipe]) => recipe.stale)
+        .map(([key, recipe]) => ({
+          name: recipe.names?.[0] || key,
+          reason: recipe.staleReason,
+          instances: recipe.instances || 0,
+          buildCount: recipe.buildCount || 0,
+          confidence: recipe.confidence || 'new',
+        }));
+
+      if (staleRecipes.length > 0) {
+        const removedCount = staleRecipes.filter(r => r.reason === 'component_removed').length;
+        const variantChangedCount = staleRecipes.filter(r => r.reason === 'variants_changed').length;
+
+        lines.push(`## DS Changes: ${staleRecipes.length} stale recipe(s) detected`);
+        lines.push('');
+        lines.push(`The design system has changed since these components were last used. ` +
+          `${removedCount > 0 ? `${removedCount} component(s) removed from the library. ` : ''}` +
+          `${variantChangedCount > 0 ? `${variantChangedCount} component(s) have different variants than expected.` : ''}`);
+        lines.push('');
+
+        if (removedCount > 0) {
+          lines.push('**Removed components** (template replay disabled — will fall back to manual configuration):');
+          staleRecipes.filter(r => r.reason === 'component_removed').forEach(r => {
+            lines.push(`- **${r.name}** — used ${r.instances} time(s) across ${r.buildCount} build(s). ${r.confidence === 'verified' ? 'Was verified (high confidence).' : ''}`);
+          });
+          lines.push('');
+        }
+
+        if (variantChangedCount > 0) {
+          lines.push('**Variant changes** (stored variant configs may not match current DS):');
+          staleRecipes.filter(r => r.reason === 'variants_changed').forEach(r => {
+            lines.push(`- **${r.name}** — variant properties changed. Stored defaults will be skipped until a successful build re-validates them.`);
+          });
+          lines.push('');
+        }
+      }
+
       // ── User Recommendations ──
       // Actionable suggestions for the user to improve their DS.
-      // Includes: missing variables found during builds, semantic color misuse, etc.
       const recommendations = [];
 
       // 1. Missing variable categories detected from binding failures
@@ -581,12 +620,88 @@ function register(server, context) {
         );
       }
 
-      if (recommendations.length > 0) {
-        lines.push('## Recommendations');
-        lines.push('');
-        recommendations.forEach(r => lines.push(`- ${r}`));
-        lines.push('');
+      // 3. Top gap components to create (ranked by frequency across builds)
+      if (gapEntries.length > 0) {
+        // Group gaps by pattern (e.g., all "Card: *" gaps → "Metric Card")
+        const gapsByType = {};
+        for (const [name, gap] of gapEntries) {
+          const type = name.replace(/:.*/g, '').trim();
+          if (!gapsByType[type]) gapsByType[type] = { count: 0, names: [], savings: 0 };
+          gapsByType[type].count++;
+          gapsByType[type].names.push(name);
+          const savingsMatch = (gap.estimatedSavings || '').match(/~(\d+)/);
+          if (savingsMatch) gapsByType[type].savings += parseInt(savingsMatch[1], 10);
+        }
+        const topGaps = Object.entries(gapsByType)
+          .sort((a, b) => b[1].count - a[1].count)
+          .slice(0, 5);
+        if (topGaps.length > 0) {
+          const gapList = topGaps.map(([type, data]) =>
+            `${type} (${data.count} gap${data.count > 1 ? 's' : ''}, ~${data.savings} tool calls saved)`
+          ).join(', ');
+          recommendations.push(
+            `**Create these DS components to improve future builds:** ${gapList}. ` +
+            `These patterns appear repeatedly as primitives. Adding them to the DS would reduce build time and improve consistency.`
+          );
+        }
       }
+
+      // 4. Stale recipe actions
+      if (staleRecipes.length > 0) {
+        const highImpactStale = staleRecipes
+          .filter(r => r.confidence === 'verified' || r.instances >= 10)
+          .map(r => r.name);
+        if (highImpactStale.length > 0) {
+          recommendations.push(
+            `**Review DS library changes:** ${highImpactStale.join(', ')} ${highImpactStale.length === 1 ? 'is' : 'are'} ` +
+            `high-usage component(s) now marked stale. Re-publish or update these in the DS library to restore template replay.`
+          );
+        }
+      }
+
+      // 5. Learning velocity insight
+      const buildHistory = knowledgeStore.getBuildHistory();
+      if (buildHistory.length >= 3) {
+        const recent = buildHistory.slice(-3);
+        const avgRecent = recent.reduce((sum, h) => sum + (h.cacheHits || 0), 0) / recent.length;
+        const first = buildHistory[0];
+        if (first.toolCalls > 0 && recent.length > 0) {
+          const lastBuild = recent[recent.length - 1];
+          const reduction = Math.round((1 - lastBuild.toolCalls / first.toolCalls) * 100);
+          if (reduction > 20) {
+            recommendations.push(
+              `**Learning is working:** ${reduction}% fewer tool calls compared to your first build. ` +
+              `Cache hits averaging ${Math.round(avgRecent)} per build. Component recipes are saving configuration time.`
+            );
+          } else if (reduction < 0) {
+            recommendations.push(
+              `**Build complexity increasing:** Tool calls are higher than early builds. ` +
+              `This may be expected for more complex screens, or may indicate DS gaps slowing builds down.`
+            );
+          }
+        }
+      }
+
+      // 6. Components approaching promotion
+      const nearPromotion = Object.entries(knowledgeStore.data.components)
+        .filter(([, r]) => !r.stale && r.confidence === 'confirmed' && (r.buildCount || 0) >= 5)
+        .map(([, r]) => r.names?.[0] || 'unknown');
+      if (nearPromotion.length > 0) {
+        recommendations.push(
+          `**Approaching verified status:** ${nearPromotion.join(', ')} — ${nearPromotion.length === 1 ? 'needs' : 'need'} ` +
+          `${7 - 5} more build(s) with consistent usage to reach verified confidence. Template replay becomes more reliable at verified.`
+        );
+      }
+
+      // Always include recommendations section (even if empty — shows the tool is checking)
+      lines.push('## Recommendations');
+      lines.push('');
+      if (recommendations.length > 0) {
+        recommendations.forEach(r => lines.push(`- ${r}`));
+      } else {
+        lines.push('No recommendations for this build. DS coverage and build quality are good.');
+      }
+      lines.push('');
 
       lines.push('## Patterns Learned');
       lines.push('');
@@ -861,6 +976,10 @@ function register(server, context) {
         ? ` ⚠ ${unusedMappedComponents.length} mapped component(s) never used.`
         : '';
 
+      const dsChangesSummary = staleRecipes.length > 0
+        ? ` ${staleRecipes.length} DS change(s) detected (${staleRecipes.filter(r => r.reason === 'component_removed').length} removed, ${staleRecipes.filter(r => r.reason === 'variants_changed').length} variant changes).`
+        : '';
+
       return {
         reportPath,
         bindingFailureCount: bindingFailures.length,
@@ -876,13 +995,15 @@ function register(server, context) {
         promotions,
         ruleViolations: ruleViolations.length > 0 ? ruleViolations : undefined,
         rulesChecked: storedRules.length,
-        recommendations: recommendations.length > 0 ? recommendations : undefined,
+        recommendations,
+        dsChanges: staleRecipes.length > 0 ? staleRecipes : undefined,
         _presentationRules: [
-          'Present the FULL build report to the user in the conversation — components table, primitives, binding quality, efficiency stats, rule compliance, recommendations, and DS gaps.',
+          'Present the FULL build report to the user — components, primitives, binding quality, efficiency, DS CHANGES (stale recipes + impact), RECOMMENDATIONS (all of them), rule compliance, and DS gaps.',
+          'The Recommendations section is the MOST IMPORTANT part of the report. It contains actionable suggestions: gap components to create, stale recipes to review, learning insights, and DS improvements. NEVER skip it.',
           'After the summary, OFFER to generate an HTML version: "Would you like the full report as an HTML file?"',
           'The report file is for persistence — the user must SEE the results in the conversation.',
         ],
-        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified.${recommendations.length > 0 ? ` ${recommendations.length} recommendation(s) for DS improvements.` : ''}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''}${unusedMappedSummary} Structural validation: ${validationStatus}.${promotionSummary}`,
+        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified. ${recommendations.length} recommendation(s).${dsChangesSummary}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''}${unusedMappedSummary} Structural validation: ${validationStatus}.${promotionSummary}`,
       };
     }
   );

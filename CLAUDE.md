@@ -266,15 +266,27 @@ manual use if needed, but `mimic_discover_ds` replaces the
     to detect and fix.
 18. Build report presentation. After calling
     `mimic_generate_build_report`, ALWAYS present a formatted
-    summary to the user. Include: DS component instances table,
-    primitives with justifications, binding quality, efficiency
-    stats (tool calls, cache hits), DS gap recommendations,
-    AND any user recommendations (missing variables, category
-    mismatches). After the summary, ALWAYS offer: "Would you
-    like the full report as an HTML file?" The report file is
-    for persistence — the user must SEE the full results in
-    the conversation. A build without a visible report is
-    incomplete.
+    summary to the user. The report has multiple sections and
+    ALL must be shown:
+    - **Components table** — DS instances used
+    - **Primitives** — with justifications
+    - **DS Changes** — stale recipes (removed components,
+      variant changes) and their impact on future builds.
+      This section is critical — it tells the user what
+      changed in their DS and what to do about it.
+    - **Recommendations** — THE MOST IMPORTANT SECTION.
+      Contains actionable suggestions: gap components to
+      create (ranked by frequency), stale recipes to review,
+      missing variables to add, category mismatches, learning
+      velocity insights, components approaching promotion.
+      NEVER skip this section even if short.
+    - **Binding quality** — failures and recovery steps
+    - **Efficiency** — tool calls, cache hits, replay savings
+    - **Rule compliance** — violations and candidates
+    After the summary, ALWAYS offer: "Would you like the full
+    report as an HTML file?" The report file is for persistence
+    — the user must SEE the full results in the conversation.
+    A build without a visible report is incomplete.
 
 ## Template Replay
 
