@@ -4,7 +4,7 @@
 
 # Mimic AI
 
-**The design system copilot that learns your system and gets better every time you use it.**
+**Everything to Figma using your DS. Learns it. Gets better every build.**
 
 Give Mimic any HTML, a prompt, or a description. It builds production-ready Figma using your real components, tokens, and auto-layout. Correct it once, it remembers forever. After every build, it tells you what your design system is missing.
 
