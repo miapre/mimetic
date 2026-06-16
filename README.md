@@ -4,11 +4,9 @@
 
 # Mimic AI
 
-**Production-ready Figma from your design system. Describe it, build it, ship it.**
+**The design system copilot that learns your system and gets better every time you use it.**
 
-Tell Mimic what you need. It builds it in Figma using real design system components, tokens, and auto-layout. Give it HTML, a prompt, or a description. The output uses the DS for everything.
-
-After every build, it tells you what the design system is missing.
+Give Mimic any HTML, a prompt, or a description. It builds production-ready Figma using your real components, tokens, and auto-layout. Correct it once, it remembers forever. After every build, it tells you what your design system is missing.
 
 ---
 
@@ -23,17 +21,38 @@ After every build, it tells you what the design system is missing.
 
 ---
 
-<!-- TODO: GIF showing prompt + Figma build with DS components -->
+<p align="center">
+  <img src="assets/demo.gif" alt="Mimic AI building a full page in Figma using a design system" width="100%">
+</p>
 
 ---
 
 ## Why Mimic exists
 
-Design systems exist to make output consistent. But when someone needs a screen in Figma, they often start from scratch. Whether it's your own team library, a community kit like Material Design or the Apple iOS kit, or a client's published system, the components sit in the library panel. Unused.
+You built a design system. Components, tokens, variables. Every decision intentional. Then someone needs a screen in Figma and starts from scratch. Hardcoded colors. Raw font sizes. Frames that break when you resize them. Your system sits right there in the library panel. Unused.
 
-AI tools don't solve this. Claude Design generates prototypes you have to rebuild in Figma. Figma Make generates interactive demos with raw CSS values instead of real components. The cleanup takes as long as building it yourself.
+AI tools don't help either. Claude Design generates prototypes you have to rebuild in Figma. Figma Make produces interactive demos with raw CSS values instead of real components. The cleanup takes as long as building it yourself.
 
 Mimic is different. The output is the deliverable: real Figma layers with real component instances, variable bindings, and auto-layout. Nothing to convert. Nothing to swap. Hand it off.
+
+---
+
+## It learns your system
+
+The first build scans the design system. By the third, recurring components auto-verify. By the tenth, most decisions are instant. The knowledge compounds across every build.
+
+| Build | What Mimic knows | What you experience |
+|---|---|---|
+| **1** | Nothing. Cold start. Scans your entire DS. | "It found my components and used them. Some primitives where my DS has gaps." |
+| **5** | Core patterns verified. Common components cached. | "It remembered that I use Button/Primary for CTAs. It didn't ask about tabs this time." |
+| **20** | Deep knowledge. Recipes for every common component. | "I point it at an HTML and get a DS-compliant Figma screen in minutes. It knows my system better than the new hire." |
+| **50+** | Comprehensive DS audit data. Recurring gaps visible. | "The gap report says I've used status badges as primitives 31 times. I finally built the component. Mimic started using it immediately." |
+
+**Correct it once.** Tell Mimic "That's not the right Badge, use Tag/Neutral." The mapping updates permanently. Every future build uses the correction without you having to repeat yourself.
+
+**Your DS evolves. Mimic keeps up.** New components, renamed tokens, updated variants, all detected at the start of every build. You never have to tell Mimic your DS changed.
+
+**Every build is a DS review.** After each build, Mimic generates a report: what components it used, what it built from primitives and why, what patterns it learned, and what your DS is missing. Recommendations come as questions, not commands: "Should your DS include a Status Badge? 4 elements across 3 builds were built as primitives."
 
 ---
 
@@ -45,11 +64,26 @@ Pick any starting point:
 
 > "Here's the HTML from our staging environment, build it in Figma"
 
-> "Take this Stitch export and apply our design system"
-
 > "Rebuild this Claude Design prototype with real components"
 
 Mimic discovers the design system on your file, matches components and tokens, and builds structured Figma. Same rules, same output quality, regardless of how you start.
+
+---
+
+## How Mimic compares
+
+|  | Mimic | Claude Design | Figma Make | Framelink | html.to.design |
+|---|---|---|---|---|---|
+| **Output** | Figma canvas (real layers) | HTML / React prototype | Interactive prototype | Read-only context | Figma canvas (paid) |
+| **Uses your components** | Yes, real instances | No | Partial (Make Kits) | No (agent infers) | Partial |
+| **Variable bindings** | Yes, every node | No | No (raw values) | No | No |
+| **Auto-layout** | Every frame | N/A | N/A | N/A | Partial |
+| **Works with any library** | Yes | No | Make Kits only | N/A | Limited |
+| **Learns across builds** | Yes | No | No | No | No |
+| **DS gap detection** | Yes, every build | No | No | No | No |
+| **Open source** | Yes (MIT) | No | No | Yes (MIT) | No |
+
+Claude Design is great for ideation. Figma Make is great for interactive prototyping. Framelink is great for giving AI context about your designs. Mimic is for when the output needs to be the actual Figma file you ship with.
 
 ---
 
@@ -58,12 +92,10 @@ Mimic discovers the design system on your file, matches components and tokens, a
 Mimic works with any Figma library: your team's, a community kit, or a client's published system.
 
 - **Designers** who want DS-compliant screens without manual component hunting
+- **Design system leads** testing their system by building real screens, surfacing coverage gaps with evidence
 - **New team members** learning a DS by building with it, seeing what components exist and what's missing
 - **Agencies and freelancers** picking up a client's library and needing to produce screens fast
-- **Anyone evaluating a DS** by building the same screen with different libraries to compare
-- **DS teams** testing their system by building real screens, surfacing coverage gaps with evidence
-- **DS migration** teams rebuilding existing screens with a new system to assess coverage before committing
-- **Open source library maintainers** generating showcase pages that demonstrate components in real context
+- **DS migration teams** rebuilding existing screens with a new system to assess coverage before committing
 - **Developers** who need a Figma reference that matches their frontend components
 - **Product managers** who want to mock up ideas using the DS without waiting for a designer
 
@@ -101,47 +133,24 @@ One call discovers the entire DS (variables, styles, components), preloads every
 
 ---
 
-## How Mimic compares
-
-|  | Claude Design | Figma Make | Mimic |
-|---|---|---|---|
-| **Output** | HTML / React prototype | Interactive prototype | Figma canvas (real layers) |
-| **Uses your Figma components** | No, infers from code | Partial, Make Kits (CSS subset) | Yes, real instances from your library |
-| **Variable bindings** | No | No (raw values) | Yes, every node |
-| **Auto-layout** | N/A | N/A | Every frame |
-| **Works with any Figma library** | No | Only via Make Kits | Yes, any enabled library |
-| **Learns across builds** | No | No | Yes, patterns, recipes, gap tracking |
-| **DS audit after build** | No | No | Yes, every build |
-| **Output ready for hand-off** | No, needs Figma conversion | No, needs component swap | Yes |
-
-Claude Design is great for ideation. Figma Make is great for interactive prototyping. Mimic is for when the output needs to be the actual Figma file you ship with.
-
----
-
-## It learns and enforces
-
-The first build scans the design system. By the third, recurring components auto-verify. Patterns lock in. Corrections become permanent rules that are enforced in code.
+## What it learns and enforces
 
 **What it learns:**
 - **Component recipes:** Configure a component once (variants, booleans, text slots), Mimic replays that configuration on every future insert. After 3 builds, the recipe is confirmed and auto-applied.
 - **Layout patterns:** Frame configs (direction, padding, gap, fills) captured from the first build and reused when the same pattern appears.
-- **Design rules:** Correct Mimic once ("brand color is only for links", "cards must have a card header component"), it saves the rule and enforces it on every future build. Rules are injected into tool responses at the exact moment they're relevant.
+- **Design rules:** Correct Mimic once ("brand color is only for links", "cards must have a card header component"), it saves the rule and enforces it on every future build.
 - **DS gaps:** Patterns built as primitives are tracked across builds. Mimic surfaces recommendations backed by evidence ("Status Badge used 31 times as primitives across 5 builds").
 
 **How it enforces:**
-- **Variable categories.** Uses bg-* for a stroke? Mimic warns and suggests border-*. Uses bg-* as text color? Warns and suggests text-*. The variable still binds (it's valid), but the mismatch is flagged.
+- **Variable categories.** Uses bg-* for a stroke? Mimic warns and suggests border-*. Uses bg-* as text color? Warns and suggests text-*.
 - **Component-first from experience.** If Mimic has used a Badge component in 3+ builds and you try to build one as a raw frame, it blocks with the component key and says "use this instead."
-- **Rule compliance.** Every build report audits stored rules against what was built. Violations are listed with evidence. Clean builds get an all-clear.
+- **Rule compliance.** Every build report audits stored rules against what was built. Violations are listed with evidence.
 - **Chart color semantics.** Brand, Success, Warning, and Error colors are excluded from chart palettes. Only neutral utility colors suggested for data visualization.
-
-**How it compounds:**
-- **Correct it once.** Tell Mimic: "That's not the right Badge, use Tag/Neutral." The mapping updates permanently. Every future build uses it.
-- **DS evolves, Mimic keeps up.** New components, renamed tokens, updated variants, all detected at the start of every build.
-- **Every build is a DS review.** After each build, Mimic reports what components were used, what was built from primitives and why, what rules were followed or violated, and what the DS is missing.
 
 **Efficiency features:**
 - **Text batch:** All text overrides on a component instance set in a single call
-- **Bulk table builder:** An entire data table (headers, cells, variants, text) in one call instead of inserting cells one by one
+- **Bulk table builder:** An entire data table (headers, cells, variants, text) in one call
+- **Bulk chart builder:** Bar, line, donut, and radar charts in one call with DS color bindings
 
 ---
 
@@ -320,6 +329,52 @@ Intelligence flows down. Binding feedback flows up. The MCP layer validates vari
 **Publish your DS.** Components and tokens in a separate file, published as a team library. Re-publish after changes.
 
 **Professional plan or above.** Free plan can't publish libraries.
+
+</details>
+
+---
+
+## FAQ
+
+<details>
+<summary><strong>Does it work with community libraries like Material Design or Apple iOS kits?</strong></summary>
+
+Yes. Mimic discovers components and variables from any library enabled in your Figma file, including community-published libraries.
+
+</details>
+
+<details>
+<summary><strong>Does my design data leave my machine?</strong></summary>
+
+No. Everything runs locally. The only outbound call is to the Figma REST API for published component keys (read-only). No telemetry, no tracking.
+
+</details>
+
+<details>
+<summary><strong>What MCP clients are supported?</strong></summary>
+
+Any MCP client works. The 6-phase protocol and contextual tool hints are optimized for Claude Code. Cursor, VS Code, Windsurf, and JetBrains get the full toolset but may not follow the protocol as closely.
+
+</details>
+
+<details>
+<summary><strong>How is this different from screenshot-to-Figma tools?</strong></summary>
+
+Screenshot tools capture pixels, not structure. The result is a flat image you can't iterate on. Mimic reads semantic HTML and produces structured, layered Figma with real components, variable bindings, and auto-layout.
+
+</details>
+
+<details>
+<summary><strong>What happens when my design system changes?</strong></summary>
+
+Mimic detects DS changes at the start of every build. New components surface automatically. Renamed tokens re-map. Removed components fall back gracefully with an explanation in the build report.
+
+</details>
+
+<details>
+<summary><strong>Can I use it without a published design system?</strong></summary>
+
+Yes, but with limited enforcement. Without published components, Mimic builds with primitives and raw values. Without tokens, it accepts hardcoded colors. The build report shows exactly what's missing and what adding it would unlock.
 
 </details>
 
