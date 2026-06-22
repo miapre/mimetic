@@ -10,7 +10,7 @@
     "Stop": [
       {
         "matcher": "",
-        "command": "cd '.' && node --test internal/tests/*.test.js internal/tests/**/*.test.js 2>&1 | tail -20",
+        "command": "node --test internal/tests/*.test.js internal/tests/**/*.test.js 2>&1 | tail -20",
         "description": "Run Mimic test suite after each response",
         "timeout": 45000
       }
