@@ -3,5 +3,6 @@ ds-knowledge.json
 mimic/
 internal/
 !internal/tests/
+docs/superpowers/
 *.log
 .DS_Store
