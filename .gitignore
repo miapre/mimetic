@@ -4,5 +4,6 @@ mimic/
 internal/
 !internal/tests/
 docs/superpowers/
+research/
 *.log
 .DS_Store

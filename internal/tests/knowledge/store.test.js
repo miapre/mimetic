@@ -48,8 +48,8 @@ describe('KnowledgeStore', () => {
 
   it('stores and retrieves library file keys', () => {
     const store = new KnowledgeStore(TEST_PATH);
-    store.setLibraryFileKey('LayerLens Theme', 'testFileKey123abc');
-    assert.equal(store.getLibraryFileKey('LayerLens Theme'), 'testFileKey123abc');
+    store.setLibraryFileKey('Test Theme', 'testFileKey123abc');
+    assert.equal(store.getLibraryFileKey('Test Theme'), 'testFileKey123abc');
     assert.equal(store.getLibraryFileKey('Unknown'), null);
   });
 
