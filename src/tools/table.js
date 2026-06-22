@@ -10,7 +10,13 @@
  * Reduces a 10×5 table from ~210 tool calls to 1.
  */
 
-const { BatchCollector } = require('../utils/batch-collector');
+// ── Sequential execution ──
+// Uses SequentialSender instead of BatchCollector. BatchCollector's
+// batch_execute causes plugin timeouts on large libraries (5000+
+// components) because the entire batch is processed in a single
+// WebSocket round-trip. SequentialSender sends each operation
+// individually, avoiding the accumulated timeout pressure.
+const { SequentialSender } = require('../utils/batch-collector');
 
 function register(server, context) {
   const { bridge, dsCache, session, requirePhase, advancePhase, registerTool, knowledgeStore } = context;
@@ -167,8 +173,8 @@ function register(server, context) {
         failures: [],
       };
 
-      // Batch collector — linear ops go through this, flushed before cellVariants
-      const collector = new BatchCollector();
+      // Sequential sender — each op sent individually to avoid plugin timeouts
+      const collector = new SequentialSender(bridge);
 
       // Create the table body frame (horizontal, contains columns)
       let tableBodyId;
@@ -408,12 +414,13 @@ function register(server, context) {
         });
       }
 
-      // ── Flush: send all collected ops as one batch ──
+      // ── Flush (no-op with SequentialSender — ops already sent) ──
       await collector.flush(bridge);
 
-      // ── Phase 2: Process deferred cellVariants (need real nodeIds) ──
+      // ── Phase 2: Process deferred cellVariants ──
+      // With SequentialSender, cellRef is already a real nodeId (not $resultOf:N).
       for (const cv of pendingCellVariants) {
-        const realCellId = collector.getRealNodeId(cv.cellRef);
+        const realCellId = cv.cellRef;
         if (!realCellId) continue;
 
         try {
@@ -453,7 +460,7 @@ function register(server, context) {
 
       const totalCells = results.headerCells + results.dataCells;
       return {
-        tableBodyId: collector.getRealNodeId(tableBodyId) || tableBodyId,
+        tableBodyId: tableBodyId,
         columns: results.columns,
         summary: {
           headerCells: results.headerCells,

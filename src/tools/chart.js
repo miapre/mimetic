@@ -25,6 +25,12 @@ const FALLBACK_COLORS = [
   'Component colors/Utility/Blue/utility-blue-500',
   'Component colors/Utility/Orange/utility-orange-500',
 ];
+// Chart builds use generous timeouts: large libraries (5000+ components)
+// cause slow plugin processing that exceeds the default 120s bridge timeout.
+const CHART_TIMEOUT_BASE = 180000;
+const CHART_TIMEOUT_PER_OP = 1500;
+const chartTimeout = (opCount) => CHART_TIMEOUT_BASE + opCount * CHART_TIMEOUT_PER_OP;
+
 const FALLBACK_GRID_COLOR = 'Colors/Border/border-secondary';
 const FALLBACK_LABEL_COLOR = 'Colors/Text/text-tertiary (600)';
 const FALLBACK_LABEL_STYLE = 'Text xs/Medium';
@@ -57,7 +63,7 @@ function resolveChartTheme(dsCache, overrides = {}) {
   };
 }
 
-const { BatchCollector } = require('../utils/batch-collector');
+const { SequentialSender } = require('../utils/batch-collector');
 
 function register(server, context) {
   const { bridge, dsCache, session, requirePhase, advancePhase, registerTool } = context;
@@ -195,9 +201,11 @@ function register(server, context) {
         return { error: 'GEOMETRY_FAILED', message: `Chart geometry calculation failed: ${err.message}` };
       }
 
-      // ── 2. Batch execution via collector ──
-      // Linear ops go through the collector; SVG ops flush first then use bridge directly.
-      const collector = new BatchCollector();
+      // ── 2. Sequential execution ──
+      // Each operation sent individually via bridge.send(). BatchCollector's
+      // batch_execute causes plugin timeouts on large libraries (5000+ components).
+      // SequentialSender is a drop-in replacement with the same API.
+      const collector = new SequentialSender(bridge);
 
       let cardId;
       try {
@@ -253,7 +261,7 @@ function register(server, context) {
 
       // Flush any remaining collected ops
       if (collector.ops.length > 0) {
-        await collector.flush(bridge);
+        await collector.flush(bridge, chartTimeout(collector.ops.length));
       }
 
       session.toolCallCount += results.totalOperations;
@@ -522,7 +530,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
   const svgString = `<svg viewBox="0 0 ${diameter} ${diameter}" xmlns="http://www.w3.org/2000/svg">${svgParts.join('')}</svg>`;
 
   // Flush collector before SVG (need real nodeIds for parentId + unboundChildren)
-  await collector.flush(bridge);
+  await collector.flush(bridge, chartTimeout(collector.ops.length));
   const realDonutAreaId = collector.getRealNodeId(donutAreaId);
 
   let svgResult;
@@ -531,7 +539,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
       parentId: realDonutAreaId,
       name: 'Donut Chart',
       svgString,
-    });
+    }, CHART_TIMEOUT_BASE);
     op();
     results.elements.svgs++;
   } catch (err) {
@@ -743,7 +751,7 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
   }
 
   // Flush collector, then create SVG via bridge (needs real parent ID)
-  await collector.flush(bridge);
+  await collector.flush(bridge, chartTimeout(collector.ops.length));
   const realChartAreaId = collector.getRealNodeId(chartAreaId);
   const realCardIdLine = collector.getRealNodeId(cardId);
 
@@ -753,7 +761,7 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
       parentId: realChartAreaId,
       name: 'Plot',
       svgString: fullSvg,
-    });
+    }, CHART_TIMEOUT_BASE);
     op();
     results.elements.svgs++;
   } catch (err) {
@@ -900,7 +908,7 @@ async function buildRadarChart(collector, bridge, cardId, geometry, palette, ser
   const svgString = `<svg viewBox="0 0 ${viewSize} ${viewSize}" xmlns="http://www.w3.org/2000/svg">${svgParts.join('')}</svg>`;
 
   // Flush collector before SVG (need real nodeIds)
-  await collector.flush(bridge);
+  await collector.flush(bridge, chartTimeout(collector.ops.length));
   const realRadarAreaId = collector.getRealNodeId(radarAreaId);
 
   let svgResult;
@@ -909,7 +917,7 @@ async function buildRadarChart(collector, bridge, cardId, geometry, palette, ser
       parentId: realRadarAreaId,
       name: 'Radar Chart',
       svgString,
-    });
+    }, CHART_TIMEOUT_BASE);
     op();
     results.elements.svgs++;
   } catch (err) {

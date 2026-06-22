@@ -61,14 +61,15 @@ class BatchCollector {
    * so getRealNodeId() can map batch indices to real IDs.
    *
    * @param {object} bridge - The Bridge instance
+   * @param {number} [timeout] - Optional timeout override for the batch
    * @returns {Promise<{results: Array, totalOps: number, succeeded: number, failed: number}>}
    */
-  async flush(bridge) {
+  async flush(bridge, timeout) {
     if (this.ops.length === 0) {
       return { results: [], totalOps: 0, succeeded: 0, failed: 0 };
     }
 
-    const batchResult = await bridge.sendBatch(this.ops);
+    const batchResult = await bridge.sendBatch(this.ops, timeout);
 
     // Store real results for post-flush lookups
     for (const r of (batchResult.results || [])) {
@@ -125,4 +126,36 @@ class BatchCollector {
   }
 }
 
-module.exports = { BatchCollector };
+/**
+ * SequentialSender — drop-in replacement for BatchCollector that sends each
+ * operation immediately via bridge.send() instead of batching.
+ *
+ * Use when batch_execute is unreliable (e.g., large libraries cause plugin
+ * timeouts on batch processing). Same API as BatchCollector so builders
+ * don't need to change.
+ */
+class SequentialSender {
+  constructor(bridge) {
+    this.bridge = bridge;
+    this.ops = []; // Always empty — kept for compatibility with `collector.ops.length` checks
+  }
+
+  async send(type, payload) {
+    return this.bridge.send(type, payload);
+  }
+
+  async flush(_bridge, _timeout) {
+    // No-op — every operation was already sent individually
+    return { results: [], totalOps: 0, succeeded: 0, failed: 0 };
+  }
+
+  getRealNodeId(ref) {
+    return ref; // IDs are already real
+  }
+
+  getRealResult(_idx) {
+    return null;
+  }
+}
+
+module.exports = { BatchCollector, SequentialSender };

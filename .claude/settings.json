@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "node -e \"const f=(JSON.parse(process.env.CLAUDE_TOOL_INPUT||'{}')).file_path||'';if(/\\/CLAUDE\\.md$|\\/\\.claude\\/settings\\.json$|\\/mcp_servers/.test(f)){process.stderr.write('BLOCK: '+f+' is a governance file. Do not edit without explicit user request.');process.exit(2)}\"",
+        "description": "Protect CLAUDE.md, settings.json, and MCP configs from accidental edits"
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "command": "cd '.' && node --test internal/tests/*.test.js internal/tests/**/*.test.js 2>&1 | tail -20",
+        "description": "Run Mimic test suite after each response",
+        "timeout": 45000
+      }
+    ]
+  },
+  "env": {
+    "MAX_THINKING_TOKENS": "10000"
+  }
+}

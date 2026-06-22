@@ -1,26 +1,41 @@
 {
   "version": 2,
   "dsFingerprint": null,
-  "components": {},
+  "components": {
+    "ck-badge": {
+      "names": [
+        "Badge"
+      ],
+      "instances": 3,
+      "buildCount": 1,
+      "componentKey": "ck-badge",
+      "variantConfig": null,
+      "confidence": "new",
+      "lastUsed": "2026-06-11T16:11:54.704Z"
+    }
+  },
   "patterns": {},
   "gaps": {},
+  "rules": {},
   "libraryFileKeys": {},
   "buildHistory": [
     {
-      "screenName": "mimic-build",
-      "buildNumber": 2,
-      "date": "2026-05-19T13:11:06.555Z",
+      "screenName": "All Used Test",
+      "buildNumber": 1,
+      "date": "2026-06-11T16:11:54.705Z",
       "toolCalls": 0,
       "cacheHits": 0,
-      "componentCount": 0,
+      "replaySavings": 0,
+      "componentCount": 3,
       "primitiveCount": 0,
       "bindingFailures": 0,
       "componentUsagePercent": 100
     }
   ],
+  "signals": [],
   "meta": {
-    "buildCount": 1,
-    "lastBuild": "2026-05-19T13:11:06.555Z",
-    "created": "2026-05-19T13:11:06.554Z"
+    "buildCount": 0,
+    "lastBuild": null,
+    "created": "2026-06-11T16:11:54.703Z"
   }
 }

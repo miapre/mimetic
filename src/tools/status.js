@@ -650,12 +650,18 @@ function register(server, context) {
           variablesCached++;
           if (v.key) variableEntries.push({ path, key: v.key });
         }
-        // Preload into plugin
+        // Preload into plugin in chunks — 808 sequential importVariableByKeyAsync
+        // calls can exceed the default bridge timeout (~150ms each = ~121s for 808).
         if (variableEntries.length > 0) {
-          try {
-            const preloadResult = await bridge.send('preload_variables', { variables: variableEntries });
-            variablesPreloaded = preloadResult?.preloadedVars || 0;
-          } catch (e) { /* non-fatal */ }
+          const PRELOAD_CHUNK = 200;
+          const PRELOAD_TIMEOUT = 120000; // 120s per chunk of 200 vars
+          for (let i = 0; i < variableEntries.length; i += PRELOAD_CHUNK) {
+            const chunk = variableEntries.slice(i, i + PRELOAD_CHUNK);
+            try {
+              const preloadResult = await bridge.send('preload_variables', { variables: chunk }, PRELOAD_TIMEOUT);
+              variablesPreloaded += preloadResult?.preloadedVars || 0;
+            } catch (e) { /* non-fatal — continue with next chunk */ }
+          }
         }
       }
 
