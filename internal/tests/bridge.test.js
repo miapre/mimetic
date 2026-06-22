@@ -30,6 +30,28 @@ describe('Bridge', () => {
   });
 });
 
+describe('Bridge origin validation', () => {
+  it('accepts localhost origins', () => {
+    const bridge = new Bridge({ port: 3055 });
+    assert.equal(bridge._isLocalOrigin('http://localhost:3056'), true);
+    assert.equal(bridge._isLocalOrigin('http://127.0.0.1:3056'), true);
+    assert.equal(bridge._isLocalOrigin('http://localhost'), true);
+  });
+
+  it('rejects remote origins', () => {
+    const bridge = new Bridge({ port: 3055 });
+    assert.equal(bridge._isLocalOrigin('http://evil.com'), false);
+    assert.equal(bridge._isLocalOrigin('http://192.168.1.100:3056'), false);
+    assert.equal(bridge._isLocalOrigin('https://attacker.example.com'), false);
+  });
+
+  it('accepts requests with no origin (same-origin / curl)', () => {
+    const bridge = new Bridge({ port: 3055 });
+    assert.equal(bridge._isLocalOrigin(undefined), true);
+    assert.equal(bridge._isLocalOrigin(null), true);
+  });
+});
+
 describe('sendBatch', () => {
   it('rejects immediately when not connected', async () => {
     const bridge = new Bridge({ port: 3055 });

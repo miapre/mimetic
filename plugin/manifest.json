@@ -7,7 +7,7 @@
   "editorType": ["figma"],
   "permissions": ["teamlibrary"],
   "networkAccess": {
-    "allowedDomains": ["*"],
-    "reasoning": "Connects to the local Mimic AI bridge server (default port 3055) to receive design instructions."
+    "allowedDomains": ["localhost"],
+    "reasoning": "Connects to the local Mimic AI bridge server on localhost:3056 via WebSocket."
   }
 }

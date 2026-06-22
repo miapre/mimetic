@@ -28,12 +28,18 @@ function register(server, context) {
         return { type: 'url', url: input };
       }
 
-      // File path detection — check if it looks like a path and exists
+      // File path detection — confined to cwd to prevent arbitrary reads
       if (!input.includes('<') && !input.includes('>')) {
-        const resolved = path.resolve(input);
-        if (fs.existsSync(resolved)) {
-          const content = fs.readFileSync(resolved, 'utf-8');
-          return { type: 'file', content, path: resolved };
+        const baseDir = process.cwd();
+        const resolved = path.resolve(baseDir, input);
+        // Ensure resolved path stays within baseDir (no traversal)
+        if (resolved.startsWith(baseDir + path.sep) || resolved === baseDir) {
+          if (fs.existsSync(resolved)) {
+            const content = fs.readFileSync(resolved, 'utf-8');
+            return { type: 'file', content, path: resolved };
+          }
+        } else {
+          return { type: 'error', message: 'File path must be relative to the working directory. Absolute paths and directory traversal are not allowed.' };
         }
       }
 

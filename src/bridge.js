@@ -69,10 +69,13 @@ class Bridge {
         this._handleHttp(req, res);
       });
 
-      this.wss = new WebSocketServer({ server: this.server });
+      this.wss = new WebSocketServer({
+        server: this.server,
+        verifyClient: ({ origin }) => this._isLocalOrigin(origin),
+      });
       this.wss.on('connection', (socket) => this._onConnection(socket));
 
-      this.server.listen(this.port, () => {
+      this.server.listen(this.port, '127.0.0.1', () => {
         resolve();
       });
 
@@ -420,9 +423,27 @@ class Bridge {
   /**
    * Minimal HTTP handler for /status and /execute.
    */
+  _isLocalOrigin(origin) {
+    if (!origin) return true; // Same-origin requests (curl, etc.) have no Origin header
+    try {
+      const url = new URL(origin);
+      return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    } catch { return false; }
+  }
+
   _handleHttp(req, res) {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+
+    // Reject non-local origins
+    if (origin && !this._isLocalOrigin(origin)) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
+
+    // CORS headers — only allow localhost origins
+    const allowedOrigin = origin || 'http://localhost';
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
