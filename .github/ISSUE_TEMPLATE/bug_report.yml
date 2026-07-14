@@ -1,0 +1,102 @@
+name: Bug report
+description: Something didn't work the way it should have during a build.
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. The more of the fields
+        below you can fill in, the faster this can be reproduced and fixed.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did Mimic do, and what did you expect instead?
+      placeholder: e.g. "It built the status badges as raw frames instead of using the Badge component, even though the DS has one."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ds-setup
+    attributes:
+      label: Design system setup
+      description: What kind of Figma library were you building against?
+      options:
+        - Team library (my org's own design system)
+        - Community library (public kit from Figma Community)
+        - No published library / primitives only
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tokens-available
+    attributes:
+      label: Were design tokens (variables/styles) available in the library?
+      options:
+        - "Yes: color variables and text styles"
+        - "Components only, no variables/styles"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: figma-plan
+    attributes:
+      label: Figma plan
+      options:
+        - Professional
+        - Organization
+        - Enterprise
+        - Free (community library only)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: input
+    attributes:
+      label: The HTML or prompt you used
+      description: Paste the exact HTML snippet or the exact prompt you gave. This is usually the single most useful thing for reproducing the bug.
+      render: html
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-text
+    attributes:
+      label: Error text
+      description: Paste the exact error message or tool response, if any. Redact your Figma token or file keys if they appear.
+      render: text
+
+  - type: textarea
+    id: mimic-status
+    attributes:
+      label: mimic_status output
+      description: Run `mimic_status` right after the issue occurs (or at the start of a fresh session reproducing it) and paste the response here. This tells us the phase, session state, and cached DS profile.
+      render: json
+
+  - type: input
+    id: version
+    attributes:
+      label: Mimic AI version
+      description: From `package.json` in your install, or the version npx resolved.
+      placeholder: e.g. 2.0.3
+
+  - type: dropdown
+    id: mcp-client
+    attributes:
+      label: MCP client
+      options:
+        - Claude Code
+        - Cursor
+        - Codex CLI
+        - Gemini CLI
+        - VS Code
+        - Windsurf
+        - JetBrains AI Assistant
+        - Other
+    validations:
+      required: true

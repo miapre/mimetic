@@ -4,13 +4,15 @@
 
 # Mimic AI
 
-**Everything to Figma using your DS. Learns it. Gets better every build.**
-
-Give Mimic any HTML, a prompt, or a description. It builds production-ready Figma using your real components, tokens, and auto-layout. Correct it once, it remembers forever. After every build, it tells you what your design system is missing.
+**Transforms HTML into Figma using only your design system, enforcing correct component usage and falling back safely when needed, while improving accuracy with every build.**
 
 ---
 
+[![npm version](https://img.shields.io/npm/v/@miapre/mimic-ai)](https://www.npmjs.com/package/@miapre/mimic-ai)
+[![npm downloads](https://img.shields.io/npm/dm/@miapre/mimic-ai)](https://www.npmjs.com/package/@miapre/mimic-ai)
+[![CI](https://github.com/miapre/mimic-ai/actions/workflows/test.yml/badge.svg)](https://github.com/miapre/mimic-ai/actions/workflows/test.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+
 ![Node.js: v20.6+](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)
 ![Platform: macOS / Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 [![Glama](https://glama.ai/mcp/servers/@miapre/mimic-ai/badge)](https://glama.ai/mcp/servers/@miapre/mimic-ai)
@@ -27,13 +29,39 @@ Give Mimic any HTML, a prompt, or a description. It builds production-ready Figm
 
 ---
 
+## Gated, not steered
+
+AI writing into Figma isn't the hard part anymore; several tools do it now. The differences show up in what happens when the AI reaches for something your design system doesn't have. A tool that steers an agent toward your components can still land on a raw hex value, a raw pixel size, or a font your system doesn't use, and general guidance for that category of tool is that the result may need manual review and cleanup before it's usable. Mimic enforces at write time, inside the Figma plugin itself, not just in the prompt.
+
+**What the gate blocks**
+- Raw hex/rgb fills where a DS color variable exists
+- Raw pixel font sizes where a DS text style exists
+- Fonts outside the design system
+- Variable category mismatches (e.g. a background token used as a stroke)
+- Primitive frames for elements the DS already has as components (buttons, badges, inputs, table cells, and more)
+
+If the DS genuinely has no equivalent, Mimic says so in the build report instead of quietly leaving a raw value in place.
+
+**What the learning accumulates**
+- Component recipes, replayed automatically once confirmed across builds
+- Majority-wins variant defaults, learned from your own usage patterns
+- Design rules you set once by correcting a build, enforced on every one after
+- No-good compilation: patterns tried and confirmed not to work, so they aren't retried
+- Staleness detection: flags a stored recipe the moment it stops matching your current DS
+- All scoped per design system library: nothing bleeds across unrelated files
+
+Nothing else accumulates this across builds. A hand-authored Figma Agent Skill is static text; it doesn't learn from what you correct.
+
+**What the report proves**
+Every build ends in a compliance-audited report: components used and their keys, primitives built and why, which stored rules were checked and whether they held, and where the DS still has coverage gaps. It's built to be shown to a stakeholder, not just read by the person who ran the build.
+
+---
+
 ## Why Mimic exists
 
 You built a design system. Components, tokens, variables. Every decision intentional. Then someone needs a screen in Figma and starts from scratch. Hardcoded colors. Raw font sizes. Frames that break when you resize them. Your system sits right there in the library panel. Unused.
 
-AI tools don't help either. Claude Design generates prototypes you have to rebuild in Figma. Figma Make produces interactive demos with raw CSS values instead of real components. The cleanup takes as long as building it yourself.
-
-Mimic is different. The output is the deliverable: real Figma layers with real component instances, variable bindings, and auto-layout. Nothing to convert. Nothing to swap. Hand it off.
+Mimic's output is the deliverable: real Figma layers with real component instances, variable bindings, and auto-layout. Nothing to convert. Nothing to swap. Hand it off.
 
 ---
 
@@ -202,7 +230,7 @@ Enforcement adapts to what the DS provides. A library with text styles but no co
 
 ## MCP client setup
 
-Works with any MCP client. Optimized for **Claude Code**.
+Works with any MCP client. Optimized for **Claude Code**. Setup for Claude Code, Cursor, Codex CLI, and Gemini CLI (plus the general stdio-host case) is also in [docs/HOSTS.md](docs/HOSTS.md).
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -351,6 +379,27 @@ Intelligence flows down. Binding feedback flows up. The MCP layer validates vari
 ## FAQ
 
 <details>
+<summary><strong>Does it cost anything?</strong></summary>
+
+No. Mimic is free and MIT-licensed. The only requirements are your own Figma plan (Professional or above, to publish and use team libraries) and a read-only Figma personal access token. Note that Figma's own official MCP server and Design Agent are usage-metered as part of Figma's paid plans; Mimic isn't, it's a separate open-source project with no usage limits of its own.
+
+</details>
+
+<details>
+<summary><strong>Can teammates share what it learns?</strong></summary>
+
+Not yet. Today, each machine builds its own knowledge store scoped per design system library. Knowledge export/import between teammates is planned but not shipped. The store format (`ds-knowledge.json`) is a shareable JSON file, so a manual copy already works if you want to seed a teammate's setup.
+
+</details>
+
+<details>
+<summary><strong>What can the Figma token access?</strong></summary>
+
+Five read-only scopes: `current_user:read`, `file_content:read`, `file_metadata:read`, `library_assets:read`, `library_content:read`. There is no write scope in that list, so Mimic cannot use this token to modify any Figma file. All writes happen through the Figma plugin's own editor session, not the REST API.
+
+</details>
+
+<details>
 <summary><strong>Does it work with community libraries from Figma Community?</strong></summary>
 
 Yes. Mimic discovers components and variables from any library enabled in your Figma file, including community-published libraries.
@@ -418,7 +467,7 @@ The only outbound call is to the Figma REST API for published component keys.
 
 ## Contributing
 
-Issues and PRs welcome. See the [issue tracker](https://github.com/miapre/mimic-ai/issues).
+Issues and PRs welcome. See the [issue tracker](https://github.com/miapre/mimic-ai/issues) and [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and PR expectations. Found a security issue? See [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ---
 

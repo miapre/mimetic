@@ -2,6 +2,9 @@ internal/
 research/
 docs/
 .claude/
+.github/
+.cursor/
+skills/
 *.log
 .DS_Store
 ds-knowledge.json

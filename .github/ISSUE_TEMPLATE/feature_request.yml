@@ -1,0 +1,42 @@
+name: Feature request
+description: Suggest something Mimic AI should do that it doesn't today.
+title: "[TASK] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature ideas are welcome. Keep in mind Mimic is deliberately
+        design-system-agnostic: a request that only makes sense for one
+        specific vendor's library structure is unlikely to be accepted as
+        described (see CONTRIBUTING.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you running into?
+      description: Describe the situation, not the solution yet. What were you trying to build, and where did Mimic fall short?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Mimic to do instead?
+      description: Your proposed behavior, tool, or option. Concrete examples help.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you've tried
+      description: Anything you're currently doing to get around this, if applicable.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This works the same way regardless of which design system library is in use (no vendor-specific assumptions).
+          required: true

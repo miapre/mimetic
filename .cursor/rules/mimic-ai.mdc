@@ -1,0 +1,80 @@
+---
+description: Golden workflow for building or editing Figma designs with the Mimic AI MCP server (mimic_status, mimic_discover_ds, figma_create_frame, figma_insert_component, mimic_build_table, mimic_build_chart, and related tools).
+globs:
+alwaysApply: false
+---
+
+# Mimic AI: building Figma with the user's design system
+
+Mimic AI enforces design-system compliance at write time. Never bypass
+the gate, never skip discovery, never end a build without a report.
+
+## The sequence, every build
+
+1. **`mimic_status`** first, every session. Read the current phase and
+   session state from the response, never assume it.
+
+2. **Discovery, two steps, both required:**
+   - Step 1: `mimic_discover_ds(fileKey)`. Discovers variables, text
+     styles, components via the plugin. Stops at Phase 1
+     (`communityLibraryCheckRequired`), not build-ready yet.
+   - Step 2 (do not skip): call Figma MCP `search_design_system` with
+     query `"color"` on the same fileKey, collect distinct `libraryName`
+     values and one sample variable key per library, then re-call
+     `mimic_discover_ds` with `communitySearchResults` and
+     `communitySearchVariableKeys`. This unlocks Phase 2. If a
+     `_userPrompt` comes back (multiple libraries), show it verbatim and
+     wait for the user's pick.
+
+3. **`mimic_map_components`** with the section-level element types
+   (header, footer, sidebar, card, table, badge, button, input, etc.).
+   With `FIGMA_TOKEN` set, one call resolves found components and
+   confirmed gaps. Without it: call once, search missing types via Figma
+   MCP `search_design_system`, call again with `librarySearchResults` to
+   confirm gaps. Only after that second pass are missing types real
+   gaps you can build as primitives.
+
+4. **Build component-first.** If the DS has a component for an element,
+   use it, even if the layout doesn't match exactly. Shell elements
+   (header, footer, sidebar) and common patterns (buttons, badges,
+   inputs, table cells, tabs, dropdowns, avatars) are never raw frames
+   if the DS has them: the plugin gate blocks it. Custom frames only
+   for things with no DS equivalent, and even then every fill, stroke,
+   spacing, and radius binds to a DS variable; raw hex, raw px, and
+   non-DS fonts get rejected. After every `figma_insert_component`, read
+   `configurationChecklist` and complete it: re-enable booleans the HTML
+   shows (labels count), set variants, override every text node, set
+   `layoutSizingHorizontal: FILL` by default.
+
+5. **Batch instead of looping:**
+   - `figma_batch_set_component_text` for all text on one instance, not
+     repeated single-node calls.
+   - `mimic_build_table` for any data table.
+   - `mimic_build_chart` for any chart (bar/line/donut/radar, fully DS-
+     bound), never hand-built SVG or manual geometry.
+
+6. **Content fidelity is non-negotiable.** Every label, heading, value,
+   and CTA in Figma matches the HTML/prompt source exactly. No
+   paraphrasing, shortening, or "improving" copy.
+
+7. **End every build with `mimic_generate_build_report`**, before
+   replying, then present its sections in the conversation (components
+   used, primitives + justification, DS changes/staleness,
+   recommendations, binding quality, rule compliance). A build without
+   a visible report is incomplete.
+
+## Hard rules, no exceptions
+
+- **Never fall back to other Figma tools mid-build.** On
+  `PLUGIN_DISCONNECTED` or `BUILD_INTERRUPTED`, stop building entirely.
+  Do not switch to the official Figma MCP, `use_figma`, or any other
+  Figma-writing tool as a substitute: they bypass DS enforcement
+  completely. Wait for reconnection, call `mimic_status` to confirm the
+  session is clear, and resume.
+- **`bindingFailures: true` means stop, not continue.** Fix the variable
+  path (`figma_read_variable_values` shows what's cached) first.
+- **Feedback iterates the existing artboard.** Never delete an artboard
+  to start over.
+- **A correction repeated twice is a rule, not a one-off.** Offer to save
+  it via `mimic_ai_knowledge_write` (`type: "rule"`) so it applies to
+  every future build automatically.
