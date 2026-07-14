@@ -917,7 +917,7 @@ function register(server, context) {
             session.phase = 1;
             session.pendingExternalVariables = true;
             // Try to find the library key from the community check options
-            session.externalVariablesLibraryKey = session.communityLibraryKeys?.[session.selectedLibraryKey] || null;
+            session.externalVariablesLibraryKey = session.communityLibraryVariableKeys?.[session.selectedLibraryKey] || null;
 
             return {
               phase: 1,

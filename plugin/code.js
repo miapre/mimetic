@@ -1799,6 +1799,48 @@ handlers.set_layout_sizing = function (payload) {
   };
 };
 
+// Applies a subset of node properties that don't warrant their own handler.
+// Currently used for card-inset table padding overrides (first/last column
+// left/right padding) sent by src/tools/table.js. Mirrors the padding
+// binding logic in set_layout_sizing above.
+handlers.set_node_props = function (payload) {
+  var node = figma.getNodeById(normalizeNodeId(payload.nodeId));
+  if (!node) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check nodeId.' };
+  var bt = createBindingTracker();
+
+  // Padding variables
+  if (payload.paddingVariable) {
+    var padOk = bindVariable(node, 'paddingTop', payload.paddingVariable)
+             && bindVariable(node, 'paddingRight', payload.paddingVariable)
+             && bindVariable(node, 'paddingBottom', payload.paddingVariable)
+             && bindVariable(node, 'paddingLeft', payload.paddingVariable);
+    bt.track('paddingVariable', padOk, 'variable "' + payload.paddingVariable + '" not found');
+  }
+  if (payload.paddingTopVariable) bt.track('paddingTopVariable', bindVariable(node, 'paddingTop', payload.paddingTopVariable), 'not found');
+  if (payload.paddingRightVariable) bt.track('paddingRightVariable', bindVariable(node, 'paddingRight', payload.paddingRightVariable), 'not found');
+  if (payload.paddingBottomVariable) bt.track('paddingBottomVariable', bindVariable(node, 'paddingBottom', payload.paddingBottomVariable), 'not found');
+  if (payload.paddingLeftVariable) bt.track('paddingLeftVariable', bindVariable(node, 'paddingLeft', payload.paddingLeftVariable), 'not found');
+
+  // Raw padding overrides
+  if (typeof payload.paddingTop === 'number') node.paddingTop = payload.paddingTop;
+  if (typeof payload.paddingRight === 'number') node.paddingRight = payload.paddingRight;
+  if (typeof payload.paddingBottom === 'number') node.paddingBottom = payload.paddingBottom;
+  if (typeof payload.paddingLeft === 'number') node.paddingLeft = payload.paddingLeft;
+
+  var bindingResult = bt.result();
+  return {
+    nodeId: node.id,
+    name: node.name,
+    paddingTop: node.paddingTop,
+    paddingRight: node.paddingRight,
+    paddingBottom: node.paddingBottom,
+    paddingLeft: node.paddingLeft,
+    applied: bindingResult.applied,
+    warnings: bindingResult.warnings,
+    bindingFailures: bindingResult.bindingFailures,
+  };
+};
+
 handlers.set_visibility = function (payload) {
   var node = figma.getNodeById(normalizeNodeId(payload.nodeId));
   if (!node) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check nodeId.' };
