@@ -3,7 +3,7 @@
   "name": "io.github.miapre/mimic-ai",
   "title": "Mimic AI",
   "description": "Production-ready Figma from your design system. Describe what you need or give it HTML. Uses your real components, tokens, and auto-layout. Learns your conventions and tells you what your DS is missing.",
-  "version": "2.0.0",
+  "version": "2.0.3",
   "websiteUrl": "https://github.com/miapre/mimic-ai",
   "repository": {
     "url": "https://github.com/miapre/mimic-ai",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "@miapre/mimic-ai",
-      "version": "2.0.0",
+      "version": "2.0.3",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

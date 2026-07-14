@@ -248,7 +248,7 @@ const figmaRest = null; // use getFigmaRest() instead
 
 // MCP Server
 const server = new Server(
-  { name: 'mimic-ai', version: '2.0.0' },
+  { name: 'mimic-ai', version: require('./package.json').version },
   { capabilities: { tools: {} } }
 );
 

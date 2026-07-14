@@ -1,5 +1,154 @@
 # Changelog
 
+## 2.0.3 (2026-07-14)
+
+### Security
+
+Three vulnerabilities fixed from an internal audit:
+- **MIMIC-01 (HIGH)** — the WebSocket bridge bound to `0.0.0.0` with no
+  Origin validation and `Access-Control-Allow-Origin: *`. Now binds to
+  `127.0.0.1` only, validates Origin on both HTTP and WebSocket
+  connections, and returns a dynamic CORS origin instead of a wildcard.
+- **MIMIC-02 (MEDIUM)** — `mimic_pipeline_resolve` allowed path
+  traversal. File reads are now confined to `process.cwd()`; absolute
+  paths and `../` traversal are rejected.
+- **MIMIC-03 (LOW)** — the plugin's `networkAccess.allowedDomains` was
+  set to `["*"]`. Restricted to `["localhost"]`, and a stale port
+  reference in a reasoning comment was corrected.
+
+### Learning system
+
+- No-good compilation: recurring failure signals become candidate
+  rules at 3 occurrences and are promoted to active at 6
+- Signal store on `KnowledgeStore`: dedup, 200-entry cap, 20-build
+  rolling eviction window
+- Staleness detection now runs at DS discovery time (not just at
+  report time), with self-heal on the next successful build
+- Stale recipes are skipped in the component-first gate and template
+  replay, and surfaced with stale badges in `mimic_status` and the
+  build report's Component Confidence section
+- Mapped-component enforcement: `mimic_map_components` output is now
+  cross-referenced at build time — a frame matching a mapped component
+  blocks with `MAPPED_COMPONENT_AVAILABLE`; the report audits any
+  mapped component that was never inserted
+- `mimic_ai_knowledge_write` supports status-only updates — confirming
+  or dismissing a candidate rule merges the status instead of
+  overwriting the rule
+- Build report expanded with a DS Changes section: stale recipes
+  (component removals, variant changes) with affected-instance impact
+
+### Report integrity
+
+- Structural validation now actually executes. It was previously
+  silently skipped (a missing context destructure threw a swallowed
+  `ReferenceError`), so every report claimed validation passed without
+  it ever running. `validationStatus` is now honest and four-state
+  (PASS/WARN/FAIL/UNAVAILABLE), starting from UNAVAILABLE so a
+  swallowed error can no longer masquerade as success
+- Rule matching switched from substring `includes()` to whole-word
+  token matching — "tab" no longer matches rules about "table" and
+  produces phantom violations
+- Only active rules (confirmed/verified) are injected into
+  `figma_create_frame` / `figma_insert_component` responses; candidate
+  and dismissed auto-compiled rules no longer leak into build guidance
+- Recommendations now lead with a component-first quality gate failure
+  instead of reporting good build quality under a failing gate
+- Removed the invalid cross-build "N% fewer tool calls" comparison
+  from Recommendations and the Learning Trend section; replaced with
+  cache-hit and template/layout replay savings, which are valid
+  same-build metrics
+
+### Chart fixes
+
+- Line charts now run the post-import DS-variable binding pass (donut
+  and radar already did this; line charts previously discarded the
+  `create_svg` result and shipped unbound hardcoded hex for grid, area,
+  and dots)
+- Grid and line geometry use filled shapes instead of SVG strokes,
+  which Figma renders as thick blobs
+- Legend dot radius now binds via `cornerRadiusVariable` (the
+  parameter the plugin actually reads — `radiusVariable` was silently
+  ignored)
+- Fallback chart palette no longer contains Brand/Success/Warning/
+  Error; the response now states explicitly when the fallback engaged
+
+### Plugin
+
+- Added the missing `set_node_props` handler — the documented
+  `firstColumnPaddingLeft` / `lastColumnPaddingRight` table parameters
+  previously did nothing because the dispatcher returned "Unknown
+  handler" and call sites swallowed the error
+- Fixed community-library variable key lookup — a read/write key
+  mismatch (`communityLibraryKeys` vs. `communityLibraryVariableKeys`)
+  meant the key always resolved to `null`
+
+### Knowledge store
+
+- `save()` is atomic (temp file + rename) — a crash mid-write can no
+  longer corrupt the store
+- `load()` never throws — corrupt or unsupported-version files are
+  backed up to `ds-knowledge.json.corrupt-<timestamp>`, a fresh store
+  is created, and a warning is surfaced instead of the MCP server
+  silently failing to start
+- Canonical store location is `~/.mimic-ai/ds-knowledge.json`
+  (override via `MIMIC_KNOWLEDGE_PATH`), with one-time automatic
+  migration from the old cwd-relative location — learning no longer
+  fragments per working directory
+- Report generation clears `buildsSinceReport` before writing report
+  files; file-write failures degrade to a response warning with a
+  `~/.mimic-ai` fallback instead of wedging the session in
+  `REPORT_REQUIRED`
+
+### Bridge
+
+- Startup no longer kills processes on the bridge port. On
+  `EADDRINUSE` the bridge probes the existing listener: another Mimic
+  session produces a clear "already running" error, anything else a
+  plain port-in-use error. `MIMIC_BRIDGE_PORT` overrides the port
+- Keepalive now tracks pongs — a frozen or half-open plugin
+  connection is terminated at the next tick and pending operations
+  fail fast with `PLUGIN_DISCONNECTED` instead of burning the full
+  operation timeout
+- In-flight requests are rejected immediately when the plugin
+  connection closes or is superseded by a reconnect, instead of
+  waiting out the timeout
+- The plugin relay now identifies itself with a hello message before
+  the bridge treats it as the executor; unparseable or unknown
+  messages are logged and ignored
+- `/execute` request bodies are capped at 2 MB (413 beyond)
+- Removed dead `pendingOps` queue machinery and its misleading
+  `/status` field
+
+### Text handling
+
+- `figma_create_text` and `figma_set_text` strip hardcoded line
+  breaks (`\n` / `\r\n`) — container width controls wrapping in
+  auto-layout; the response notes when stripping occurred. Component
+  text overrides are unaffected
+
+### Documentation
+
+- Reconciled the two KNOWN_ISSUES files (root = public platform
+  quirks, internal = compatibility matrix), fixing stale claims:
+  keepalive interval, knowledge-store path and reset schema
+- Golden rules and CLAUDE.md rule sets brought to parity (19 rules)
+- README: corrected DS-evolution claims to current detection
+  behavior, absolute image URLs (render on npm), visible Figma
+  desktop + Professional plan prerequisites, manual install path
+  documented alongside the installer script
+
+### Packaging
+
+- Added `repository`, `homepage`, and `bugs` metadata to `package.json`
+- Expanded `keywords` for discoverability
+- Excluded `assets/` from the npm tarball
+- Server version is read from `package.json` (was a hardcoded string
+  that had drifted to 2.0.0)
+
+### Test count: 485 (was 384)
+
+---
+
 ## 2.0.2 (2026-05-22)
 
 ### Learning enforcement
