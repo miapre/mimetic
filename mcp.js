@@ -104,40 +104,123 @@ function deepCoerceArgs(args) {
   return out;
 }
 
+/**
+ * Single source of truth for session shape (B8 fix).
+ *
+ * Every key the codebase reads or writes on `session` — verified by
+ * grepping `session\.` across src/ and mcp.js — is defined here with its
+ * zero-state initial value. resetSession() and resetBuildState() below
+ * both derive the "fresh" session from this factory instead of hand-listing
+ * keys to clear, so a key that's added to the session shape but forgotten
+ * in a reset function is no longer possible — it either exists here (and
+ * gets reset) or the session never had it in the first place.
+ */
+function createSession() {
+  return {
+    // Core build-protocol state
+    phase: 0,      // 0=idle, 1=discovery, 2=inventory, 3=build, 4=qa, 5=report
+    artboardId: null,
+    enforcementProfile: null,
+    toolCallCount: 0,
+    cacheHits: 0,
+
+    // Circuit breaker state
+    consecutiveFailures: 0,
+    phaseToolCalls: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+    checkpointIssued: false,
+
+    // Binding failure tracking — accumulated during Phase 3 for the build report
+    bindingFailures: [],
+    // Text override tracking — per component instance, tracks expected vs overridden text nodes
+    // Key: component nodeId → { name, expected: [{nodeId, name, defaultText}], overridden: Set<nodeId|name> }
+    componentTextTracker: new Map(),
+
+    // Variable source mismatch confirmation state
+    pendingVariableMismatchConfirmation: false,
+    variableMismatchSourceLibs: null,
+    variableSourceConfirmed: null,
+
+    // Report enforcement — blocks new builds until report is generated
+    buildsSinceReport: 0,
+    // Plugin disconnect during active build — blocks all build tools until mimic_status is called
+    buildInterrupted: false,
+    // Variable category mismatches — accumulated during Phase 3 for the build report
+    categoryMismatches: [],
+    // Failure signals — accumulated during build for no-good compilation
+    _signals: new Map(),
+
+    // Community library check state (DS discovery flow)
+    pendingCommunityCheck: false,
+    discoveryFileKey: null,
+    discoveredLibraries: null,
+    discoveryResults: null,
+    completenessWarnings: null,
+
+    // Library selection (B8: previously missing from resetSession, so a
+    // file switch left the PREVIOUS file's library selection in place)
+    selectedLibraryKey: null,
+    pendingExternalVariables: false,
+    externalVariablesLibraryKey: null,
+    communityLibraryVariableKeys: null,
+
+    // Component mapping cache (mimic_map_components) + expected style count
+    componentMap: null,
+    expectedStyleCount: null,
+
+    // Per-build execution caches (B8: previously missing from resetSession —
+    // these leaked across file switches, and, before the B7 fix below, across
+    // builds within the same file too)
+    _pendingInserts: new Map(),
+    _timeoutRetries: new Map(),
+    _componentInsertions: new Map(),
+    _variantConfigs: new Map(),
+    _nodeComponentKeys: new Map(),
+    _frameLayoutConfigs: new Map(),
+    _textNodeStructures: new Map(),
+    replaySavings: 0,
+
+    // Server-level notice surfaced by mimic_status (knowledge store
+    // migration/corruption warnings from startup). Deliberately NOT reset by
+    // resetSession() or resetBuildState() — it's process-startup metadata,
+    // not file- or build-scoped state. Both reset functions below carry it
+    // over explicitly instead of letting it fall out of the factory reset.
+    knowledgeStoreNotice: null,
+  };
+}
+
 // Build session state
-const session = {
-  phase: 0,      // 0=idle, 1=discovery, 2=inventory, 3=build, 4=qa, 5=report
-  artboardId: null,
-  enforcementProfile: null,
-  toolCallCount: 0,
-  cacheHits: 0,
-  // Circuit breaker state
-  consecutiveFailures: 0,
-  phaseToolCalls: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
-  checkpointIssued: false,
-  // Binding failure tracking — accumulated during Phase 3 for the build report
-  bindingFailures: [],
-  // Text override tracking — per component instance, tracks expected vs overridden text nodes
-  // Key: component nodeId → { name, expected: [{nodeId, name, defaultText}], overridden: Set<nodeId|name> }
-  componentTextTracker: new Map(),
-  // Variable source mismatch confirmation state
-  pendingVariableMismatchConfirmation: false,
-  variableMismatchSourceLibs: null,
-  variableSourceConfirmed: null,
-  // Report enforcement — blocks new builds until report is generated
-  buildsSinceReport: 0,
-  // Plugin disconnect during active build — blocks all build tools until mimic_status is called
-  buildInterrupted: false,
-  // Variable category mismatches — accumulated during Phase 3 for the build report
-  categoryMismatches: [],
-  // Failure signals — accumulated during build for no-good compilation
-  _signals: new Map(),
-};
+const session = createSession();
 
 // Circuit breaker constants
 const MAX_CONSECUTIVE_FAILURES = 3;
 const MAX_PHASE3_CALLS_BEFORE_CHECKPOINT = 20;
 const MAX_PHASE3_CALLS_BEFORE_STOP = 300;
+
+/**
+ * B21 fix: every tool in src/tools/edit.js mutates the Figma document
+ * (text, fill, layout sizing, visibility, variable modes, position, node
+ * moves/deletes, artboard restyle) but none of them call requirePhase() —
+ * they were usable at Phase 0, before DS discovery, inconsistent with every
+ * other build/edit tool's "blocked until Phase 2" contract. edit.js is
+ * owned by a different worker, so the gate is enforced centrally here by
+ * name instead of inside each handler (see the tool-call wrapper below,
+ * which calls requirePhase(2, ...) for any name in this set before invoking
+ * the handler). All 11 edit.js tools are gated — none are read-only, so
+ * there's no recovery-flow exemption to carve out.
+ */
+const EDIT_TOOLS_REQUIRE_PHASE_2 = new Set([
+  'figma_set_text',
+  'figma_set_node_fill',
+  'figma_set_layout_sizing',
+  'figma_set_visibility',
+  'figma_set_variable_mode',
+  'figma_set_all_variable_modes',
+  'figma_set_text_style',
+  'figma_set_node_position',
+  'figma_move_node',
+  'figma_delete_node',
+  'figma_restyle_artboard',
+]);
 
 function requirePhase(minPhase, hint) {
   const { PhaseError } = require('./src/utils/errors');
@@ -172,31 +255,89 @@ function advancePhase(to) {
   session.phase = Math.max(session.phase, to);
 }
 
+/**
+ * Full reset — used when the discovered fileKey changes (status.js calls
+ * this before re-running discovery on a different file, mcp.js ~line 601).
+ * Every DS-cached and build-scoped key goes back to its createSession()
+ * zero state; only `knowledgeStoreNotice` (process-startup metadata, not
+ * file state) survives.
+ *
+ * Implementation note (B8): this mutates `session` IN PLACE — delete every
+ * existing key, then Object.assign the factory's fresh keys back in —
+ * rather than reassigning `session` to a new object. Every tool module
+ * destructures `const { session } = context` once at require() time, so a
+ * few tool modules hold that original object by reference; replacing the
+ * binding here would leave them reading a stale, never-updated session.
+ * Deleting+reassigning keys (instead of a hand-picked list of `session.x =
+ * ...` lines, which is what caused B8 in the first place) is what makes a
+ * missed key structurally impossible: anything createSession() doesn't
+ * define simply won't exist on `session` after this runs.
+ */
 function resetSession() {
-  session.phase = 0;
-  session.artboardId = null;
-  session.enforcementProfile = null;
-  session.toolCallCount = 0;
-  session.cacheHits = 0;
-  session.consecutiveFailures = 0;
-  session.phaseToolCalls = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-  session.checkpointIssued = false;
-  session.bindingFailures = [];
-  session.componentTextTracker = new Map();
-  session.buildsSinceReport = 0;
-  session.buildInterrupted = false;
-  session.categoryMismatches = [];
-  session._signals = new Map();
-  // Community library check state
-  session.pendingCommunityCheck = false;
-  session.discoveryFileKey = null;
-  session.discoveredLibraries = null;
-  session.discoveryResults = null;
-  session.completenessWarnings = null;
-  // Variable source mismatch state
-  session.pendingVariableMismatchConfirmation = false;
-  session.variableMismatchSourceLibs = null;
-  session.variableSourceConfirmed = null;
+  const carryOver = { knowledgeStoreNotice: session.knowledgeStoreNotice };
+  for (const key of Object.keys(session)) delete session[key];
+  Object.assign(session, createSession(), carryOver);
+}
+
+/**
+ * Partial reset — used after a successful mimic_generate_build_report (see
+ * the CallToolRequestSchema wrapper below, which is where this is hooked
+ * in). This is the B7 fix.
+ *
+ * Returns the session to Phase 2 (DS discovery / library-selection state —
+ * the expensive part — stays cached) while zeroing every per-build
+ * accumulator, so the next build in the SAME file gets a clean slate:
+ * the Phase-3 circuit-breaker checkpoint/stop limits can fire again, and
+ * the next report doesn't double-count this build's tool calls, binding
+ * failures, category mismatches, or text overrides.
+ *
+ * DS-discovery state preserved across this reset (deliberately kept out of
+ * the "wipe" set): enforcementProfile, selectedLibraryKey, discoveryFileKey,
+ * discoveredLibraries, discoveryResults, completenessWarnings,
+ * pendingCommunityCheck, communityLibraryVariableKeys,
+ * externalVariablesLibraryKey, pendingExternalVariables,
+ * pendingVariableMismatchConfirmation, variableMismatchSourceLibs,
+ * variableSourceConfirmed, componentMap, expectedStyleCount. These all
+ * describe "what was discovered/selected for this file", not "what
+ * happened during this specific build" — clearing them would force the
+ * next build in the same file to redo discovery and re-map components,
+ * exactly the expensive work B7 says must survive the reset.
+ *
+ * buildManifest (sections + artboardId) is a second per-build accumulator
+ * that lives outside `session` — a plain singleton constructed below and
+ * never reset anywhere else — so mimic_generate_build_report's
+ * screenName/component/primitive inference (src/tools/learning.js ~140)
+ * would otherwise merge the next build's sections with this build's.
+ * Clearing it here keeps that inference correct for build #2 without
+ * touching learning.js.
+ */
+function resetBuildState() {
+  const preserve = {
+    phase: 2,
+    enforcementProfile: session.enforcementProfile,
+    selectedLibraryKey: session.selectedLibraryKey,
+    discoveryFileKey: session.discoveryFileKey,
+    discoveredLibraries: session.discoveredLibraries,
+    discoveryResults: session.discoveryResults,
+    completenessWarnings: session.completenessWarnings,
+    pendingCommunityCheck: session.pendingCommunityCheck,
+    communityLibraryVariableKeys: session.communityLibraryVariableKeys,
+    externalVariablesLibraryKey: session.externalVariablesLibraryKey,
+    pendingExternalVariables: session.pendingExternalVariables,
+    pendingVariableMismatchConfirmation: session.pendingVariableMismatchConfirmation,
+    variableMismatchSourceLibs: session.variableMismatchSourceLibs,
+    variableSourceConfirmed: session.variableSourceConfirmed,
+    componentMap: session.componentMap,
+    expectedStyleCount: session.expectedStyleCount,
+    knowledgeStoreNotice: session.knowledgeStoreNotice,
+  };
+  for (const key of Object.keys(session)) delete session[key];
+  Object.assign(session, createSession(), preserve);
+
+  // Per-build accumulator that lives outside `session` — see doc comment above.
+  buildManifest.sections = [];
+  buildManifest.artboardId = null;
+  buildManifest.createdAt = null;
 }
 
 // ── Tool Registry ─────────────────────────────────────────────────────
@@ -208,7 +349,11 @@ function registerTool(name, description, inputSchema, handler) {
 }
 
 // Shared instances
-const bridge = new Bridge({ port: 3056 });
+// No explicit port here — the Bridge constructor already resolves
+// MIMIC_BRIDGE_PORT itself (opts.port ?? (Number(process.env.MIMIC_BRIDGE_PORT)
+// || 3056), see src/bridge.js). Passing `{ port: 3056 }` used to override
+// that env-aware default unconditionally, silently ignoring MIMIC_BRIDGE_PORT.
+const bridge = new Bridge();
 
 // Flag active build as interrupted when plugin disconnects mid-build.
 // Build tools are blocked until mimic_status clears the flag after reconnection.
@@ -264,6 +409,7 @@ const context = {
   requireReportIfPending,
   advancePhase,
   resetSession,
+  resetBuildState,
   registerTool,
   get figmaRest() { return getFigmaRest(); },
 };
@@ -356,6 +502,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    // B21: edit.js tools have no built-in phase gate. Enforce it centrally
+    // here by name — throwing routes through the same catch block below as
+    // every other requirePhase() call (PhaseError shape, consecutiveFailures
+    // bookkeeping), so it behaves identically to a tool that checked its own
+    // phase internally.
+    if (EDIT_TOOLS_REQUIRE_PHASE_2.has(name)) {
+      requirePhase(2, 'Edit tools modify existing nodes and validate against the cached DS — '
+        + 'call mimic_discover_ds (and reach Phase 2) before editing.');
+    }
+
     const result = await handler(deepCoerceArgs(args || {}));
 
     // Success: reset consecutive failure counter, increment phase counter
@@ -395,6 +551,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
         }
       }
+    }
+
+    // B7 fix: a successful mimic_generate_build_report returns the session to
+    // Phase 2 (DS discovery/library-selection state preserved — that's the
+    // expensive part) and zeroes every per-build accumulator. Without this,
+    // the second build in the same file stayed at Phase 5 forever: the
+    // Phase-3 checkpoint/stop limits could never fire again, report
+    // reminders never re-injected, and bindingFailures/componentTextTracker/
+    // categoryMismatches/phaseToolCalls kept accumulating so the next report
+    // double-counted this build's data.
+    //
+    // Mechanism: learning.js (a different worker's file) already signals
+    // report completion by calling advancePhase(5) and clearing
+    // buildsSinceReport inside its own handler — it does not (and does not
+    // need to) know about resetBuildState(). Detecting the successful call
+    // by tool name here, in this wrapper, means the reset lives entirely in
+    // mcp.js with zero changes to learning.js.
+    if (name === 'mimic_generate_build_report') {
+      resetBuildState();
     }
 
     // Phase 3 checkpoint: after N build operations, insert a progress summary
@@ -543,6 +718,7 @@ if (require.main === module) {
 module.exports = {
   server,
   context,
+  createSession,
   resolveKnowledgeStorePath,
   migrateKnowledgeStoreIfNeeded,
 };
