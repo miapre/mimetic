@@ -2,19 +2,21 @@
 
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { execSync } = require('node:child_process');
 const { WebSocketServer } = require('ws');
+
+const MAX_EXECUTE_BODY_BYTES = 2 * 1024 * 1024; // 2 MB — generous for HTML/JSON payloads, bounded for a localhost dev tool
+const HELLO_TYPE = 'mimic_hello';
 
 class Bridge {
   /**
    * @param {object} opts
-   * @param {number} [opts.port=3056]
+   * @param {number} [opts.port=3056] - overridden by the MIMIC_BRIDGE_PORT env var when not explicit
    * @param {number} [opts.keepaliveInterval=15000]
    * @param {number} [opts.maxReconnectAttempts=3]
    * @param {number} [opts.defaultTimeout=60000]
    */
   constructor(opts = {}) {
-    this.port = opts.port ?? 3056;
+    this.port = opts.port ?? (Number(process.env.MIMIC_BRIDGE_PORT) || 3056);
     this.keepaliveInterval = opts.keepaliveInterval ?? 15000;
     this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 3;
     this.defaultTimeout = opts.defaultTimeout ?? 120000;
@@ -24,9 +26,6 @@ class Bridge {
     this.server = null;
     this.wss = null;
     this._keepaliveTimer = null;
-
-    /** @type {Array<{msg: object, resolve: Function, reject: Function, timeout: number}>} */
-    this.pendingOps = [];
 
     /** @type {Map<string, {resolve: Function, reject: Function, timer: NodeJS.Timeout}>} */
     this.responseHandlers = new Map();
@@ -49,21 +48,15 @@ class Bridge {
 
   /**
    * Start HTTP + WebSocket server.
+   *
+   * Never kills anything on the target port. If the port is taken, we
+   * probe it to tell apart "another Mimic AI session" (actionable message,
+   * points at MIMIC_BRIDGE_PORT) from "some unrelated process" (generic
+   * EADDRINUSE guidance) — and fail startup either way.
+   *
    * @returns {Promise<void>}
    */
   start() {
-    // Kill any zombie process on the port before binding
-    try {
-      const pids = execSync(`lsof -ti :${this.port} 2>/dev/null`, { encoding: 'utf8' }).trim();
-      if (pids) {
-        for (const pid of pids.split('\n')) {
-          try { process.kill(Number(pid), 'SIGKILL'); } catch (_) {}
-        }
-        // Brief wait for port release
-        execSync('sleep 0.3');
-      }
-    } catch (_) { /* no process on port — normal */ }
-
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
         this._handleHttp(req, res);
@@ -74,12 +67,67 @@ class Bridge {
         verifyClient: ({ origin }) => this._isLocalOrigin(origin),
       });
       this.wss.on('connection', (socket) => this._onConnection(socket));
+      // ws re-emits the underlying server's bind failures on the
+      // WebSocketServer instance itself. With no listener there, that
+      // re-emit throws synchronously mid-emit on `this.server`, which
+      // aborts the loop before our own `error` listener below ever runs.
+      // A no-op listener here just prevents that; `onError` on
+      // `this.server` is what actually handles EADDRINUSE.
+      this.wss.on('error', () => {});
+
+      const onError = async (err) => {
+        this.server.removeListener('error', onError);
+        if (err && err.code === 'EADDRINUSE') {
+          const isMimicBridge = await this._probeExistingBridge();
+          if (isMimicBridge) {
+            reject(new Error(
+              `Another Mimic AI session is already running (bridge on port ${this.port}). ` +
+              `Close the other session or set MIMIC_BRIDGE_PORT to run this one on a different port.`
+            ));
+          } else {
+            reject(new Error(
+              `Port ${this.port} is already in use by another process (not a Mimic AI bridge). ` +
+              `Stop whatever is using port ${this.port}, or set MIMIC_BRIDGE_PORT to run Mimic on a different port.`
+            ));
+          }
+          return;
+        }
+        reject(err);
+      };
+      this.server.on('error', onError);
 
       this.server.listen(this.port, '127.0.0.1', () => {
+        this.server.removeListener('error', onError);
         resolve();
       });
+    });
+  }
 
-      this.server.on('error', reject);
+  /**
+   * Probe whatever is already listening on this.port to see if it looks
+   * like a Mimic AI bridge (identified via the `service` marker on /status).
+   * Never throws — resolves false on any error, timeout, or unexpected shape.
+   * @returns {Promise<boolean>}
+   */
+  _probeExistingBridge() {
+    return new Promise((resolve) => {
+      const req = http.get(
+        { host: '127.0.0.1', port: this.port, path: '/status', timeout: 1000 },
+        (res) => {
+          let body = '';
+          res.on('data', (chunk) => { body += chunk; });
+          res.on('end', () => {
+            try {
+              const parsed = JSON.parse(body);
+              resolve(!!(parsed && parsed.service === 'mimic-ai-bridge'));
+            } catch (_) {
+              resolve(false);
+            }
+          });
+        }
+      );
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+      req.on('error', () => resolve(false));
     });
   }
 
@@ -90,17 +138,7 @@ class Bridge {
     this.stopKeepalive();
 
     // Reject all pending response handlers
-    for (const [id, handler] of this.responseHandlers) {
-      clearTimeout(handler.timer);
-      handler.reject(new Error('Bridge shutting down'));
-    }
-    this.responseHandlers.clear();
-
-    // Reject queued ops
-    for (const op of this.pendingOps) {
-      op.reject(new Error('Bridge shutting down'));
-    }
-    this.pendingOps = [];
+    this._rejectAllPending('Bridge shutting down');
 
     if (this.ws) {
       this.ws.close();
@@ -285,11 +323,7 @@ class Bridge {
 
   startKeepalive() {
     this.stopKeepalive();
-    this._keepaliveTimer = setInterval(() => {
-      if (this.ws && this.connected) {
-        this.ws.ping();
-      }
-    }, this.keepaliveInterval);
+    this._keepaliveTimer = setInterval(() => this._pingTick(), this.keepaliveInterval);
 
     // Allow the Node process to exit even if the timer is running
     if (this._keepaliveTimer.unref) {
@@ -304,16 +338,39 @@ class Bridge {
     }
   }
 
-  // ── Pending ops flush ───────────────────────────────────────────────
+  /**
+   * One keepalive tick: standard ws liveness check. If the previous ping
+   * never got a pong back (isAlive still false), the socket is dead —
+   * terminate it so `close` fires and ops fail fast instead of idling out
+   * the full request timeout. Otherwise mark it unanswered and ping again.
+   */
+  _pingTick() {
+    if (!this.ws || !this.connected) return;
 
-  flushPendingOps() {
-    const ops = this.pendingOps.splice(0);
-    for (const op of ops) {
-      this._dispatch(op.msg, op.resolve, op.reject, op.timeout);
+    if (this.ws.isAlive === false) {
+      this.ws.terminate();
+      return;
     }
+
+    this.ws.isAlive = false;
+    this.ws.ping();
   }
 
   // ── Private ─────────────────────────────────────────────────────────
+
+  /**
+   * Reject every in-flight response handler with the given message and
+   * clear the map. Shared by shutdown, socket close/terminate, and
+   * connection supersede — anywhere the connection tied to those pending
+   * requests goes away.
+   */
+  _rejectAllPending(message) {
+    for (const [, handler] of this.responseHandlers) {
+      clearTimeout(handler.timer);
+      handler.reject(new Error(message));
+    }
+    this.responseHandlers.clear();
+  }
 
   /**
    * Normalize Figma node IDs: replace dashes with colons.
@@ -358,21 +415,36 @@ class Bridge {
   }
 
   /**
-   * Handle incoming WebSocket connection from the Figma plugin.
+   * Handle incoming WebSocket connection. The socket is NOT treated as the
+   * plugin executor until it sends a `mimic_hello` message — this stops any
+   * local process that opens a raw WS connection from silently displacing
+   * the real plugin (defect 5b). The `/execute` HTTP path is a distinct
+   * client and is unaffected by this — it only ever talks through
+   * `this.send()`, which already gates on `this.connected`.
    */
   _onConnection(socket) {
-    // Only keep the latest connection
-    if (this.ws) {
-      this.ws.close();
-    }
+    socket.isAlive = true;
+    let helloReceived = false;
 
-    this.ws = socket;
-    this.connected = true;
-
-    this.startKeepalive();
-    this.flushPendingOps();
+    socket.on('pong', () => { socket.isAlive = true; });
 
     socket.on('message', (data) => {
+      if (!helloReceived) {
+        let msg;
+        try {
+          msg = JSON.parse(data.toString());
+        } catch (_) {
+          console.warn('[Mimic AI bridge] Ignoring unparseable WebSocket message before executor handshake');
+          return;
+        }
+        if (msg && msg.type === HELLO_TYPE) {
+          helloReceived = true;
+          this._promoteExecutor(socket);
+          return;
+        }
+        console.warn(`[Mimic AI bridge] Ignoring message with unexpected type "${msg && msg.type}" before executor handshake`);
+        return;
+      }
       this._onMessage(data);
     });
 
@@ -381,6 +453,10 @@ class Bridge {
         this.connected = false;
         this.ws = null;
         this.stopKeepalive();
+        this._rejectAllPending(
+          'PLUGIN_DISCONNECTED: The Figma plugin connection closed while this request was in flight. ' +
+          'Reopen the Mimic AI plugin in Figma and retry.'
+        );
         // Notify disconnect listener (used by session to flag build interruption)
         if (this._onDisconnect) this._onDisconnect();
       }
@@ -392,14 +468,35 @@ class Bridge {
   }
 
   /**
+   * Promote a socket that has just sent `mimic_hello` to be THE plugin
+   * executor. Latest-hello-wins — reconnects must keep working — but any
+   * requests still in flight on the connection being superseded are
+   * rejected immediately instead of idling out the full timeout (defect 3).
+   */
+  _promoteExecutor(socket) {
+    if (this.ws && this.ws !== socket) {
+      this._rejectAllPending(
+        'PLUGIN_DISCONNECTED: The Figma plugin reconnected while this request was in flight. ' +
+        'The new connection is active — retry the operation.'
+      );
+      this.ws.close();
+    }
+
+    this.ws = socket;
+    this.connected = true;
+    this.startKeepalive();
+  }
+
+  /**
    * Handle an incoming message (response from Figma plugin).
    */
   _onMessage(raw) {
     let data;
     try {
       data = JSON.parse(raw.toString());
-    } catch {
-      return; // Malformed JSON, ignore
+    } catch (_) {
+      console.warn('[Mimic AI bridge] Ignoring malformed WebSocket message (invalid JSON)');
+      return;
     }
 
     const handler = this.responseHandlers.get(data.id);
@@ -456,8 +553,8 @@ class Bridge {
     if (req.url === '/status' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
+        service: 'mimic-ai-bridge',
         connected: this.connected,
-        pendingOps: this.pendingOps.length,
       }));
       return;
     }
@@ -473,11 +570,33 @@ class Bridge {
 
   /**
    * POST /execute — forward a command to the Figma plugin via WebSocket.
+   * Body is capped at MAX_EXECUTE_BODY_BYTES (413 beyond) — an unbounded
+   * localhost endpoint would otherwise buffer arbitrarily large requests
+   * in memory (defect 5a).
    */
   _handleExecute(req, res) {
     let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+    let bytes = 0;
+    let rejected = false;
+
+    req.on('data', (chunk) => {
+      if (rejected) return;
+      bytes += chunk.length;
+      if (bytes > MAX_EXECUTE_BODY_BYTES) {
+        rejected = true;
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Request body exceeds ${MAX_EXECUTE_BODY_BYTES} byte limit` }));
+        // Drain (don't buffer) the rest of the body instead of destroying the
+        // socket outright — an abrupt destroy can race the response bytes
+        // and reset the connection before the client reads the 413.
+        req.resume();
+        return;
+      }
+      body += chunk;
+    });
+
     req.on('end', async () => {
+      if (rejected) return;
       try {
         const { type, payload, timeout } = JSON.parse(body);
         if (!type) {
@@ -499,7 +618,10 @@ class Bridge {
 // ── Standalone entry point ────────────────────────────────────────────
 
 async function startStandalone() {
-  const bridge = new Bridge({ port: Number(process.env.BRIDGE_PORT) || 3056 });
+  // MIMIC_BRIDGE_PORT is the documented override; BRIDGE_PORT is kept as a
+  // legacy alias so any existing setups that already set it keep working.
+  const port = Number(process.env.MIMIC_BRIDGE_PORT) || Number(process.env.BRIDGE_PORT) || 3056;
+  const bridge = new Bridge({ port });
   await bridge.start();
   console.log(`Bridge listening on port ${bridge.port}`);
 

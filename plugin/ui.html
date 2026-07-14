@@ -53,11 +53,17 @@
 
     function connect() {
       setState('connecting');
-      // Port must match bridge.js BRIDGE_PORT (default 3056). Plugin cannot read env vars.
+      // Port must match bridge.js's default (3056, overridable server-side via
+      // MIMIC_BRIDGE_PORT). Plugin cannot read env vars, so this stays hardcoded.
       ws = new WebSocket('ws://localhost:3056');
 
       ws.onopen = () => {
         setState('connected');
+        // Identify this connection as the plugin executor. The bridge ignores
+        // any WebSocket connection that never sends this — otherwise any local
+        // process could open a raw connection and silently take over as the
+        // "plugin" the bridge forwards Figma operations to.
+        ws.send(JSON.stringify({ type: 'mimic_hello' }));
         parent.postMessage({ pluginMessage: { type: '__bridge_connected' } }, '*');
       };
 
