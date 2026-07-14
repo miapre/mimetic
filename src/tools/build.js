@@ -1,6 +1,7 @@
 'use strict';
 
 const { surfaceBindingFeedback } = require('../utils/binding-feedback');
+const { wordBoundaryMatch } = require('../utils/text-match');
 
 const PHASE_HINT = 'Complete DS Discovery and Style Inventory first (call mimic_discover_ds → preload → figma_set_session_defaults).';
 
@@ -66,12 +67,16 @@ function checkComponentFirstGate(args, dsCache, session, knowledgeStore) {
   // "card header", "divider" after they've been used in previous builds).
   if (!match && knowledgeStore) {
     const lower = (args?.name || '').toLowerCase();
+    const namePrefix = lower.split(':')[0].trim();
     for (const [, recipe] of Object.entries(knowledgeStore.data?.components || {})) {
       if (!recipe.componentKey || !recipe.confidence) continue;
       if (recipe.confidence !== 'confirmed' && recipe.confidence !== 'verified') continue;
-      if (recipe.stale) continue;
-      const recipeNames = (recipe.names || []).map(n => n.toLowerCase());
-      const recipeMatch = recipeNames.some(rn => lower.includes(rn) || rn.includes(lower.split(':')[0].trim()));
+      if (recipe.stale || recipe.archived) continue;
+      const recipeNames = recipe.names || [];
+      // Word-boundary (whole-name) match only — fixes defect F: a learned
+      // "Card Header" recipe must NOT block a "Card: Revenue" frame just
+      // because "card" is a substring/prefix of "card header" (acceptance 18).
+      const recipeMatch = recipeNames.some(rn => wordBoundaryMatch(namePrefix, rn) || wordBoundaryMatch(lower, rn));
       if (recipeMatch) {
         return {
           allowed: false,
@@ -372,6 +377,13 @@ function register(server, context) {
     },
     async (args) => {
       requirePhase(2, PHASE_HINT);
+      // Snapshot of explicitly-provided args, BEFORE any layout-replay merge
+      // or auto-default mutation below (defect C / capture-pollution fix):
+      // pattern capture must reflect only what THIS call actually specified.
+      // Capturing the post-replay-merged args would re-record old replayed
+      // defaults as if the user had explicitly re-specified them, defeating
+      // future correction/demotion (patterns.js demote()).
+      const explicitArgs = { ...args };
       const componentGate = checkComponentFirstGate(args, dsCache, session, knowledgeStore);
       if (componentGate && !componentGate.allowed) {
         // Emit signal for no-good compilation
@@ -453,7 +465,7 @@ function register(server, context) {
         // Store config from first occurrence only (subsequent instances
         // confirm the pattern but shouldn't overwrite the baseline).
         if (!session._frameLayoutConfigs.has(prefix)) {
-          const config = captureLayoutConfig(createArgs);
+          const config = captureLayoutConfig(explicitArgs);
           if (config) {
             session._frameLayoutConfigs.set(prefix, config);
           }
@@ -476,6 +488,7 @@ function register(server, context) {
         _componentCheck: componentGate?.warning || undefined,
         _noneWarning: noneWarning || undefined,
         _categoryWarnings: categoryWarnings.length > 0 ? categoryWarnings : undefined,
+        _categoryMismatchDetails: (validation.categoryMismatchDetails && validation.categoryMismatchDetails.length > 0) ? validation.categoryMismatchDetails : undefined,
         _rules: matchingRules.length > 0 ? matchingRules : undefined,
         _rulesNote: matchingRules.length > 0
           ? `${matchingRules.length} design rule(s) apply to "${frameName}". Follow ALL of them — they are user-defined and override defaults.`
@@ -545,6 +558,7 @@ function register(server, context) {
         nodeId: result?.nodeId || result?.id,
         ...result,
         _categoryWarnings: catWarnings.length > 0 ? catWarnings : undefined,
+        _categoryMismatchDetails: (validation.categoryMismatchDetails && validation.categoryMismatchDetails.length > 0) ? validation.categoryMismatchDetails : undefined,
         _textNote: linebreaksStripped
           ? 'Line breaks removed — container width controls wrapping.'
           : undefined,
@@ -601,6 +615,7 @@ function register(server, context) {
         nodeId: result?.nodeId || result?.id,
         ...result,
         _categoryWarnings: catWarnings.length > 0 ? catWarnings : undefined,
+        _categoryMismatchDetails: (validation.categoryMismatchDetails && validation.categoryMismatchDetails.length > 0) ? validation.categoryMismatchDetails : undefined,
       };
     }
   );

@@ -19,7 +19,14 @@ function makeKnowledgeStore(components = {}) {
 
 describe('DsDiscovery.searchComponent', () => {
   it('returns component from knowledge store when key exists', () => {
+    // Schema v3: __default__-bucket recipes (unclaimed migration leftovers,
+    // or — as here — a store never scoped to a specific library) are only
+    // eligible via tier 2 if their componentKey is present in the live
+    // dsCache (spec §5.3 tier 2) — claim-by-evidence is what would normally
+    // have moved a genuinely-live recipe out of __default__. Seed the cache
+    // so this recipe is "live" for the purposes of this test.
     const cache = new DsCache();
+    cache.addComponent('btn-key-123', { name: 'Button' });
     const ks = makeKnowledgeStore({
       'Button': { componentKey: 'btn-key-123', variant: { Size: 'md' } },
     });

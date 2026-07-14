@@ -162,10 +162,19 @@ function createSession() {
     pendingExternalVariables: false,
     externalVariablesLibraryKey: null,
     communityLibraryVariableKeys: null,
+    // Name-keyed libraries this session has already confirmed identity for
+    // (schema v3 §3.2 drift check) — avoids re-prompting every discovery
+    // call within the same session once the user has answered once.
+    identityDriftConfirmedFor: null,
 
     // Component mapping cache (mimic_map_components) + expected style count
     componentMap: null,
     expectedStyleCount: null,
+
+    // Classified DS fingerprint diff from the most recent discovery,
+    // consumed (and cleared) by the next mimic_generate_build_report to
+    // build the four-block DS Changes section (spec §4.5).
+    lastDsChangesReport: null,
 
     // Per-build execution caches (B8: previously missing from resetSession —
     // these leaked across file switches, and, before the B7 fix below, across
@@ -174,6 +183,7 @@ function createSession() {
     _timeoutRetries: new Map(),
     _componentInsertions: new Map(),
     _variantConfigs: new Map(),
+    _nodeVariantConfigs: new Map(),
     _nodeComponentKeys: new Map(),
     _frameLayoutConfigs: new Map(),
     _textNodeStructures: new Map(),
@@ -329,6 +339,7 @@ function resetBuildState() {
     variableSourceConfirmed: session.variableSourceConfirmed,
     componentMap: session.componentMap,
     expectedStyleCount: session.expectedStyleCount,
+    identityDriftConfirmedFor: session.identityDriftConfirmedFor,
     knowledgeStoreNotice: session.knowledgeStoreNotice,
   };
   for (const key of Object.keys(session)) delete session[key];
@@ -541,13 +552,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Track category mismatches for the build report
     if (result && typeof result === 'object' && result._categoryWarnings) {
       session.categoryMismatches.push(...result._categoryWarnings);
-      // Emit signals for no-good compilation
-      for (const warning of result._categoryWarnings) {
-        const varMatch = warning.match(/^[^:]+:\s*'([^']+)'.+for (\w+)/);
-        if (varMatch) {
-          const signalKey = `${varMatch[1]}->${varMatch[2]}`;
+      // Emit signals for no-good compilation FROM STRUCTURED DATA (fixes
+      // defect M / acceptance 27) — dsCache.validateVariables emits
+      // `categoryMismatchDetails` ({ path, actualCategory, expectedCategory })
+      // alongside the human-readable warning string. Consuming that
+      // structured field means a wording change to the warning message can
+      // never silently break signal emission (the old code regexed the
+      // prose string to reconstruct this same data).
+      if (Array.isArray(result._categoryMismatchDetails)) {
+        for (const detail of result._categoryMismatchDetails) {
+          const signalKey = `${detail.path}->${detail.expectedCategory}`;
           session._signals.set(`category_mismatch:${signalKey}`, {
-            type: 'category_mismatch', key: signalKey, context: warning,
+            type: 'category_mismatch',
+            key: signalKey,
+            context: `${detail.field}: '${detail.path}' (${detail.actualCategory}) used for ${detail.expectedCategory}`,
           });
         }
       }

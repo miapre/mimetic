@@ -93,6 +93,12 @@ class DsCache {
     if (!args || typeof args !== 'object') return { valid: true, warnings: [] };
     const warnings = [];
     const categoryMismatches = [];
+    // Structured signal data (spec defect M, acceptance 27) — emitted
+    // alongside the human-readable `categoryMismatches` prose so callers
+    // (mcp.js) can build category_mismatch signals from real fields
+    // instead of regexing the warning string. A wording change to the
+    // prose message can never silently break signal emission again.
+    const categoryMismatchDetails = [];
     const varFields = Object.keys(args).filter(k => k.endsWith('Variable'));
     for (const field of varFields) {
       const path = args[field];
@@ -141,6 +147,13 @@ class DsCache {
               `${field}: '${path}' is a ${actualLabel} variable but used for ${expectedCategory}. ` +
               `${expectedCategory} properties should use ${expectedLabel} variables.${fix}`
             );
+            categoryMismatchDetails.push({
+              field,
+              path,
+              actualCategory: cached.category,
+              expectedCategory,
+              suggestion: suggestion.length > 0 ? suggestion[0] : null,
+            });
           }
         }
         continue;
@@ -168,6 +181,7 @@ class DsCache {
       valid: pathErrors.length === 0,
       warnings: [...pathErrors, ...categoryMismatches],
       categoryMismatches,
+      categoryMismatchDetails,
       hasPathErrors: pathErrors.length > 0,
     };
   }

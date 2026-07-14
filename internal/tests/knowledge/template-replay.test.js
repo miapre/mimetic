@@ -195,18 +195,32 @@ describe('Template Replay — recipe persistence', () => {
     try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
   });
 
-  it('persists variant config as defaultVariants in recipe after build report', async () => {
+  it('persists variant config as defaultVariants in recipe after build report (majority-wins, spec §5.1)', async () => {
+    // Schema v3: defaultVariants is derived from variantStats majority-wins
+    // (>=3 observations AND >=60% share) at report time, from the per-NODE
+    // final variant state (session._nodeComponentKeys + session.
+    // _nodeVariantConfigs) — not a direct last-write-wins assignment from
+    // session._variantConfigs (the old, replaced mechanism). Simulate 3
+    // distinct instances all agreeing on the same values to cross the
+    // confirmed-tier threshold.
     session._componentInsertions = new Map([
-      ['btn-key-123', { count: 2, names: ['Button'] }],
+      ['btn-key-123', { count: 3, names: ['Button'] }],
     ]);
-    session._variantConfigs = new Map([
-      ['btn-key-123', { Size: 'sm', Hierarchy: 'Primary' }],
+    session._nodeComponentKeys = new Map([
+      ['node-1', 'btn-key-123'],
+      ['node-2', 'btn-key-123'],
+      ['node-3', 'btn-key-123'],
+    ]);
+    session._nodeVariantConfigs = new Map([
+      ['node-1', { Size: 'sm', Hierarchy: 'Primary' }],
+      ['node-2', { Size: 'sm', Hierarchy: 'Primary' }],
+      ['node-3', { Size: 'sm', Hierarchy: 'Primary' }],
     ]);
     session.phaseToolCalls[3] = 10;
 
     await handlers.mimic_generate_build_report({
       screenName: 'Test Screen',
-      components: [{ name: 'Button', instances: 2, componentKey: 'btn-key-123' }],
+      components: [{ name: 'Button', instances: 3, componentKey: 'btn-key-123' }],
       primitives: [],
       toolCallCount: 25,
       cacheHits: 0,
@@ -215,6 +229,8 @@ describe('Template Replay — recipe persistence', () => {
     const recipe = knowledgeStore.getComponent('btn-key-123');
     assert.ok(recipe, 'Recipe should exist');
     assert.deepStrictEqual(recipe.defaultVariants, { Size: 'sm', Hierarchy: 'Primary' });
+    assert.equal(recipe.variantStats.Size.sm, 3);
+    assert.equal(recipe.variantStats.Hierarchy.Primary, 3);
   });
 });
 
@@ -517,7 +533,7 @@ describe('Template Replay — override after auto-apply', () => {
   });
 });
 
-describe('Template Replay — last-write-wins behavior', () => {
+describe('Template Replay — majority-wins variant learning (replaces last-write-wins, spec §5.1)', () => {
   let handlers, bridge, session, knowledgeStore;
 
   beforeEach(() => {
@@ -529,7 +545,7 @@ describe('Template Replay — last-write-wins behavior', () => {
     try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
   });
 
-  it('last set_variant call wins when same component used with different configs', async () => {
+  it('session._nodeVariantConfigs tracks the FINAL state per node — a later instance no longer clobbers an earlier one\'s observation', async () => {
     // Insert Badge #1 with Color: Success
     bridge.setResponse('insert_component', (payload) => ({
       nodeId: payload.name === 'Badge: Active' ? 'node:b1' : 'node:b2',
@@ -565,14 +581,15 @@ describe('Template Replay — last-write-wins behavior', () => {
       properties: { Size: 'sm', Color: 'Warning' },
     });
 
-    // Last write wins — Color should be Warning
-    assert.deepStrictEqual(
-      session._variantConfigs.get('badge-lw'),
-      { Size: 'sm', Color: 'Warning' },
-      'last set_variant call should win for the same componentKey'
-    );
+    // Schema v3 fix: the counting unit is per-NODE final state, not a single
+    // session-wide "last write wins" bucket per componentKey. Both node
+    // observations survive independently.
+    assert.deepStrictEqual(session._nodeVariantConfigs.get('node:b1'), { Size: 'sm', Color: 'Success' });
+    assert.deepStrictEqual(session._nodeVariantConfigs.get('node:b2'), { Size: 'sm', Color: 'Warning' });
 
-    // Persist and verify
+    // Persist and verify: 2 genuinely different instances is NOT enough
+    // evidence for a default either way (majority-wins requires >=3
+    // observations before a property can get a default at all).
     session._componentInsertions = new Map([
       ['badge-lw', { count: 2, names: ['Badge'] }],
     ]);
@@ -587,8 +604,10 @@ describe('Template Replay — last-write-wins behavior', () => {
     });
 
     const recipe = knowledgeStore.getComponent('badge-lw');
-    assert.strictEqual(recipe.defaultVariants.Color, 'Warning',
-      'persisted defaultVariants should reflect last-write-wins');
+    assert.equal(recipe.defaultVariants.Color, undefined,
+      'only 2 total observations (below the >=3 confirmed-tier threshold) must not produce a default — no more blind last-write-wins');
+    assert.equal(recipe.variantStats.Color.Success, 1);
+    assert.equal(recipe.variantStats.Color.Warning, 1);
   });
 });
 
@@ -604,58 +623,71 @@ describe('Template Replay — recipe drift across builds', () => {
     try { fs.unlinkSync(REPLAY_STORE_PATH); } catch {}
   });
 
-  it('subsequent builds update defaultVariants (recipe evolves)', async () => {
-    // Pre-populate a recipe from a prior build
+  it('recipe evolves under majority-wins: a conflicting build shifts the recipe out of consensus rather than blindly overwriting it (spec §5.1)', async () => {
+    // Schema v3 replaces last-write-wins with majority-wins variantStats
+    // (schema-v3-spec.md §5.1, finding 2). Pre-populate a CONFIRMED recipe
+    // whose defaultVariants are backed by real variantStats (as a real v3
+    // recipe would have after reaching the confirmed tier).
     knowledgeStore.setComponent('badge-drift', {
       names: ['Badge'],
       componentKey: 'badge-drift',
-      buildCount: 2,
-      confidence: 'new',
+      buildCount: 3,
+      confidence: 'confirmed',
+      variantStats: { Size: { sm: 3 }, Color: { Success: 3 } },
       defaultVariants: { Size: 'sm', Color: 'Success' },
     });
 
-    bridge.setResponse('insert_component', {
-      nodeId: 'node:drift-1',
+    let driftCounter = 0;
+    bridge.setResponse('insert_component', (payload) => ({
+      nodeId: `node:drift-${++driftCounter}`,
       name: 'Badge',
       componentKey: 'badge-drift',
       type: 'INSTANCE',
-    });
+    }));
     bridge.setResponse('get_node_props', {
       layoutSizingHorizontal: 'FIXED',
       layoutMode: 'HORIZONTAL',
     });
 
-    // Insert and set a DIFFERENT color
-    await handlers.figma_insert_component({
-      componentKey: 'badge-drift',
-      parentId: 'parent:1',
-    });
-
-    await handlers.figma_set_variant({
-      nodeId: 'node:drift-1',
-      properties: { Size: 'sm', Color: 'Error' },
-    });
+    // This build: 3 fresh instances all agree on Size (reinforcing it) but
+    // ALL conflict on Color (Error instead of the previously-confirmed
+    // Success) — a genuine, evidenced shift, not a single stray override.
+    for (let i = 0; i < 3; i++) {
+      const insertResult = await handlers.figma_insert_component({
+        componentKey: 'badge-drift',
+        parentId: 'parent:1',
+      });
+      await handlers.figma_set_variant({
+        nodeId: insertResult.nodeId,
+        properties: { Size: 'sm', Color: 'Error' },
+      });
+    }
 
     session._componentInsertions = new Map([
-      ['badge-drift', { count: 1, names: ['Badge'] }],
+      ['badge-drift', { count: 3, names: ['Badge'] }],
     ]);
     session.phaseToolCalls[3] = 5;
 
     await handlers.mimic_generate_build_report({
       screenName: 'Drift Test',
-      components: [{ name: 'Badge', instances: 1, componentKey: 'badge-drift' }],
+      components: [{ name: 'Badge', instances: 3, componentKey: 'badge-drift' }],
       primitives: [],
       toolCallCount: 10,
       cacheHits: 0,
     });
 
     const recipe = knowledgeStore.getComponent('badge-drift');
-    // New color should overwrite old — recipe evolves with latest usage
-    assert.strictEqual(recipe.defaultVariants.Color, 'Error',
-      'recipe should evolve to reflect latest build variant config');
-    // Size should be preserved (merge, not replace)
+    // Size: 6/6 (100%) still dominant — stays 'sm'.
     assert.strictEqual(recipe.defaultVariants.Size, 'sm',
-      'unchanged properties should be preserved');
+      'a property with reinforced consensus should stay stable');
+    // Color: Success(3) vs Error(3) is now a dead tie (3/6 = 50% < 60%) — no
+    // dominant value. This is the fix: the OLD "Success" default is not
+    // blindly kept, but the NEW "Error" isn't blindly adopted either — the
+    // LLM decides per-instance until evidence is conclusive one way.
+    assert.strictEqual(recipe.defaultVariants.Color, undefined,
+      'a genuine 3/3 split must not resolve to either value — no dominant default');
+    assert.equal(recipe.variantStats.Color.Success, 3);
+    assert.equal(recipe.variantStats.Color.Error, 3);
   });
 });
 
@@ -781,8 +813,17 @@ describe('Template Replay — multiple set_variant calls merge correctly', () =>
     });
 
     const recipe = knowledgeStore.getComponent('btn-merge');
-    assert.deepStrictEqual(recipe.defaultVariants, { Size: 'lg', Hierarchy: 'Secondary gray' },
-      'persisted recipe should reflect merged variant config');
+    // Schema v3: the merged FINAL per-node state ({ Size: 'lg', Hierarchy:
+    // 'Secondary gray' }) is what gets counted as ONE variantStats
+    // observation (spec §5.1 — "a correction sequence on one node must
+    // count once"), not what becomes an immediate default. A single
+    // instance's observation is below the >=3 confirmed-tier threshold, so
+    // defaultVariants stays empty — but variantStats correctly reflects the
+    // merged final state, proving the per-node merge (not per-call) landed.
+    assert.equal(recipe.variantStats.Size.lg, 1, 'the FINAL merged Size (lg, not the superseded sm) should be counted');
+    assert.equal(recipe.variantStats.Hierarchy['Secondary gray'], 1);
+    assert.deepStrictEqual(recipe.defaultVariants, {},
+      'a single instance is below the confirmed-tier threshold (>=3) — no default yet');
   });
 });
 
@@ -910,15 +951,28 @@ describe('Template Replay — end-to-end flow', () => {
       cacheHits: 0,
     });
 
-    // Verify recipe was saved with defaultVariants
+    // Verify recipe was saved — under schema v3 majority-wins (spec §5.1), a
+    // SINGLE build's observation seeds variantStats but is below the >=3
+    // confirmed-tier threshold, so defaultVariants stays empty (this is the
+    // fix for the old last-write-wins behavior, which would have set
+    // defaultVariants immediately from 1 build alone).
     let recipe = knowledgeStore.getComponent('badge-key-e2e');
-    assert.deepStrictEqual(recipe.defaultVariants, { Color: 'Success', Size: 'sm' });
+    assert.equal(recipe.variantStats.Color.Success, 1);
+    assert.equal(recipe.variantStats.Size.sm, 1);
+    assert.deepStrictEqual(recipe.defaultVariants, {});
     assert.strictEqual(recipe.confidence, 'new'); // Only 1 build
 
-    // ── Simulate 2 more builds to reach confirmed ──
+    // ── Simulate 2 more builds' worth of CONSISTENT observations to reach
+    // confirmed tier with a real majority (3/3 for each property) ──
+    knowledgeStore.addVariantObservation('badge-key-e2e', 'Color', 'Success', 2);
+    knowledgeStore.addVariantObservation('badge-key-e2e', 'Size', 'sm', 2);
+    knowledgeStore.recomputeDefaultVariants('badge-key-e2e');
+    recipe = knowledgeStore.getComponent('badge-key-e2e');
     recipe.buildCount = 3;
     recipe.confidence = 'confirmed';
     knowledgeStore.setComponent('badge-key-e2e', recipe);
+    assert.deepStrictEqual(recipe.defaultVariants, { Color: 'Success', Size: 'sm' },
+      '3/3 consistent observations should now produce a dominant default');
 
     // ── Build 2: reset session state, insert same component ──
     bridge.reset();

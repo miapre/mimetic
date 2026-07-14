@@ -6,6 +6,7 @@ const os = require('node:os');
 const { ChartCalculator } = require('../charts/calculator');
 const { PatternMatcher } = require('../knowledge/patterns');
 const { compileNoGoods } = require('../knowledge/compiler');
+const { wordBoundaryMatch } = require('../utils/text-match');
 
 // ── Invented example values for _chartColorHint ──────────────────────────
 // Used ONLY when the DS cache has no match for a given field — i.e. before
@@ -77,6 +78,17 @@ function buildChartColorHint(dsCache) {
   };
 }
 
+// Monotonic per-process counter identifying a single mimic_generate_build_report
+// invocation, used ONLY as recordComponentBuild's dedup token (fixes defect
+// D: two report ENTRIES resolving to the same componentKey within one call
+// must add +1 to buildCount, not +2). Deliberately independent of
+// knowledgeStore.data.meta.buildCount, which only advances when Phase 3 had
+// actual build tool calls (`phaseToolCalls[3] > 0`) — tying the dedup token
+// to that gated counter meant every report() call in a build-op-free test
+// session (or a report re-generated to clear a circuit breaker) collided on
+// the same "buildNumber" and buildCount could never advance past 1.
+let _reportInvocationCounter = 0;
+
 function register(server, context) {
   const { registerTool, knowledgeStore, buildManifest, dsCache, session, advancePhase, bridge } = context;
 
@@ -127,27 +139,42 @@ function register(server, context) {
     async (args) => {
       const { type, id, data } = args;
 
-      switch (type) {
-        case 'component':
-          knowledgeStore.setComponent(id, data);
-          break;
-        case 'pattern':
-          knowledgeStore.setPattern(id, data);
-          break;
-        case 'gap':
-          knowledgeStore.addGap(id, data);
-          break;
-        case 'rule': {
-          const existingRule = knowledgeStore.getRule(id);
-          if (existingRule && data.status && Object.keys(data).length === 1) {
-            knowledgeStore.setRule(id, { ...existingRule, status: data.status });
-          } else {
-            knowledgeStore.setRule(id, data);
+      // Shape validation (spec defect Q, acceptance 25) — rejects a recipe
+      // payload with an unknown confidence tier or a non-object variantStats
+      // BEFORE it reaches the store, with a message listing the full
+      // four-type enum regardless of which branch rejected it.
+      const VALID_TYPES = ['component', 'pattern', 'gap', 'rule'];
+      if (!VALID_TYPES.includes(type)) {
+        return { error: `Unknown type: ${type}. Use component, pattern, gap, or rule.` };
+      }
+
+      try {
+        switch (type) {
+          case 'component':
+            // knowledgeStore.setComponent() itself throws on an invalid
+            // confidence tier or non-object variantStats (src/knowledge/
+            // store.js) — caught below and surfaced as a graceful error
+            // response instead of an unhandled exception.
+            knowledgeStore.setComponent(id, data);
+            break;
+          case 'pattern':
+            knowledgeStore.setPattern(id, data);
+            break;
+          case 'gap':
+            knowledgeStore.addGap(id, data);
+            break;
+          case 'rule': {
+            const existingRule = knowledgeStore.getRule(id);
+            if (existingRule && data.status && Object.keys(data).length === 1) {
+              knowledgeStore.setRule(id, { ...existingRule, status: data.status });
+            } else {
+              knowledgeStore.setRule(id, data);
+            }
+            break;
           }
-          break;
         }
-        default:
-          return { error: `Unknown type: ${type}. Use component, pattern, gap, or rule.` };
+      } catch (err) {
+        return { error: err.message, type, id };
       }
 
       knowledgeStore.save();
@@ -238,6 +265,41 @@ function register(server, context) {
         cacheHits = session.cacheHits,
       } = args;
 
+      // ── Regression detection (spec §5.4, acceptance 21, product decision
+      // P5 — report-only, never blocking) ──
+      // Persist last 3 build manifests per library; compare THIS build's
+      // primitive/frame sections against any PRIOR manifest's component
+      // sections with the same normalized name/prefix. An element that was
+      // a DS component before and is a primitive now is surfaced as a
+      // question, not an error — the user may have had a good reason.
+      const normalizeManifestPrefix = (name) => (name || '').split(':')[0].trim().toLowerCase();
+      const currentManifestSections = manifestSections.map((s) => ({
+        name: s.componentName || s.htmlSection || 'unnamed',
+        type: s.type,
+      }));
+      const priorManifests = knowledgeStore.getManifests();
+      const regressionQuestions = [];
+      for (const section of currentManifestSections) {
+        if (section.type !== 'primitive' && section.type !== 'frame') continue;
+        const prefix = normalizeManifestPrefix(section.name);
+        if (!prefix) continue;
+        for (const manifest of priorManifests) {
+          const priorMatch = (manifest.sections || []).find((s) => s.type === 'component' && normalizeManifestPrefix(s.name) === prefix);
+          if (priorMatch) {
+            regressionQuestions.push(
+              `"${section.name}" was a DS component in build #${manifest.buildNumber ?? '?'} (as "${priorMatch.name}") but a primitive in this build — ` +
+              `was that intentional? If the DS component no longer fits, say why; if not, this is a downgrade.`
+            );
+            break;
+          }
+        }
+      }
+      knowledgeStore.addManifest({
+        buildNumber: (knowledgeStore.data.meta.buildCount || 0) + 1,
+        screenName: args.screenName || 'mimic-build',
+        sections: currentManifestSections,
+      });
+
       const totalInstances = components.reduce((sum, c) => sum + (c.instances || 0), 0);
       // Primitives with a reason are intentional (no DS component exists) — don't penalize them
       const unjustifiedPrimitives = primitives.filter(p => !p.reason || p.reason.length < 10);
@@ -257,13 +319,19 @@ function register(server, context) {
       // ── Persist learning data FIRST so report reflects promoted state ──
       const promoter = new PatternMatcher();
       const promotions = [];
+      // Dedup token for this report invocation — see _reportInvocationCounter above.
+      const buildToken = ++_reportInvocationCounter;
       for (const comp of components) {
         let resolvedKey = comp.componentKey || null;
         const compName = comp.name.toLowerCase();
         if (!resolvedKey && session._componentInsertions) {
+          // Word-boundary, exact-preferred match (fixes defect R): a naive
+          // bidirectional substring match let "Button" resolve to a "Radio
+          // Button" insertion's key (".includes()" both ways), merging
+          // recipes across genuinely distinct components.
           for (const [key, info] of session._componentInsertions) {
-            const names = (info.names || []).map(n => n.toLowerCase());
-            if (names.some(n => n.includes(compName) || compName.includes(n))) {
+            const names = info.names || [];
+            if (names.some(n => wordBoundaryMatch(compName, n))) {
               resolvedKey = key;
               break;
             }
@@ -290,20 +358,18 @@ function register(server, context) {
         const existingNames = existing?.names || [];
         if (!existingNames.includes(comp.name)) existingNames.push(comp.name);
         let recipe = existing
-          ? { ...existing, names: existingNames, instances: (existing.instances || 0) + (comp.instances || 0), buildCount: (existing.buildCount || 0) + 1, componentKey: existing.componentKey || resolvedKey }
-          : { names: [comp.name], instances: comp.instances || 0, buildCount: 1, componentKey: resolvedKey, variantConfig: comp.variantConfig || null, confidence: 'new' };
+          ? { ...existing, names: existingNames, instances: (existing.instances || 0) + (comp.instances || 0), componentKey: existing.componentKey || resolvedKey }
+          : { names: [comp.name], instances: comp.instances || 0, buildCount: 0, componentKey: resolvedKey, variantConfig: comp.variantConfig || null, confidence: 'new' };
         if (!recipe.confidence) recipe.confidence = 'new';
         const before = recipe.confidence;
+        // Persist BEFORE recordComponentBuild — it mutates the stored recipe
+        // object directly (dedup bookkeeping lives on the recipe itself).
+        knowledgeStore.setComponent(storeKey, recipe);
+        knowledgeStore.recordComponentBuild(storeKey, buildToken);
+        recipe = knowledgeStore.getComponent(storeKey);
         recipe = promoter.maybePromote(recipe);
         if (recipe.confidence !== before) {
           promotions.push(`${comp.name} (${before} → ${recipe.confidence})`);
-        }
-        // Merge tracked variant configs into recipe as defaultVariants
-        if (session._variantConfigs && resolvedKey) {
-          const variantConfig = session._variantConfigs.get(resolvedKey);
-          if (variantConfig && Object.keys(variantConfig).length > 0) {
-            recipe.defaultVariants = { ...(existing?.defaultVariants || {}), ...variantConfig };
-          }
         }
         // Persist learned text node structure for batch optimization
         if (session._textNodeStructures && resolvedKey) {
@@ -313,6 +379,39 @@ function register(server, context) {
           }
         }
         knowledgeStore.setComponent(storeKey, recipe);
+      }
+
+      // ── Majority-wins variant learning (spec §5.1, fixes finding 2) ──
+      // Counting unit: final variant state per inserted instance at report
+      // time (session._nodeVariantConfigs, keyed by nodeId — populated by
+      // components.js on insert-time auto-apply AND manual figma_set_variant,
+      // last-write-wins PER NODE so a correction sequence on one node counts
+      // once), not per set_variant call. Aggregated into variantStats, then
+      // defaultVariants is RE-DERIVED (majority-wins), replacing the old
+      // last-write-wins session._variantConfigs assignment.
+      if (session._nodeComponentKeys && session._nodeVariantConfigs) {
+        const recomputedKeys = new Set();
+        for (const [nodeId, componentKey] of session._nodeComponentKeys) {
+          const finalProps = session._nodeVariantConfigs.get(nodeId);
+          if (!finalProps || Object.keys(finalProps).length === 0) continue;
+          // Recipes are usually stored under componentKey directly (storeKey
+          // === resolvedKey in the loop above) — fall back to scanning for a
+          // recipe whose .componentKey matches, for the rarer name-keyed case.
+          let storeKey = knowledgeStore.getComponent(componentKey) ? componentKey : null;
+          if (!storeKey) {
+            for (const [key, r] of Object.entries(knowledgeStore.data.components || {})) {
+              if (r.componentKey === componentKey) { storeKey = key; break; }
+            }
+          }
+          if (!storeKey) continue;
+          for (const [prop, value] of Object.entries(finalProps)) {
+            knowledgeStore.addVariantObservation(storeKey, prop, value, 1);
+          }
+          recomputedKeys.add(storeKey);
+        }
+        for (const storeKey of recomputedKeys) {
+          knowledgeStore.recomputeDefaultVariants(storeKey);
+        }
       }
       for (const prim of primitives) {
         if (prim.reason && prim.reason.length >= 10) {
@@ -393,7 +492,12 @@ function register(server, context) {
       // ── Compile no-goods ──
       const allSignals = knowledgeStore.getSignals();
       const allRules = knowledgeStore.getRules();
-      const compiled = compileNoGoods(allSignals, allRules);
+      // Inject dsCache.suggestVariable (spec §5.4, finding 5) so a compiled
+      // no-good rule proposes a variable that ACTUALLY EXISTS in the active
+      // DS cache instead of guessing a prefix via string surgery.
+      const compiled = compileNoGoods(allSignals, allRules, {
+        suggestVariable: (path, category) => (dsCache ? dsCache.suggestVariable(path, category) : []),
+      });
 
       // Write new candidate rules
       for (const candidate of compiled.candidates) {
@@ -417,7 +521,16 @@ function register(server, context) {
         }
       }
 
-      knowledgeStore.save();
+      // NOTE: a save() call used to happen here, followed by a second
+      // save() after recordBuild() below with nothing in between that reads
+      // from disk. That's harmless for last-writer-wins fields, but
+      // KnowledgeStore.save()'s merge-with-disk step SUMS variantStats
+      // (spec §3.1 — correct for genuinely concurrent sessions), so two
+      // saves of the same unchanged in-memory recipe within one report()
+      // call double-counted every variantStats observation added above
+      // (disk already had this call's contribution from the first save;
+      // merging it against the still-identical in-memory value summed it
+      // again). Single save() at the end of the handler avoids this.
 
       // Build markdown report (after learning so confidence tiers are current)
       const lines = [
@@ -569,16 +682,24 @@ function register(server, context) {
       lines.push(`## Efficiency: ${toolCallCount} tool calls (${cacheHits} from cache${replayNote})`);
       lines.push('');
 
+      // Resolved gaps stop generating recommendations (spec §4.5/§5.4,
+      // defect L) — they're covered by the DS Changes gap-resolution block
+      // instead, so listing them here again (forever) would be noise.
+      const openGapEntries = gapEntries.filter(([, gap]) => (gap.status || 'open') === 'open');
+
       lines.push('## DS Gap Recommendations');
       lines.push('');
-      if (gapEntries.length > 0) {
-        gapEntries.forEach(([name, gap]) => {
-          lines.push(`- **${name}**: ${gap.elements ? gap.elements.join(', ') : 'N/A'}`);
+      if (openGapEntries.length > 0) {
+        openGapEntries.forEach(([name, gap]) => {
+          const buildTrend = gap.buildNumbers && gap.buildNumbers.length > 0
+            ? ` (appeared in ${gap.buildNumbers.length} build${gap.buildNumbers.length === 1 ? '' : 's'}: ${gap.buildNumbers.map(b => `#${b}`).join(', ')})`
+            : '';
+          lines.push(`- **${name}**: ${gap.elements ? gap.elements.join(', ') : 'N/A'}${buildTrend}`);
           if (gap.evidence) lines.push(`  - Evidence: ${gap.evidence}`);
           if (gap.estimatedSavings) lines.push(`  - Estimated savings: ${gap.estimatedSavings}`);
         });
       } else {
-        lines.push('No DS gaps identified.');
+        lines.push('No open DS gaps identified.');
       }
       lines.push('');
 
@@ -609,60 +730,138 @@ function register(server, context) {
           lines.push(`| #${h.buildNumber} | ${h.screenName} | ${h.toolCalls} | ${h.cacheHits} | ${h.replaySavings || 0} | ${h.componentCount} | ${h.primitiveCount} | ${h.componentUsagePercent}% |`);
         }
         lines.push('');
-        // NOTE: this used to compare build #1's tool-call count against the
-        // latest build's to claim an "X% fewer tool calls" learning impact.
-        // That comparison was removed — it conflates learning with screen
-        // complexity, which varies per build and makes the delta meaningless.
-        // Cache hits and replay savings (columns above) are the reliable,
-        // non-comparative signals that stored knowledge is being reused.
         const totalCacheHits = history.reduce((sum, h) => sum + (h.cacheHits || 0), 0);
         const totalReplaySavings = history.reduce((sum, h) => sum + (h.replaySavings || 0), 0);
-        lines.push(
-          `**Learning signal:** ${totalCacheHits} cache hit(s) and ${totalReplaySavings} template/layout ` +
-          `replay(s) saved across ${history.length} tracked build(s). Tool-call counts vary with screen ` +
-          `complexity and aren't directly comparable across builds — cache hits and replay savings above are.`
-        );
+
+        // ── Median tool-calls-per-element (spec §5.4) ──
+        // Replaces the old first-vs-last-build tool-call percentage (finding
+        // P: noise — compares unlike screens across a rolling window whose
+        // baseline silently shifts once it rolls past the cap). This
+        // like-for-like signal normalizes by element count per build
+        // (toolCalls / (componentCount + primitiveCount)) so screen
+        // complexity doesn't distort the comparison, and only claims
+        // improvement when the metric itself actually improves.
+        const perElement = (h) => {
+          const elements = (h.componentCount || 0) + (h.primitiveCount || 0);
+          return elements > 0 ? h.toolCalls / elements : null;
+        };
+        const median = (arr) => {
+          const sorted = [...arr].sort((a, b) => a - b);
+          const mid = Math.floor(sorted.length / 2);
+          return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+        };
+        const last5 = history.slice(-5).map(perElement).filter((v) => v !== null);
+        const previous5 = history.slice(-10, -5).map(perElement).filter((v) => v !== null);
+        let trendLine = `**Learning signal:** ${totalCacheHits} cache hit(s) and ${totalReplaySavings} template/layout ` +
+          `replay(s) saved across ${history.length} tracked build(s).`;
+        if (last5.length > 0 && previous5.length > 0) {
+          const medLast = median(last5);
+          const medPrev = median(previous5);
+          const delta = medPrev > 0 ? Math.round((1 - medLast / medPrev) * 100) : 0;
+          trendLine += delta > 0
+            ? ` Median tool calls per element: ${medPrev.toFixed(1)} → ${medLast.toFixed(1)} (${delta}% fewer) — learning is measurably reducing effort per element.`
+            : delta < 0
+              ? ` Median tool calls per element: ${medPrev.toFixed(1)} → ${medLast.toFixed(1)} (${Math.abs(delta)}% more) — no improvement yet on this like-for-like metric.`
+              : ` Median tool calls per element: ${medLast.toFixed(1)} (unchanged vs. the previous 5 builds).`;
+        } else {
+          trendLine += ' Not enough build history yet for a like-for-like median tool-calls-per-element comparison (needs 5+ builds on each side).';
+        }
+        lines.push(trendLine);
         lines.push('');
       }
 
-      // ── DS Changes ──
-      // Summarize stale recipes (component removals, variant changes) with impact.
-      const staleRecipes = Object.entries(knowledgeStore.data.components)
-        .filter(([, recipe]) => recipe.stale)
-        .map(([key, recipe]) => ({
-          name: recipe.names?.[0] || key,
-          reason: recipe.staleReason,
-          instances: recipe.instances || 0,
-          buildCount: recipe.buildCount || 0,
-          confidence: recipe.confidence || 'new',
-        }));
+      // ── DS Changes (spec §4.5) — four ordered blocks: gap resolutions
+      // FIRST (the payoff moment), then renames (reassurance), then variant/
+      // schema changes, then removals. Gap resolutions/renames come from
+      // the most recent discovery's classified diff (session.
+      // lastDsChangesReport, stashed by status.js); variant changes and
+      // removals are read from persisted recipe staleness/needsReverify,
+      // which survives across sessions even without a fresh discovery this
+      // build. ──
+      const dsChangesReport = session.lastDsChangesReport || null;
+      const staleRecipeEntries = Object.entries(knowledgeStore.data.components)
+        .map(([key, recipe]) => ({ key, recipe }))
+        .filter(({ recipe }) => recipe.stale || recipe.needsReverify);
+      const removedEntries = staleRecipeEntries.filter(({ recipe }) => recipe.staleReason === 'component_removed');
+      const variantEntries = staleRecipeEntries.filter(({ recipe }) =>
+        recipe.staleReason === 'variant_property_removed' || recipe.staleReason === 'variant_value_removed' || (recipe.needsReverify && !recipe.stale));
 
-      if (staleRecipes.length > 0) {
-        const removedCount = staleRecipes.filter(r => r.reason === 'component_removed').length;
-        const variantChangedCount = staleRecipes.filter(r => r.reason === 'variants_changed').length;
+      const hasAnyDsChanges = (dsChangesReport && (
+        dsChangesReport.gapResolutions.length > 0 || dsChangesReport.renames.length > 0
+        || dsChangesReport.styleRenames.length > 0 || dsChangesReport.tokenRenames.length > 0
+      )) || removedEntries.length > 0 || variantEntries.length > 0;
 
-        lines.push(`## DS Changes: ${staleRecipes.length} stale recipe(s) detected`);
+      if (hasAnyDsChanges) {
+        lines.push('## DS Changes');
         lines.push('');
-        lines.push(`The design system has changed since these components were last used. ` +
-          `${removedCount > 0 ? `${removedCount} component(s) removed from the library. ` : ''}` +
-          `${variantChangedCount > 0 ? `${variantChangedCount} component(s) have different variants than expected.` : ''}`);
-        lines.push('');
 
-        if (removedCount > 0) {
+        // Block 1 — Gap resolutions FIRST (the payoff moment).
+        if (dsChangesReport && dsChangesReport.gapResolutions.length > 0) {
+          lines.push('**New components resolve open gaps:**');
+          for (const g of dsChangesReport.gapResolutions) {
+            const gap = knowledgeStore.data.gaps?.[g.gapName];
+            const builds = gap?.buildNumbers?.length > 0 ? gap.buildNumbers.map(b => `#${b}`).join(', ') : 'earlier builds';
+            lines.push(`- You added **${g.componentName}** — this covers the gap recorded in builds ${builds}. Mimic will use it automatically next build.`);
+          }
+          lines.push('');
+        }
+
+        // Block 2 — Renames (reassurance: nothing to do).
+        const renameLines = [
+          ...(dsChangesReport?.renames || []).map(d => `- **${d.oldName}** → **${d.newName}**: nothing to do, Mimic tracks components by key; recipes updated.`),
+          ...(dsChangesReport?.styleRenames || []).map(d => `- Style **${d.oldName}** → **${d.newName}**: nothing to do, tracked by key.`),
+          ...(dsChangesReport?.tokenRenames || []).map(d => `- Token **${d.oldPath}** → **${d.newPath}**: nothing to do, rules citing the old path were updated automatically.`),
+        ];
+        if (renameLines.length > 0) {
+          lines.push('**Renames:**');
+          lines.push(...renameLines);
+          lines.push('');
+        }
+
+        // Block 3 — Variant/schema changes.
+        if (variantEntries.length > 0) {
+          lines.push('**Variant/schema changes:**');
+          for (const { recipe } of variantEntries) {
+            const name = recipe.names?.[0] || 'unknown';
+            if (recipe.stale) {
+              lines.push(`- **${name}** — ${recipe.staleReason}. Replay is PAUSED until a validated build re-confirms it. One clean build restores it.`);
+            } else {
+              lines.push(`- **${name}** — new variant value(s) detected; confidence ${recipe.confidence} (re-verify mode). Replay still applies but is validated per-property at insert time.`);
+            }
+          }
+          lines.push('');
+        }
+
+        // Block 4 — Removals (with usage stats).
+        if (removedEntries.length > 0) {
           lines.push('**Removed components** (template replay disabled — will fall back to manual configuration):');
-          staleRecipes.filter(r => r.reason === 'component_removed').forEach(r => {
-            lines.push(`- **${r.name}** — used ${r.instances} time(s) across ${r.buildCount} build(s). ${r.confidence === 'verified' ? 'Was verified (high confidence).' : ''}`);
-          });
+          for (const { recipe } of removedEntries) {
+            const name = recipe.names?.[0] || 'unknown';
+            lines.push(`- **${name}** — used ${recipe.instances || 0} time(s) across ${recipe.buildCount || 0} build(s).${recipe.confidence === 'verified' ? ' Was verified (high confidence).' : ''}`);
+          }
           lines.push('');
         }
+      }
+      // This discovery's diff has now been reported — clear it so a later
+      // report (no new discovery in between) doesn't re-show the same changes.
+      session.lastDsChangesReport = null;
 
-        if (variantChangedCount > 0) {
-          lines.push('**Variant changes** (stored variant configs may not match current DS):');
-          staleRecipes.filter(r => r.reason === 'variants_changed').forEach(r => {
-            lines.push(`- **${r.name}** — variant properties changed. Stored defaults will be skipped until a successful build re-validates them.`);
-          });
-          lines.push('');
-        }
+      // Kept for backward-compat callers reading `staleRecipes`/`dsChanges`
+      // fields on the tool response below.
+      const staleRecipes = staleRecipeEntries.map(({ key, recipe }) => ({
+        name: recipe.names?.[0] || key,
+        reason: recipe.staleReason || (recipe.needsReverify ? 'needs_reverify' : 'unknown'),
+        instances: recipe.instances || 0,
+        buildCount: recipe.buildCount || 0,
+        confidence: recipe.confidence || 'new',
+      }));
+
+      // ── Regression Check (spec §5.4, acceptance 21) — report-only ──
+      if (regressionQuestions.length > 0) {
+        lines.push(`## Regression Check: ${regressionQuestions.length} question(s)`);
+        lines.push('');
+        regressionQuestions.forEach((q) => lines.push(`- ${q}`));
+        lines.push('');
       }
 
       // ── User Recommendations ──
@@ -711,25 +910,30 @@ function register(server, context) {
         );
       }
 
-      // 3. Top gap components to create (ranked by frequency across builds)
-      if (gapEntries.length > 0) {
+      // 3. Top gap components to create — ranked by DISTINCT builds
+      // (buildNumbers.length), not per-build element count (spec §5.4);
+      // resolved gaps are excluded (defect L — they stop recommending once
+      // closed). Shows the trend ("appeared in N of the last M builds").
+      if (openGapEntries.length > 0) {
         // Group gaps by pattern (e.g., all "Card: *" gaps → "Metric Card")
         const gapsByType = {};
-        for (const [name, gap] of gapEntries) {
+        for (const [name, gap] of openGapEntries) {
           const type = name.replace(/:.*/g, '').trim();
-          if (!gapsByType[type]) gapsByType[type] = { count: 0, names: [], savings: 0 };
-          gapsByType[type].count++;
+          if (!gapsByType[type]) gapsByType[type] = { buildNumbers: new Set(), names: [], savings: 0 };
+          for (const b of (gap.buildNumbers || [])) gapsByType[type].buildNumbers.add(b);
           gapsByType[type].names.push(name);
           const savingsMatch = (gap.estimatedSavings || '').match(/~(\d+)/);
           if (savingsMatch) gapsByType[type].savings += parseInt(savingsMatch[1], 10);
         }
         const topGaps = Object.entries(gapsByType)
-          .sort((a, b) => b[1].count - a[1].count)
+          .sort((a, b) => b[1].buildNumbers.size - a[1].buildNumbers.size)
           .slice(0, 5);
         if (topGaps.length > 0) {
-          const gapList = topGaps.map(([type, data]) =>
-            `${type} (${data.count} gap${data.count > 1 ? 's' : ''}, ~${data.savings} tool calls saved)`
-          ).join(', ');
+          const gapList = topGaps.map(([type, data]) => {
+            const distinctBuilds = data.buildNumbers.size;
+            const trend = distinctBuilds > 0 ? `, appeared in ${distinctBuilds} build${distinctBuilds === 1 ? '' : 's'}` : '';
+            return `${type} (~${data.savings} tool calls saved${trend})`;
+          }).join(', ');
           recommendations.push(
             `**Create these DS components to improve future builds:** ${gapList}. ` +
             `These patterns appear repeatedly as primitives. Adding them to the DS would reduce build time and improve consistency.`
@@ -1107,7 +1311,7 @@ function register(server, context) {
         : '';
 
       const dsChangesSummary = staleRecipes.length > 0
-        ? ` ${staleRecipes.length} DS change(s) detected (${staleRecipes.filter(r => r.reason === 'component_removed').length} removed, ${staleRecipes.filter(r => r.reason === 'variants_changed').length} variant changes).`
+        ? ` ${staleRecipes.length} DS change(s) detected (${staleRecipes.filter(r => r.reason === 'component_removed').length} removed, ${staleRecipes.filter(r => r.reason === 'variant_property_removed' || r.reason === 'variant_value_removed' || r.reason === 'needs_reverify').length} variant changes).`
         : '';
 
       return {
@@ -1129,6 +1333,7 @@ function register(server, context) {
         rulesChecked: storedRules.length,
         recommendations,
         dsChanges: staleRecipes.length > 0 ? staleRecipes : undefined,
+        regressionQuestions: regressionQuestions.length > 0 ? regressionQuestions : undefined,
         _presentationRules: [
           'Present the FULL build report to the user — components, primitives, binding quality, efficiency, DS CHANGES (stale recipes + impact), RECOMMENDATIONS (all of them), rule compliance, and DS gaps.',
           'The Recommendations section is the MOST IMPORTANT part of the report. It contains actionable suggestions: gap components to create, stale recipes to review, learning insights, and DS improvements. NEVER skip it.',

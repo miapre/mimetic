@@ -1,6 +1,140 @@
 'use strict';
 
 const { DsDiscovery } = require('../ds/discovery');
+const { computeLibraryId } = require('../knowledge/store');
+const { buildStructuredFingerprint, diffFingerprints } = require('../ds/fingerprint');
+const { wordBoundaryMatch } = require('../utils/text-match');
+
+/**
+ * React to fingerprint diff classifications that require a store mutation
+ * (spec §4.3): a rename (same key) updates recipe.names — appends the new
+ * name, keeps the old as an alias — and NEVER marks the recipe stale. A
+ * token rename (same variable key, new path) updates any auto-compiled rule
+ * text that cites the old path.
+ */
+function applyFingerprintDiffReactions(knowledgeStore, fpDiff) {
+  for (const d of fpDiff.componentDiffs) {
+    if (d.type !== 'renamed') continue;
+    for (const recipe of Object.values(knowledgeStore.data.components || {})) {
+      if (recipe.componentKey !== d.key) continue;
+      const names = recipe.names || [];
+      if (d.newName && !names.includes(d.newName)) names.unshift(d.newName);
+      if (d.oldName && !names.includes(d.oldName)) names.push(d.oldName);
+      recipe.names = names;
+    }
+  }
+  for (const d of fpDiff.variableDiffs) {
+    if (d.type !== 'token_renamed') continue;
+    for (const [ruleId, rule] of Object.entries(knowledgeStore.data.rules || {})) {
+      if (rule.rule && d.oldPath && rule.rule.includes(d.oldPath)) {
+        knowledgeStore.setRule(ruleId, { ...rule, rule: rule.rule.split(d.oldPath).join(d.newPath) });
+      }
+    }
+  }
+}
+
+/**
+ * Gap lifecycle (spec §4.5/§5.4, defect L): a `component_added` diff entry
+ * matched against an OPEN gap's searchTerms/name (word-boundary) marks that
+ * gap `resolved-pending` — the report leads with this as the payoff moment.
+ * Full `resolved` status is set on the first successful insert of the
+ * resolving component (components.js, figma_insert_component).
+ */
+function resolveGapsFromDiff(knowledgeStore, fpDiff) {
+  const added = (fpDiff.componentDiffs || []).filter(d => d.type === 'component_added' && d.name);
+  if (added.length === 0) return [];
+  const resolved = [];
+  for (const [gapName, gap] of Object.entries(knowledgeStore.data.gaps || {})) {
+    if (gap.status !== 'open') continue;
+    const searchTerms = gap.searchTerms && gap.searchTerms.length > 0 ? gap.searchTerms : [gapName];
+    const match = added.find(d => searchTerms.some(t => wordBoundaryMatch(t, d.name)) || wordBoundaryMatch(gapName, d.name));
+    if (match) {
+      knowledgeStore.markGapResolvedPending(gapName, match.key);
+      resolved.push({ gapName, componentKey: match.key, componentName: match.name });
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Staleness extension (spec §4.4): per recipe with defaultVariants/
+ * variantStats, compare against the live variant schema.
+ *   - component missing from the live cache -> stale (component_removed);
+ *     3 consecutive discoveries still missing -> archived.
+ *   - a stored property no longer present live -> stale (variant_property_removed).
+ *   - a stored DEFAULT VALUE no longer among the live values for that
+ *     property -> stale (variant_value_removed, NEW — closes finding 4:
+ *     replay of a nonexistent value becomes impossible).
+ *   - a live value with zero observations in variantStats (a value was
+ *     ADDED) -> needsReverify + demote (verified -> confirmed), not stale.
+ * `default_changed` (the DS's own declared default changing to an
+ * already-known value) is NOT detected here — neither the plugin's
+ * page-scan discovery nor the REST API surfaces a canonical "default value"
+ * per variant property through the existing discovery handlers (only the
+ * set of legal values), so there is nothing to compare against. Documented
+ * limitation, not a silent gap — see the worker report.
+ */
+function applyStalenessV3(knowledgeStore, dsComponentKeys, dsVariantProperties) {
+  const results = [];
+  for (const [key, recipe] of Object.entries(knowledgeStore.data.components || {})) {
+    if (!recipe.componentKey || recipe.archived) continue;
+
+    const isLive = dsComponentKeys.has(recipe.componentKey);
+    if (!isLive) {
+      if (!recipe.stale) {
+        knowledgeStore.markRecipeStale(key, 'component_removed');
+        results.push({ key, names: recipe.names || [], reason: 'component_removed' });
+      }
+      recipe._missingStreak = (recipe._missingStreak || 0) + 1;
+      if (recipe._missingStreak >= 3) recipe.archived = true;
+      continue;
+    }
+    if (recipe._missingStreak) recipe._missingStreak = 0;
+    if (recipe.stale) continue; // already flagged — clears only via self-heal (components.js)
+
+    const liveSchema = dsVariantProperties[recipe.componentKey];
+    if (!liveSchema) continue; // no variant schema data from this source (defect I)
+
+    const liveValuesByProp = {};
+    if (Array.isArray(liveSchema)) {
+      for (const vp of liveSchema) liveValuesByProp[vp.name] = (vp.values || []).map(String);
+    } else {
+      for (const [propName, vp] of Object.entries(liveSchema)) liveValuesByProp[propName] = (vp.values || []).map(String);
+    }
+    const currentProps = new Set(Object.keys(liveValuesByProp));
+    const checkedProps = new Set([
+      ...Object.keys(recipe.defaultVariants || {}),
+      ...Object.keys(recipe.variantStats || {}),
+    ]);
+
+    let stale = false;
+    let needsReverify = false;
+    for (const prop of checkedProps) {
+      if (!currentProps.has(prop)) {
+        knowledgeStore.markRecipeStale(key, 'variant_property_removed');
+        results.push({ key, names: recipe.names || [], reason: 'variant_property_removed' });
+        stale = true;
+        break;
+      }
+      const liveValues = liveValuesByProp[prop] || [];
+      const storedValue = recipe.defaultVariants && recipe.defaultVariants[prop];
+      if (storedValue && !liveValues.includes(String(storedValue))) {
+        knowledgeStore.markRecipeStale(key, 'variant_value_removed');
+        results.push({ key, names: recipe.names || [], reason: 'variant_value_removed' });
+        stale = true;
+        break;
+      }
+      const observedValues = recipe.variantStats && recipe.variantStats[prop] ? Object.keys(recipe.variantStats[prop]) : [];
+      if (liveValues.some(v => !observedValues.includes(v))) needsReverify = true;
+    }
+
+    if (!stale && needsReverify && !recipe.needsReverify) {
+      knowledgeStore.demoteRecipe(key, 'variant_schema_changed');
+      results.push({ key, names: recipe.names || [], reason: 'needs_reverify' });
+    }
+  }
+  return results;
+}
 
 const PHASE_LABELS = {
   0: 'idle',
@@ -160,6 +294,11 @@ function register(server, context) {
             },
           },
           description: 'Variables fetched via Figma MCP search_design_system for community libraries whose variables are not discoverable via the plugin API. Pass after receiving a communityVariablesRequired response.',
+        },
+        identityDriftChoice: {
+          type: 'string',
+          enum: ['same', 'different'],
+          description: 'Answer to a library-identity-drift prompt (name-keyed community library where most previously-known components vanished). "same" keeps learning under the existing history; "different" starts a fresh bucket for this library.',
         },
       },
       required: ['fileKey'],
@@ -700,8 +839,58 @@ function register(server, context) {
         };
       }
 
+      // ── Library identity + active bucket (schema v3 §3.2/§3.4) ──
+      // libraryId := libraryFileKey (stable, canonical) | "name:"+normalize(name) | "__default__".
+      // Compute it BEFORE the component fetch so setActiveLibrary scopes every
+      // knowledgeStore.data.* read/write below (checkStaleness, claimByEvidence,
+      // and — critically — every OTHER tool's recipe lookups for the rest of
+      // this build session, since knowledgeStore is a session-long singleton).
+      let libraryId = computeLibraryId({ libraryFileKey, libraryName: selectedLib });
+      if (libraryFileKey && selectedLib) {
+        // A file key just became known for a library that may have been
+        // tracked under its name before — rename the bucket in place,
+        // preserving stats (spec §3.2/§3.4 step 4, acceptance criterion 6).
+        const nameId = computeLibraryId({ libraryName: selectedLib });
+        if (nameId !== libraryId && knowledgeStore.getLibraryBucket(nameId)) {
+          knowledgeStore.renameLibraryBucket(nameId, libraryId);
+        }
+      }
+      knowledgeStore.setActiveLibrary(libraryId, {
+        libraryName: selectedLib || null,
+        libraryFileKey: libraryFileKey || null,
+        idSource: libraryFileKey ? 'fileKey' : (selectedLib ? 'name' : null),
+      });
+
+      // ── REST freshness fast path (spec §4.2) ──
+      // Cheap "did anything change" probe via file metadata (version +
+      // lastModified) instead of re-fetching the full component/style lists.
+      // Figma's REST API doesn't expose a separate cheap "published-variables
+      // updatedAt" endpoint distinct from full file data, so version+
+      // lastModified from GET /files/:key?depth=1 is the freshness proxy —
+      // both change whenever anything in the file (including its published
+      // variables/components) changes. Only skips the fetch when the
+      // in-memory dsCache is already warm for this library (same long-lived
+      // session, second+ discovery call) — a cold process always does the
+      // full fetch regardless of a freshness match, so a first-ever
+      // discovery is never starved of data.
+      let fingerprintFreshRest = false;
+      let restFreshnessNow = null;
+      if (libraryFileKey && figmaRest && typeof figmaRest.getFileFreshness === 'function') {
+        try {
+          restFreshnessNow = await figmaRest.getFileFreshness(libraryFileKey);
+          const priorFp = knowledgeStore.getStructuredFingerprint();
+          const priorFreshness = priorFp && priorFp.restFreshness;
+          const warmCache = [...dsCache.components.values()].some(c => c.source === 'rest_api');
+          if (warmCache && priorFreshness
+              && restFreshnessNow.version != null && priorFreshness.version === restFreshnessNow.version
+              && restFreshnessNow.lastModified != null && priorFreshness.lastModified === restFreshnessNow.lastModified) {
+            fingerprintFreshRest = true;
+          }
+        } catch (e) { /* non-fatal — fall through to full fetch */ }
+      }
+
       // Fetch components + text styles via REST API
-      if (libraryFileKey && figmaRest) {
+      if (libraryFileKey && figmaRest && !fingerprintFreshRest) {
         // Components
         try {
           const restComponents = await figmaRest.getFileComponents(libraryFileKey);
@@ -791,6 +980,12 @@ function register(server, context) {
             effectStylesCached++;
           }
         } catch (e) { /* non-fatal */ }
+      } else if (fingerprintFreshRest) {
+        // Fast path: nothing changed since last discovery (spec §4.2) — the
+        // already-warm dsCache from earlier in this session IS the current
+        // state. Reflect its existing counts instead of re-fetching.
+        componentsCached = [...dsCache.components.values()].filter(c => c.source === 'rest_api').length;
+        stylesCached = dsCache.textStyles.size;
       }
 
       // Supplemental: scan current page for local components
@@ -810,6 +1005,63 @@ function register(server, context) {
         }
       } catch (e) { /* non-fatal */ }
 
+      // ── Library identity drift + claim-by-evidence (spec §3.2/§3.4) ──
+      // Runs once component discovery has populated the live cache, so
+      // checkLibraryIdentityDrift/claimByEvidence have real data to compare
+      // against. Cold start (build 1, unknown DS): if this is a migrated v2
+      // user, claimByEvidence makes it warm (spec §5.5).
+      const liveComponentKeysSet = new Set(dsCache.components.keys());
+      let claimNote = null;
+      if (libraryId !== '__default__') {
+        const idSource = libraryFileKey ? 'fileKey' : 'name';
+        if (idSource === 'name') {
+          if (!session.identityDriftConfirmedFor) session.identityDriftConfirmedFor = new Set();
+          if (!session.identityDriftConfirmedFor.has(libraryId)) {
+            const drift = knowledgeStore.checkLibraryIdentityDrift(libraryId, liveComponentKeysSet);
+            if (drift.possiblyDifferentLibrary) {
+              if (args.identityDriftChoice === 'same') {
+                session.identityDriftConfirmedFor.add(libraryId);
+              } else if (args.identityDriftChoice === 'different') {
+                // Fork to a disambiguated bucket rather than mass-staling the
+                // existing one (product decision P2 — prompt, never silent).
+                let suffix = 2;
+                let forkedId = `${libraryId} (${suffix})`;
+                while (knowledgeStore.getLibraryBucket(forkedId)) { suffix++; forkedId = `${libraryId} (${suffix})`; }
+                knowledgeStore.setActiveLibrary(forkedId, { libraryName: selectedLib, libraryFileKey: null, idSource: 'name' });
+                libraryId = forkedId;
+                session.identityDriftConfirmedFor.add(libraryId);
+              } else {
+                return {
+                  phase: session.phase,
+                  phaseLabel: PHASE_LABELS[session.phase] || 'discovery',
+                  fileKey: args.fileKey,
+                  selectedLibraryKey: selectedLib,
+                  _stopBuild: true,
+                  _libraryIdentityDrift: {
+                    vanishedRatio: drift.vanishedRatio, vanishedCount: drift.vanishedCount, totalStoredKeys: drift.totalStoredKeys,
+                  },
+                  _userPrompt:
+                    `"${selectedLib}" looks different from what Mimic learned before: ` +
+                    `${drift.vanishedCount} of ${drift.totalStoredKeys} previously-known components ` +
+                    `(${Math.round(drift.vanishedRatio * 100)}%) are no longer present.\n\n` +
+                    `Is this the SAME "${selectedLib}" library (just updated) — or a DIFFERENT library that ` +
+                    `happens to share the name?\n\n` +
+                    `Reply with identityDriftChoice: "same" to keep learning under the existing history, ` +
+                    `or "different" to start a fresh learning history for this library.`,
+                  hint: 'STOP — library identity ambiguous (>60% of previously-known components vanished ' +
+                    'under a name-keyed library ID). Present _userPrompt to the user and re-call ' +
+                    'mimic_discover_ds with the SAME args plus identityDriftChoice: "same" or "different".',
+                };
+              }
+            }
+          }
+        }
+        const claimResult = knowledgeStore.claimByEvidence(libraryId, liveComponentKeysSet);
+        if (claimResult.claimed > 0) {
+          claimNote = `${claimResult.claimed} previously-learned recipe(s) claimed into "${selectedLib || libraryId}" from earlier (unscoped) learning.`;
+        }
+      }
+
       // ── Step 5: Compute and set enforcement profile ──
       const enforcement = dsCache.getEnforcementProfile();
       const dsMode = dsCache.variables.size > 0 ? 'strict' : 'permissive';
@@ -821,34 +1073,66 @@ function register(server, context) {
         });
       } catch (e) { /* non-fatal */ }
 
-      // ── DS change detection ──
-      // Build a fingerprint from component names + style count to detect library updates
+      // ── Structured fingerprint capture + diff (spec §4.1-4.3) ──
+      // Written on EVERY discovery, including skipRestApi/community paths
+      // (fixes defect N — previously guarded by `componentsCached > 0 ||
+      // stylesCached > 0`, which is exactly false on a from-scratch
+      // community discovery). Only diffs fingerprints of the same `source`
+      // class — a source change is an informational note, not staleness
+      // (fixes acceptance 12).
+      const fingerprintSource = (libraryFileKey && figmaRest) ? 'rest' : 'page_scan';
+      const newFingerprint = buildStructuredFingerprint({
+        dsCache, knowledgeStore, source: fingerprintSource,
+        restFreshness: restFreshnessNow || knowledgeStore.getStructuredFingerprint()?.restFreshness || null,
+      });
+      const priorFingerprint = knowledgeStore.getStructuredFingerprint();
+      const fpDiff = diffFingerprints(priorFingerprint, newFingerprint);
       const dsChanges = [];
-      if (componentsCached > 0 || stylesCached > 0) {
-        const componentNames = [...dsCache.components.values()].map(c => c.name).sort();
-        const newFingerprint = JSON.stringify({ components: componentNames, styleCount: stylesCached });
-        const storedFingerprint = knowledgeStore.data.dsFingerprint;
+      const fingerprintFresh = fpDiff.unchanged === true;
 
-        if (storedFingerprint && storedFingerprint !== newFingerprint) {
-          // Detect what changed
-          try {
-            const prev = JSON.parse(storedFingerprint);
-            const prevNames = new Set(prev.components || []);
-            const currNames = new Set(componentNames);
-            const added = componentNames.filter(n => !prevNames.has(n));
-            const removed = (prev.components || []).filter(n => !currNames.has(n));
-            if (added.length > 0) dsChanges.push(`New components since last build: ${added.join(', ')}`);
-            if (removed.length > 0) dsChanges.push(`Removed components since last build: ${removed.join(', ')}`);
-            if (prev.styleCount !== stylesCached) dsChanges.push(`Text styles changed: ${prev.styleCount || 0} \u2192 ${stylesCached}`);
-          } catch (e) { dsChanges.push('DS library updated since last build.'); }
+      if (fpDiff.sourceChanged) {
+        dsChanges.push(`DS discovery source changed (${fpDiff.prevSource} -> ${fpDiff.currSource}) — informational only, no staleness applied.`);
+      } else if (!fpDiff.firstCapture && !fpDiff.unchanged) {
+        for (const d of fpDiff.componentDiffs) {
+          if (d.type === 'component_added') dsChanges.push(`New component: ${d.name || d.key}`);
+          if (d.type === 'component_removed') dsChanges.push(`Removed component: ${d.name || d.key}`);
+          if (d.type === 'renamed') dsChanges.push(`Renamed: "${d.oldName}" -> "${d.newName}" (same key — recipes keep working, not stale)`);
+          if (d.type === 'variant_schema_changed') dsChanges.push(`Variant schema changed: ${d.name}`);
+        }
+        for (const d of fpDiff.styleDiffs) {
+          if (d.type === 'style_added') dsChanges.push(`New style: ${d.name}`);
+          if (d.type === 'style_removed') dsChanges.push(`Removed style: ${d.name}`);
+          if (d.type === 'renamed') dsChanges.push(`Style renamed: "${d.oldName}" -> "${d.newName}"`);
+        }
+        for (const d of fpDiff.variableDiffs) {
+          if (d.type === 'token_renamed') dsChanges.push(`Token renamed: "${d.oldPath}" -> "${d.newPath}" (same key)`);
+          if (d.type === 'variable_removed') dsChanges.push(`Removed variable: ${d.path}`);
+          if (d.type === 'variable_added') dsChanges.push(`New variable: ${d.path}`);
+          if (d.type === 'variable_override_added') dsChanges.push(`Variable override added: ${d.path}`);
         }
 
-        // Always update fingerprint
-        knowledgeStore.setFingerprint(newFingerprint);
-        knowledgeStore.save();
-      }
+        applyFingerprintDiffReactions(knowledgeStore, fpDiff);
+        const gapResolutions = resolveGapsFromDiff(knowledgeStore, fpDiff);
 
-      // ── Staleness detection ──
+        // Stash this discovery's classified diff on the session so the NEXT
+        // mimic_generate_build_report can restructure the DS Changes section
+        // into the spec §4.5 four ordered blocks (gap resolutions first,
+        // renames, variant changes, removals) instead of re-deriving a
+        // coarser view from persisted staleness alone.
+        session.lastDsChangesReport = {
+          capturedAt: newFingerprint.capturedAt,
+          gapResolutions,
+          renames: fpDiff.componentDiffs.filter(d => d.type === 'renamed'),
+          styleRenames: fpDiff.styleDiffs.filter(d => d.type === 'renamed'),
+          tokenRenames: fpDiff.variableDiffs.filter(d => d.type === 'token_renamed'),
+          variantSchemaChanges: fpDiff.componentDiffs.filter(d => d.type === 'variant_schema_changed'),
+          removedComponents: fpDiff.componentDiffs.filter(d => d.type === 'component_removed'),
+        };
+      }
+      knowledgeStore.setStructuredFingerprint(newFingerprint);
+      knowledgeStore.save();
+
+      // ── Staleness detection (spec §4.4) ──
       // Compare stored recipes against live DS cache to detect orphaned/drifted recipes.
       const dsComponentKeys = new Set(dsCache.components.keys());
       const dsVariantProperties = {};
@@ -857,11 +1141,24 @@ function register(server, context) {
           dsVariantProperties[key] = comp.variantProperties;
         }
       }
-      const staleResults = knowledgeStore.checkStaleness(dsComponentKeys, dsVariantProperties);
+      const staleResults = applyStalenessV3(knowledgeStore, dsComponentKeys, dsVariantProperties);
       if (staleResults.length > 0) {
         knowledgeStore.save();
-        dsChanges.push(`${staleResults.length} recipe(s) marked stale: ${staleResults.map(r => `${r.names[0] || r.key} (${r.reason})`).join(', ')}`);
+        dsChanges.push(`${staleResults.length} recipe(s) affected: ${staleResults.map(r => `${r.names[0] || r.key} (${r.reason})`).join(', ')}`);
       }
+      if (claimNote) dsChanges.unshift(claimNote);
+
+      // ── Cold start messaging (spec §5.5) ──
+      // A migrated v2 user (__default__ claim-by-evidence just ran) is
+      // "warm" even on their first v3 discovery of this library — say so
+      // instead of implying zero prior learning. A genuinely new
+      // library/bucket says plainly that learning starts now.
+      const bucketComponentCount = Object.keys(knowledgeStore.data.components || {}).length;
+      const bucketBuildCount = knowledgeStore.data.meta?.buildCount || 0;
+      const learningStatus = claimNote
+        || (bucketComponentCount === 0 && bucketBuildCount === 0
+          ? `First build with "${selectedLib || libraryId}" — no recipes yet. Learning begins with this build's report.`
+          : undefined);
 
       // Completeness warnings
       const completenessWarnings = [];
@@ -989,6 +1286,9 @@ function register(server, context) {
           enforcement: session.enforcementProfile,
           completenessWarnings,
           dsChanges: dsChanges.length > 0 ? dsChanges : undefined,
+          fingerprintFresh,
+          _restFetchSkipped: fingerprintFreshRest || undefined,
+          _learningStatus: learningStatus,
           _libraryConstraint: `ALL components and Figma MCP searches must use ONLY "${session.selectedLibraryKey}". Never mix design systems.`,
           hint: (dsChanges.length > 0 ? `DS UPDATED: ${dsChanges.join(' | ')}. ` : '') +
             (completenessWarnings.length > 0
@@ -1025,6 +1325,10 @@ function register(server, context) {
         },
         enforcement: session.enforcementProfile,
         completenessWarnings,
+        dsChanges: dsChanges.length > 0 ? dsChanges : undefined,
+        fingerprintFresh,
+        _restFetchSkipped: fingerprintFreshRest || undefined,
+        _learningStatus: learningStatus,
         communityLibraryCheckRequired: true,
         _stopBuild: true,
         hint: `Plugin discovery complete — ${variablesCached} variables, ${stylesCached} text styles, ${componentsCached} components cached. MANDATORY NEXT STEP: Call Figma MCP search_design_system with query "color", includeVariables: true, includeComponents: false, includeStyles: false on fileKey "${args.fileKey}". Collect all unique non-null libraryName values from the results, then re-call mimic_discover_ds with communitySearchResults set to that array. Build tools are BLOCKED until this check completes.`,
@@ -1033,4 +1337,4 @@ function register(server, context) {
   );
 }
 
-module.exports = { register };
+module.exports = { register, applyFingerprintDiffReactions, resolveGapsFromDiff, applyStalenessV3 };

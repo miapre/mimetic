@@ -56,6 +56,21 @@ class FigmaRest {
     return this._get(`/files/${fileKey}?depth=0`);
   }
 
+  /**
+   * Cheap freshness probe for the REST update-detection fast path
+   * (schema-v3-spec.md §4.2). Figma's REST API has no dedicated
+   * "published-variables updatedAt" endpoint distinct from full file data,
+   * so `version` + `lastModified` from a depth-1 (metadata-only, no deep
+   * node tree) file fetch serve as the freshness proxy: both change
+   * whenever anything in the file — including its published components,
+   * styles, or variables — changes. Far cheaper than re-fetching the full
+   * component/style lists on every discovery call.
+   */
+  async getFileFreshness(fileKey) {
+    const raw = await this._get(`/files/${fileKey}?depth=1`);
+    return { version: raw?.version ?? null, lastModified: raw?.lastModified ?? null };
+  }
+
   /** Get all published components from a file */
   async getFileComponents(fileKey) {
     const raw = await this._get(`/files/${fileKey}/components`);

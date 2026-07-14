@@ -487,22 +487,26 @@ describe('Tier 2 — Card patterns with boolean configuration', () => {
     assert.equal(config['Supporting text'], 'True');
   });
 
-  it('Card Header defaultVariants persisted in recipe after build report', async () => {
+  it('Card Header defaultVariants persisted in recipe after build report (majority-wins, spec §5.1)', async () => {
+    // Schema v3: defaultVariants requires >=3 consistent observations
+    // (majority-wins, replacing last-write-wins) — insert 3 instances all
+    // agreeing on the same variant values, per-NODE tracked.
     h.advancePhase(2);
-    const header = await h.call('figma_insert_component', {
-      componentKey: 'ck-card-header',
-      parentId: 'p-1',
-      name: 'Card Header',
-    });
-
-    await h.call('figma_set_variant', {
-      nodeId: header.nodeId,
-      properties: { Divider: 'False', 'Supporting text': 'True' },
-    });
+    for (let i = 0; i < 3; i++) {
+      const header = await h.call('figma_insert_component', {
+        componentKey: 'ck-card-header',
+        parentId: 'p-1',
+        name: 'Card Header',
+      });
+      await h.call('figma_set_variant', {
+        nodeId: header.nodeId,
+        properties: { Divider: 'False', 'Supporting text': 'True' },
+      });
+    }
 
     await h.call('mimic_generate_build_report', {
       screenName: 'Card Build',
-      components: [{ name: 'Card Header', instances: 1, componentKey: 'ck-card-header' }],
+      components: [{ name: 'Card Header', instances: 3, componentKey: 'ck-card-header' }],
       primitives: [],
     });
 

@@ -1,8 +1,46 @@
 'use strict';
 
 const { surfaceBindingFeedback } = require('../utils/binding-feedback');
+const { wordBoundaryMatch } = require('../utils/text-match');
 
 const PHASE_HINT = 'Complete DS Discovery and Style Inventory first (call mimic_discover_ds → preload → figma_set_session_defaults).';
+
+/**
+ * Normalize a cached DS component's variantProperties (array-of-{name,values}
+ * from the plugin's page-scan, or absent for REST-only components — see
+ * defect I) into a { [propName]: string[] } value lookup for apply-time
+ * validation (spec §4.4).
+ */
+function extractLiveVariantValues(componentMeta) {
+  const out = {};
+  const schema = componentMeta && componentMeta.variantProperties;
+  if (!schema) return out;
+  if (Array.isArray(schema)) {
+    for (const vp of schema) out[vp.name] = (vp.values || []).map(String);
+  } else if (typeof schema === 'object') {
+    for (const [name, vp] of Object.entries(schema)) out[name] = (vp.values || []).map(String);
+  }
+  return out;
+}
+
+/**
+ * Build the `_autoApplied.provenance` strings the spec §5.2 describes:
+ * `{ Size: "md in 7/9 builds" }`, derived from the recipe's variantStats
+ * majority-wins counts for each property actually applied.
+ */
+function buildReplayProvenance(recipe, appliedProps) {
+  const provenance = {};
+  const stats = recipe.variantStats || {};
+  for (const [prop, value] of Object.entries(appliedProps || {})) {
+    const valueCounts = stats[prop];
+    if (!valueCounts) continue;
+    const total = Object.values(valueCounts).reduce((a, b) => a + (b || 0), 0);
+    if (total === 0) continue;
+    const count = valueCounts[value] || 0;
+    provenance[prop] = `${value} in ${count}/${total} builds`;
+  }
+  return provenance;
+}
 
 function register(server, context) {
   const { bridge, buildManifest, dsCache, knowledgeStore, session, requirePhase, advancePhase, registerTool } = context;
@@ -167,8 +205,20 @@ function register(server, context) {
 
       const nodeId = result?.nodeId || result?.id;
 
-      // Check knowledge store for recipes — look up by componentKey first, then by name
-      const recipe = knowledgeStore.getComponent(args.componentKey) || knowledgeStore.getComponent(args.name || result?.name);
+      // Check knowledge store for recipes — look up by componentKey first,
+      // then by name. Track the ACTUAL store key the recipe was found under
+      // (fixes defect H's "always clear via the recipe's actual store key"
+      // — the old code always used args.componentKey even when the recipe
+      // was only found via a name-keyed lookup, a silent no-op).
+      let recipeStoreKey = null;
+      let recipe = knowledgeStore.getComponent(args.componentKey);
+      if (recipe) {
+        recipeStoreKey = args.componentKey;
+      } else {
+        const nameKey = args.name || result?.name;
+        recipe = nameKey ? knowledgeStore.getComponent(nameKey) : null;
+        if (recipe) recipeStoreKey = nameKey;
+      }
       const hints = [];
       const autoApplied = {};
 
@@ -176,34 +226,152 @@ function register(server, context) {
         hints.push(`Known recipe: ${JSON.stringify(recipe)}`);
         session.cacheHits++;
 
-        // Auto-apply confirmed/verified recipes unless explicitly opted out
+        // Auto-apply confirmed/verified recipes unless explicitly opted out.
+        // A stale recipe never replays (acceptance 9) — self-heal for
+        // variant staleness only happens via a manual figma_set_variant call
+        // that re-validates cleanly (see that tool below), not auto-apply.
+        // Enters the replay path whenever there's EITHER a majority-wins
+        // default OR raw variantStats observations to explain (acceptance
+        // 14: a genuine 5/4 split has no defaultVariants entry but must
+        // still surface _autoApplied.skipped explaining why nothing replayed
+        // — not just silently skip the whole block).
+        const hasVariantData = (recipe.defaultVariants && Object.keys(recipe.defaultVariants).length > 0)
+          || (recipe.variantStats && Object.keys(recipe.variantStats).length > 0);
         const isReplayable = (recipe.confidence === 'confirmed' || recipe.confidence === 'verified')
           && !recipe.stale
-          && recipe.defaultVariants
-          && Object.keys(recipe.defaultVariants).length > 0
+          && hasVariantData
           && args.applyRecipe !== false;
 
         if (isReplayable && nodeId) {
-          try {
-            await bridge.send('set_variant', {
-              nodeId,
-              properties: recipe.defaultVariants,
-            });
-            autoApplied.variants = recipe.defaultVariants;
-            // Track replay savings — each auto-apply saves 1 figma_set_variant call
-            session.replaySavings = (session.replaySavings || 0) + 1;
-            hints.push(`Auto-applied variant config from ${recipe.confidence} recipe: ${JSON.stringify(recipe.defaultVariants)}. Override with figma_set_variant if this instance needs different values.`);
-          } catch (_) {
-            hints.push('Recipe variant auto-apply failed — set variants manually.');
+          // ── Apply-time validation (spec §4.4 belt-and-braces) ──
+          // Filter defaultVariants against the live schema in the DS cache
+          // BEFORE replay — skip entries the current DS no longer supports
+          // and report them in _autoApplied.skipped, instead of blindly
+          // replaying a stale value.
+          const liveMeta = dsCache.getComponent(args.componentKey);
+          const liveValuesByProp = extractLiveVariantValues(liveMeta);
+          const toApply = {};
+          const skipped = {};
+          for (const [prop, value] of Object.entries(recipe.defaultVariants || {})) {
+            const liveValues = liveValuesByProp[prop];
+            if (liveValues && !liveValues.includes(String(value))) {
+              skipped[prop] = `stored value "${value}" no longer valid for "${prop}" — DS schema changed`;
+              continue;
+            }
+            toApply[prop] = value;
+          }
+          // Explain properties with OBSERVATIONS but no dominant default
+          // (spec §5.1/§5.2, acceptance 14: a genuine 5/4 split must not
+          // replay either value, and _autoApplied.skipped must say why —
+          // not just silently omit the property).
+          for (const [prop, valueCounts] of Object.entries(recipe.variantStats || {})) {
+            if (prop in (recipe.defaultVariants || {}) || prop in skipped) continue;
+            const entries = Object.entries(valueCounts || {});
+            if (entries.length === 0) continue;
+            const total = entries.reduce((sum, [, c]) => sum + (c || 0), 0);
+            const sorted = entries.sort((a, b) => b[1] - a[1]);
+            const split = sorted.map(([v, c]) => `${v}:${c}`).join('/');
+            skipped[prop] = `no dominant value (${split} split of ${total}) — set explicitly from HTML`;
+          }
+
+          if (Object.keys(toApply).length > 0) {
+            try {
+              const applyResult = await bridge.send('set_variant', {
+                nodeId,
+                properties: toApply,
+              });
+              // Inspect appliedProperties for PER-KEY errors (fixes defect B
+              // — the plugin returns a successful response envelope even
+              // when individual properties failed; `applied[key]` is the
+              // value on success, `{ error: message }` on failure).
+              const appliedProperties = applyResult?.appliedProperties || {};
+              const failedProps = Object.entries(appliedProperties)
+                .filter(([, v]) => v && typeof v === 'object' && 'error' in v)
+                .map(([k]) => k);
+              const cleanApply = failedProps.length === 0;
+              const succeededProps = Object.fromEntries(Object.entries(toApply).filter(([k]) => !failedProps.includes(k)));
+
+              if (recipeStoreKey) {
+                if (cleanApply) {
+                  for (const prop of Object.keys(toApply)) knowledgeStore.recordReplaySuccess(recipeStoreKey, prop);
+                  knowledgeStore.restoreAfterCleanReplay(recipeStoreKey);
+                } else {
+                  for (const prop of failedProps) knowledgeStore.recordReplayFailure(recipeStoreKey, prop);
+                }
+              }
+
+              // A failed apply is a FAILURE, not a saving (fixes defect B):
+              // no replaySavings increment for failed keys.
+              if (Object.keys(succeededProps).length > 0) {
+                session.replaySavings = (session.replaySavings || 0) + 1;
+              }
+
+              // Per-node final-variant tracking (spec §5.1): counting unit
+              // for majority-wins is the final state per inserted instance
+              // at report time, not per set_variant call — track it here
+              // keyed by nodeId so a later manual correction (figma_set_
+              // variant) can refine the SAME node's entry rather than
+              // creating a second, competing observation.
+              if (nodeId && Object.keys(succeededProps).length > 0) {
+                if (!session._nodeVariantConfigs) session._nodeVariantConfigs = new Map();
+                const existingNodeProps = session._nodeVariantConfigs.get(nodeId) || {};
+                session._nodeVariantConfigs.set(nodeId, { ...existingNodeProps, ...succeededProps });
+              }
+
+              autoApplied.variants = succeededProps;
+              autoApplied.provenance = buildReplayProvenance(recipe, succeededProps);
+              if (Object.keys(skipped).length > 0) autoApplied.skipped = skipped;
+              autoApplied.confidence = recipe.confidence;
+              autoApplied.overrideHint = 'Pass applyRecipe:false or call figma_set_variant to differ.';
+              if (failedProps.length > 0) {
+                autoApplied.failed = failedProps;
+                hints.push(`Auto-apply FAILED for: ${failedProps.join(', ')} — NOT counted as a replay saving, logged to failureLog.`);
+              }
+              hints.push(Object.keys(succeededProps).length > 0
+                ? `Auto-applied variant config from ${recipe.confidence} recipe: ${JSON.stringify(succeededProps)}. Override with figma_set_variant if this instance needs different values.`
+                : 'Recipe variant auto-apply produced no successful properties — set variants manually.');
+            } catch (_) {
+              hints.push('Recipe variant auto-apply failed — set variants manually.');
+            }
+          } else if (Object.keys(skipped).length > 0) {
+            autoApplied.skipped = skipped;
+            autoApplied.confidence = recipe.confidence;
+            hints.push('All stored variant defaults were invalid against the current DS schema — skipped. Set variants manually.');
           }
         }
       }
       hints.push('After inserting: override ALL text with figma_set_component_text, set semantic properties, configure icons, hide unused slots.');
 
-      // Self-heal: if insert succeeded and recipe was stale, clear the stale flag
-      if (recipe && recipe.stale && nodeId) {
-        knowledgeStore.clearRecipeStale(args.componentKey);
-        hints.push(`Stale recipe cleared for "${recipe.names?.[0] || args.componentKey}" — component still exists in DS.`);
+      // Self-heal (fixes defect H): a successful insert clears
+      // component_removed staleness ONLY — variant staleness is untested at
+      // insert time and clears exclusively via a clean, validated
+      // figma_set_variant apply (see that tool below). Always clears via the
+      // recipe's ACTUAL store key.
+      if (recipe && recipe.stale && recipe.staleReason === 'component_removed' && nodeId && recipeStoreKey) {
+        knowledgeStore.clearRecipeStale(recipeStoreKey);
+        hints.push(`Stale recipe cleared for "${recipe.names?.[0] || recipeStoreKey}" — component still exists in DS.`);
+      }
+
+      // Gap lifecycle (spec §4.5/§5.4, defect L): the discovery-time diff
+      // (status.js) already marks a matching gap `resolved-pending` when the
+      // DS gains a name-matching component. The gap becomes fully `resolved`
+      // — and stops generating recommendations — on the FIRST successful
+      // insert of the resolving component, checked here by componentKey
+      // first (the reliable link left by that diff), then by a word-boundary
+      // name match for gaps that predate this component ever being diffed.
+      if (nodeId && knowledgeStore) {
+        const insertedName = result?.name || args.name || '';
+        for (const [gapName, gap] of Object.entries(knowledgeStore.data.gaps || {})) {
+          if (gap.status === 'resolved') continue;
+          const matchesByKey = gap.resolvedBy && gap.resolvedBy === args.componentKey;
+          const matchesByName = !matchesByKey && gap.status === 'open' && (() => {
+            const searchTerms = gap.searchTerms && gap.searchTerms.length > 0 ? gap.searchTerms : [gapName];
+            return searchTerms.some(t => wordBoundaryMatch(t, insertedName)) || wordBoundaryMatch(gapName, insertedName);
+          })();
+          if (matchesByKey || matchesByName) {
+            knowledgeStore.markGapResolved(gapName);
+          }
+        }
       }
 
       // Track nodeId → componentKey for variant config capture
@@ -530,9 +698,64 @@ function register(server, context) {
         session._variantConfigs.set(compKey, { ...existing, ...args.properties });
       }
 
+      // Inspect appliedProperties for per-key errors (spec §4.4/§4.6, defect
+      // B/H) — this is the manual apply path a stale VARIANT recipe self-
+      // heals through (auto-apply refuses to fire while stale, so a clean,
+      // fully-validated manual re-set is the only way it clears — never
+      // just because SOME insert succeeded).
+      const appliedProperties = result?.appliedProperties || {};
+      const failedProps = Object.entries(appliedProperties)
+        .filter(([, v]) => v && typeof v === 'object' && 'error' in v)
+        .map(([k]) => k);
+      const cleanApply = failedProps.length === 0 && Object.keys(appliedProperties).length > 0;
+
+      // Per-node final-variant tracking (spec §5.1) — only successfully-
+      // applied properties count toward this node's final observed state;
+      // a later correction on the same node overwrites the earlier value
+      // rather than creating a second, competing observation.
+      if (args.nodeId && args.properties) {
+        const successfulProps = Object.fromEntries(
+          Object.entries(args.properties).filter(([k]) => !failedProps.includes(k))
+        );
+        if (Object.keys(successfulProps).length > 0) {
+          if (!session._nodeVariantConfigs) session._nodeVariantConfigs = new Map();
+          const existingNodeProps = session._nodeVariantConfigs.get(args.nodeId) || {};
+          session._nodeVariantConfigs.set(args.nodeId, { ...existingNodeProps, ...successfulProps });
+        }
+      }
+
+      if (compKey && knowledgeStore) {
+        if (failedProps.length > 0) {
+          for (const prop of failedProps) knowledgeStore.recordReplayFailure(compKey, prop);
+        } else if (cleanApply) {
+          for (const prop of Object.keys(appliedProperties)) knowledgeStore.recordReplaySuccess(compKey, prop);
+
+          const recipe = knowledgeStore.getComponent(compKey);
+          if (recipe && recipe.stale && (recipe.staleReason === 'variant_property_removed' || recipe.staleReason === 'variant_value_removed')) {
+            // Self-heal only when EVERY stored property this recipe tracks
+            // was covered by this clean apply — a partial set (e.g. only
+            // "Size" when the recipe also tracks "Color") isn't sufficient
+            // evidence the whole recipe is valid again.
+            const trackedProps = new Set([
+              ...Object.keys(recipe.defaultVariants || {}),
+              ...Object.keys(recipe.variantStats || {}),
+            ]);
+            const coveredAll = [...trackedProps].every((p) => Object.prototype.hasOwnProperty.call(appliedProperties, p));
+            if (coveredAll) {
+              knowledgeStore.clearRecipeStale(compKey);
+              knowledgeStore.restoreAfterCleanReplay(compKey);
+            }
+          } else {
+            knowledgeStore.restoreAfterCleanReplay(compKey);
+          }
+        }
+      }
+
       return {
         ...result,
-        hint: 'Variant set. Use figma_get_component_variants to see all available variants for this component set.',
+        hint: failedProps.length > 0
+          ? `Variant set with per-key error(s): ${failedProps.join(', ')} — not treated as a successful replay.`
+          : 'Variant set. Use figma_get_component_variants to see all available variants for this component set.',
       };
     }
   );
