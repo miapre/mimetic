@@ -7,6 +7,76 @@ const { ChartCalculator } = require('../charts/calculator');
 const { PatternMatcher } = require('../knowledge/patterns');
 const { compileNoGoods } = require('../knowledge/compiler');
 
+// ── Invented example values for _chartColorHint ──────────────────────────
+// Used ONLY when the DS cache has no match for a given field — i.e. before
+// mimic_discover_ds has run, or when the discovered DS doesn't expose an
+// equivalent variable/style. These paths are INVENTED placeholders that
+// illustrate a plausible path shape (collection/variable naming) — they
+// are NOT real paths from any actual design system, and every field they
+// cover is clearly labeled as an example via _exampleFields below. Callers
+// are told to verify with figma_read_variable_values / figma_list_text_styles
+// before binding to them.
+const EXAMPLE_PALETTE = [
+  'Colors/Data/series-blue-500',
+  'Colors/Data/series-purple-500',
+  'Colors/Data/series-teal-500',
+  'Colors/Data/series-cyan-500',
+  'Colors/Data/series-pink-500',
+  'Colors/Data/series-amber-500',
+  'Colors/Data/series-indigo-500',
+  'Colors/Data/series-lime-500',
+];
+const EXAMPLE_GRID_COLOR = 'Colors/Border/subtle';
+const EXAMPLE_LABEL_COLOR = 'Colors/Text/muted';
+const EXAMPLE_LABEL_STYLE = 'Text Small/Regular';
+
+/**
+ * Builds the `_chartColorHint` returned by mimic_compute_chart. Resolves
+ * every field from the discovered DS cache when possible; falls back to
+ * labeled, INVENTED example paths (illustrating shape only, not a real DS)
+ * field-by-field when the cache has no match — never presenting an
+ * example as if it were a real path in the user's file.
+ */
+function buildChartColorHint(dsCache) {
+  const palette = dsCache && dsCache.findPalette ? dsCache.findPalette(8) : null;
+  const gridColor = dsCache && dsCache.findVariable ? dsCache.findVariable('border', 'STROKE', 'secondary') : null;
+  const labelColor = dsCache && dsCache.findVariable ? dsCache.findVariable('text', 'TEXT_FILL', 'tertiary') : null;
+  const labelStyleKey = dsCache && dsCache.findTextStyle ? dsCache.findTextStyle('xs', 'Medium') : null;
+  const labelStyleEntry = labelStyleKey && dsCache.getTextStyle ? dsCache.getTextStyle(labelStyleKey) : null;
+  const labelStyleName = labelStyleEntry && labelStyleEntry.name ? labelStyleEntry.name : null;
+
+  const usedExample = {
+    suggestedPalette: !palette,
+    gridColor: !gridColor,
+    labelColor: !labelColor,
+    dataLabelStyle: !labelStyleName,
+  };
+  const exampleFields = Object.keys(usedExample).filter((k) => usedExample[k]);
+  const allExample = exampleFields.length === Object.keys(usedExample).length;
+
+  const message = allExample
+    ? 'No DS has been discovered yet (or the cache has no matching variables/styles). Every path below is an INVENTED EXAMPLE illustrating path shape only — NOT a path in your file and not from any real design system. Run mimic_discover_ds, then use figma_read_variable_values / figma_list_text_styles to find the real paths before binding anything.'
+    : exampleFields.length > 0
+      ? `After creating this chart with figma_create_svg, check the configurationChecklist in the response — it lists every unbound child node that MUST receive DS variable bindings. Pass layoutSizingHorizontal: "FILL" to figma_create_svg so the chart stretches to the container width. NOTE: ${exampleFields.join(', ')} had no match in your discovered DS cache and fall back to an INVENTED EXAMPLE path (see _exampleFields) — verify against figma_read_variable_values / figma_list_text_styles before binding those specific fields.`
+      : 'After creating this chart with figma_create_svg, check the configurationChecklist in the response — it lists every unbound child node that MUST receive DS variable bindings. Pass layoutSizingHorizontal: "FILL" to figma_create_svg so the chart stretches to the container width. suggestedPalette/gridColor/labelColor/dataLabelStyle below were resolved from your discovered DS.';
+
+  return {
+    message,
+    suggestedPalette: palette || EXAMPLE_PALETTE,
+    colorRules: [
+      'NEVER use Brand, Success, Warning, or Error colors for chart data — these are semantic and reserved.',
+      'Brand is ONLY for links and brand-related elements.',
+      'Success/Warning/Error are ONLY for status indicators, validation states, and alerts.',
+      'For charts, use neutral/categorical utility colors from your DS that are distinct from its Brand/Success/Warning/Error hues.',
+      'If you need more colors than suggestedPalette provides, extend with other non-semantic utility colors from your DS. Avoid hues that resemble Success (green), Error (red), and Warning (orange).',
+    ],
+    gridColor: gridColor || EXAMPLE_GRID_COLOR,
+    labelColor: labelColor || EXAMPLE_LABEL_COLOR,
+    dataLabelStyle: labelStyleName || EXAMPLE_LABEL_STYLE,
+    ...(exampleFields.length > 0 ? { _exampleFields: exampleFields } : {}),
+  };
+}
+
 function register(server, context) {
   const { registerTool, knowledgeStore, buildManifest, dsCache, session, advancePhase, bridge } = context;
 
@@ -1200,42 +1270,20 @@ function register(server, context) {
       // ── Chart build rules ────────────────────────────────────────
       // These rules are returned with EVERY chart computation so the LLM
       // always knows the correct build approach — no knowledge store needed.
-      result._chartColorHint = {
-        message: 'After creating this chart with figma_create_svg, check the configurationChecklist in the response — it lists every unbound child node that MUST receive DS variable bindings. Pass layoutSizingHorizontal: "FILL" to figma_create_svg so the chart stretches to the container width.',
-        suggestedPalette: [
-          'Component colors/Utility/Indigo/utility-indigo-500',
-          'Component colors/Utility/Purple/utility-purple-500',
-          'Component colors/Utility/Blue/utility-blue-500',
-          'Component colors/Utility/Cyan/utility-cyan-500',
-          'Component colors/Utility/Pink/utility-pink-500',
-          'Component colors/Utility/Orange/utility-orange-500',
-          'Component colors/Utility/Blue light/utility-blue-light-500',
-          'Component colors/Utility/Fuchsia/utility-fuchsia-500',
-        ],
-        colorRules: [
-          'NEVER use Brand, Success, Warning, or Error colors for chart data — these are semantic and reserved.',
-          'Brand is ONLY for links and brand-related elements.',
-          'Success/Warning/Error are ONLY for status indicators, validation states, and alerts.',
-          'For charts, use neutral utility colors: Indigo, Purple, Blue, Cyan, Pink, Orange, Blue light, Fuchsia.',
-          'If you need more than 8 colors, extend with other non-semantic utility colors. Avoid green, red, and orange as they resemble Success, Error, and Warning.',
-        ],
-        gridColor: 'Colors/Border/border-secondary',
-        labelColor: 'Colors/Text/text-tertiary (600)',
-        dataLabelStyle: 'Text xs/Medium',
-      };
+      result._chartColorHint = buildChartColorHint(dsCache);
 
       result._chartBuildRules = {
         preferNative: [
           'PREFER native Figma primitives over SVGs for charts. Bar charts, horizontal bars, and stacked bars work perfectly with auto-layout frames + rectangles.',
-          'Bar charts: HORIZONTAL chart area (FILL, FIXED height) → individual bar rects with layoutSizingHorizontal=FILL so they distribute evenly across the container width. Each bar gets a fixed height proportional to its value, DS fill, radius-xs. Labels row below with SPACE_BETWEEN alignment.',
+          'Bar charts: HORIZONTAL chart area (FILL, FIXED height) → individual bar rects with layoutSizingHorizontal=FILL so they distribute evenly across the container width. Each bar gets a fixed height proportional to its value, DS fill, and your DS\'s smallest corner-radius token (or a small raw radius if the DS has none). Labels row below with SPACE_BETWEEN alignment.',
           'Donut charts: NONE-direction frame (fixed WxH) with overlapping create_ellipse nodes using arcData (startingAngle, endingAngle, innerRadius 0-1 ratio). Legend as auto-layout below.',
-          'Horizontal bars: per row HORIZONTAL frame (FILL, HUG) → label text (fixed width) + bar rectangle (fixed width proportional to value, 8px height, radius-full).',
+          'Horizontal bars: per row HORIZONTAL frame (FILL, HUG) → label text (fixed width) + bar rectangle (fixed width proportional to value, 8px height, full/pill corner radius from your DS or a large raw radius if none exists).',
           'Rectangles ALWAYS respect width/height params. Use them for spacers, bars, and tracks — not frames.',
         ],
         lineCharts: [
           'CRITICAL: Line charts CANNOT use SVG <path stroke="..."> — Figma converts stroked paths into filled shapes, producing thick blobs instead of thin lines.',
           'Build line charts natively: NONE-direction frame (fixed plotWidth × plotHeight) containing:',
-          '1. Grid lines: horizontal create_rectangle nodes (FILL width × 1px height, border-secondary fill) positioned at each yAxis.ticks[].py',
+          '1. Grid lines: horizontal create_rectangle nodes (FILL width × 1px height, filled with your DS\'s border/divider color variable) positioned at each yAxis.ticks[].py',
           '2. Area fill (optional): a SINGLE SVG <path> using ONLY fill (rgba color, low opacity) — a closed polygon from data points down to the baseline. NO stroke attribute.',
           '3. Data line: a SINGLE SVG <path> with a THIN filled shape (2-3px thick ribbon) instead of stroke. Build the ribbon by offsetting the path ±1.5px vertically and closing it.',
           '4. Data points: create_ellipse at each point (6×6px, DS fill) positioned at px/py coordinates.',
@@ -1244,10 +1292,10 @@ function register(server, context) {
         ],
         donutLegend: [
           'CRITICAL: Donut/pie legends MUST use colored indicators — NEVER use ● characters in text nodes (they inherit text color, not segment color).',
-          'Build each legend item as: HORIZONTAL frame (HUG, HUG, gap=spacing-xs, counterAxisAlignItems=CENTER) containing:',
-          '1. Color dot: create_rectangle (8×8px, radius-full, fill bound to same DS color as the chart segment)',
-          '2. Label text: native text node with DS text style and text-tertiary color',
-          'Wrap all legend items in a HORIZONTAL frame with gap=spacing-xl.',
+          'Build each legend item as: HORIZONTAL frame (HUG, HUG, a small DS spacing gap, counterAxisAlignItems=CENTER) containing:',
+          '1. Color dot: create_rectangle (8×8px, full/pill corner radius, fill bound to same DS color as the chart segment)',
+          '2. Label text: native text node with DS text style and a tertiary/muted DS text color',
+          'Wrap all legend items in a HORIZONTAL frame with a larger DS spacing gap between entries.',
         ],
         radarCharts: [
           'Radar charts have LIMITED fidelity in Figma because SVG strokes become filled shapes.',

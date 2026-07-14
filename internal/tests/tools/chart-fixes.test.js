@@ -147,14 +147,36 @@ describe('chart.js — line chart DS binding (Bug 1)', () => {
 });
 
 describe('chart.js — cornerRadiusVariable on legend dots (Bug 2)', () => {
-  let handlers, bridge;
+  let handlers, bridge, dsCache;
 
   beforeEach(() => {
-    ({ handlers, bridge } = createTestContext());
+    ({ handlers, bridge, dsCache } = createTestContext());
     bridge.setResponse('create_svg', autoUnboundSvgResponse);
   });
 
-  it('donut legend dots use cornerRadiusVariable, never radiusVariable', async () => {
+  it('donut legend dots never use radiusVariable, and fall back to a raw cornerRadius when the DS cache has no radius-full match (empty cache — DS-agnostic default)', async () => {
+    // Empty dsCache: 'radius-full' is a common naming convention, not a
+    // universal one — the tool must not assume it exists (audit finding B14).
+    await handlers.mimic_build_chart({
+      parentId: 'p-1',
+      chartType: 'donut',
+      title: 'Share',
+      data: [{ label: 'A', value: 60 }, { label: 'B', value: 40 }],
+      dimensions: { outerRadius: 80, innerRadius: 0.6 },
+    });
+
+    const dotMsgs = bridge.getMessages('create_rectangle').filter(m => m.payload.name.startsWith('Dot:'));
+    assert.ok(dotMsgs.length > 0, 'should create legend dots');
+    for (const msg of dotMsgs) {
+      assert.strictEqual(msg.payload.radiusVariable, undefined, 'plugin does not understand radiusVariable');
+      assert.strictEqual(msg.payload.cornerRadiusVariable, undefined, 'must not send an unvalidated path when the DS cache has no exact match');
+      assert.strictEqual(typeof msg.payload.cornerRadius, 'number', 'must fall back to a raw radius value instead');
+    }
+  });
+
+  it('donut legend dots use cornerRadiusVariable: radius-full when the DS cache has an exact validated match', async () => {
+    dsCache.addVariable('radius-full', { key: 'var-radius-full', category: 'radius' });
+
     await handlers.mimic_build_chart({
       parentId: 'p-1',
       chartType: 'donut',
@@ -168,10 +190,36 @@ describe('chart.js — cornerRadiusVariable on legend dots (Bug 2)', () => {
     for (const msg of dotMsgs) {
       assert.strictEqual(msg.payload.radiusVariable, undefined, 'plugin does not understand radiusVariable');
       assert.strictEqual(msg.payload.cornerRadiusVariable, 'radius-full');
+      assert.strictEqual(msg.payload.cornerRadius, undefined, 'must not send both a variable path and a raw value');
     }
   });
 
-  it('shared legend (radar, multi-series) dots use cornerRadiusVariable, never radiusVariable', async () => {
+  it('shared legend (radar, multi-series) dots: never radiusVariable, raw cornerRadius fallback with an empty DS cache', async () => {
+    await handlers.mimic_build_chart({
+      parentId: 'p-1',
+      chartType: 'radar',
+      title: 'Comparison',
+      data: [
+        { label: 'Speed', values: [3, 4] },
+        { label: 'Power', values: [5, 2] },
+        { label: 'Range', values: [2, 3] },
+      ],
+      seriesNames: ['Current', 'Target'],
+      dimensions: { radius: 100 },
+    });
+
+    const dotMsgs = bridge.getMessages('create_rectangle').filter(m => m.payload.name.startsWith('Dot:'));
+    assert.ok(dotMsgs.length > 0, 'should create legend dots');
+    for (const msg of dotMsgs) {
+      assert.strictEqual(msg.payload.radiusVariable, undefined, 'plugin does not understand radiusVariable');
+      assert.strictEqual(msg.payload.cornerRadiusVariable, undefined);
+      assert.strictEqual(typeof msg.payload.cornerRadius, 'number');
+    }
+  });
+
+  it('shared legend (radar, multi-series) dots use cornerRadiusVariable: radius-full when the DS cache has an exact validated match', async () => {
+    dsCache.addVariable('radius-full', { key: 'var-radius-full', category: 'radius' });
+
     await handlers.mimic_build_chart({
       parentId: 'p-1',
       chartType: 'radar',

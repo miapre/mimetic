@@ -266,8 +266,12 @@ class DsCache {
       const lp = path.toLowerCase();
       // Skip semantic colors (text, background, border)
       if (lp.includes('/text/') || lp.includes('/background/') || lp.includes('/bg/') || lp.includes('/border/')) continue;
-      // Prefer utility/component colors ending in 500
-      if (lp.includes('500') || lp.includes('primary') || lp.includes('brand')) {
+      // Skip brand/status colors — reserved for their semantic purpose,
+      // never for chart data (brand reads as emphasis; success/warning/
+      // error read as status).
+      if (/brand|success|warning|error|danger|destructive/.test(lp)) continue;
+      // Prefer mid-ramp colors (…-500) and primary ramp entries
+      if (lp.includes('500') || lp.includes('primary')) {
         const base = lp.replace(/\d+$/, '');
         if (!seen.has(base)) {
           seen.add(base);

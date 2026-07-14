@@ -12,21 +12,28 @@
 
 const { ChartCalculator } = require('../charts/calculator');
 
-// ── Hardcoded defaults (LayerLens Theme) ─────────────────────
-// These are used ONLY when the DS cache doesn't have matches
-// and the caller doesn't provide overrides.
+// ── Generic fallback defaults ─────────────────────────────────
+// These are used ONLY when the DS cache doesn't have matches and the
+// caller doesn't provide overrides — i.e. before mimic_discover_ds has
+// run, or when the discovered DS has no equivalent variable/style.
+// The paths below are INVENTED placeholders that illustrate a plausible
+// path shape (collection/variable naming) — they are not real paths from
+// any actual design system and are not assumed to exist in the user's
+// file. See usedFallbackPalette / _fallbackPaletteNote and the
+// resolveToken() validation below, which never binds a path that wasn't
+// actually confirmed in the DS cache.
 // Brand, Success, Warning, and Error are semantic colors — colorRules ban
 // them from chart data (see mimic_compute_chart's _chartColorHint). This
-// fallback only ever uses neutral/categorical utility hues.
+// fallback only ever uses neutral/categorical data-series hues.
 const FALLBACK_COLORS = [
-  'Component colors/Utility/Indigo/utility-indigo-500',
-  'Component colors/Utility/Purple/utility-purple-500',
-  'Component colors/Utility/Blue/utility-blue-500',
-  'Component colors/Utility/Cyan/utility-cyan-500',
-  'Component colors/Utility/Pink/utility-pink-500',
-  'Component colors/Utility/Orange/utility-orange-500',
-  'Component colors/Utility/Blue light/utility-blue-light-500',
-  'Component colors/Utility/Fuchsia/utility-fuchsia-500',
+  'Colors/Data/series-blue-500',
+  'Colors/Data/series-purple-500',
+  'Colors/Data/series-teal-500',
+  'Colors/Data/series-cyan-500',
+  'Colors/Data/series-pink-500',
+  'Colors/Data/series-amber-500',
+  'Colors/Data/series-indigo-500',
+  'Colors/Data/series-lime-500',
 ];
 // Chart builds use generous timeouts: large libraries (5000+ components)
 // cause slow plugin processing that exceeds the default 120s bridge timeout.
@@ -34,11 +41,56 @@ const CHART_TIMEOUT_BASE = 180000;
 const CHART_TIMEOUT_PER_OP = 1500;
 const chartTimeout = (opCount) => CHART_TIMEOUT_BASE + opCount * CHART_TIMEOUT_PER_OP;
 
-const FALLBACK_GRID_COLOR = 'Colors/Border/border-secondary';
-const FALLBACK_LABEL_COLOR = 'Colors/Text/text-tertiary (600)';
-const FALLBACK_LABEL_STYLE = 'Text xs/Medium';
-const FALLBACK_TITLE_STYLE = 'Text sm/Semibold';
-const FALLBACK_TITLE_COLOR = 'Colors/Text/text-primary (900)';
+const FALLBACK_GRID_COLOR = 'Colors/Border/subtle';
+const FALLBACK_LABEL_COLOR = 'Colors/Text/muted';
+const FALLBACK_LABEL_STYLE = 'Text Small/Regular';
+const FALLBACK_TITLE_STYLE = 'Text Medium/Semibold';
+const FALLBACK_TITLE_COLOR = 'Colors/Text/primary';
+
+// ── Spacing/radius token resolution ──────────────────────────
+// Chart layout needs a handful of spacing/radius values (gaps, padding,
+// corner radius). These token NAMES ('spacing-lg', 'radius-full', ...)
+// follow one common DS naming convention, not a universal standard —
+// sending them unconditionally to the plugin would silently fail to bind
+// (or worse, bind to an unrelated variable of the same name) on any DS
+// that names things differently. resolveToken() only uses the token path
+// when the DS cache has an EXACT match (validated, not assumed);
+// otherwise it falls back to a raw pixel value so the plugin gets
+// something that renders correctly even with no variable binding, instead
+// of a path that's guaranteed to fail.
+const SPACING_RAW_PX = { 'spacing-xs': 4, 'spacing-sm': 8, 'spacing-lg': 16, 'spacing-xl': 24 };
+const RADIUS_RAW_PX = { 'radius-xs': 4, 'radius-full': 9999 };
+
+function resolveToken(dsCache, tokenPath, expectedCategory, rawValue) {
+  const cached = dsCache && dsCache.getVariable ? dsCache.getVariable(tokenPath) : null;
+  const valid = !!cached && (!expectedCategory || !cached.category || cached.category === expectedCategory);
+  return valid
+    ? { variable: tokenPath, raw: rawValue, usedFallback: false }
+    : { variable: null, raw: rawValue, usedFallback: true };
+}
+
+/**
+ * Resolve the spacing/radius tokens used throughout chart building against
+ * the DS cache. Returns an object of { variable|null, raw, usedFallback }
+ * entries — spread with gapParam/paddingParam/cornerRadiusParam below so
+ * callers never have to choose between *Variable and the raw prop inline.
+ */
+function resolveChartTokens(dsCache) {
+  return {
+    spacingXs: resolveToken(dsCache, 'spacing-xs', 'spacing', SPACING_RAW_PX['spacing-xs']),
+    spacingSm: resolveToken(dsCache, 'spacing-sm', 'spacing', SPACING_RAW_PX['spacing-sm']),
+    spacingLg: resolveToken(dsCache, 'spacing-lg', 'spacing', SPACING_RAW_PX['spacing-lg']),
+    spacingXl: resolveToken(dsCache, 'spacing-xl', 'spacing', SPACING_RAW_PX['spacing-xl']),
+    radiusXs: resolveToken(dsCache, 'radius-xs', 'radius', RADIUS_RAW_PX['radius-xs']),
+    radiusFull: resolveToken(dsCache, 'radius-full', 'radius', RADIUS_RAW_PX['radius-full']),
+  };
+}
+
+// Spread helpers: emit the *Variable param when the DS cache validated the
+// token, otherwise emit the raw numeric prop (never both, never a guess).
+const gapParam = (t) => (t.variable ? { gapVariable: t.variable } : { gap: t.raw });
+const paddingParam = (t) => (t.variable ? { paddingVariable: t.variable } : { padding: t.raw });
+const cornerRadiusParam = (t) => (t.variable ? { cornerRadiusVariable: t.variable } : { cornerRadius: t.raw });
 
 /**
  * Resolve chart theme from DS cache with optional overrides.
@@ -152,6 +204,11 @@ function register(server, context) {
       });
       const palette = theme.palette;
 
+      // Resolve spacing/radius tokens against the DS cache (validated, not
+      // assumed) — attached to theme so every builder function below can
+      // read theme.tokens.* without a signature change.
+      theme.tokens = resolveChartTokens(dsCache);
+
       const results = {
         totalOperations: 0,
         failures: [],
@@ -222,8 +279,8 @@ function register(server, context) {
           direction: 'VERTICAL',
           layoutSizingHorizontal: 'FILL',
           layoutSizingVertical: 'HUG',
-          paddingVariable: 'spacing-xl',
-          gapVariable: 'spacing-lg',
+          ...paddingParam(theme.tokens.spacingXl),
+          ...gapParam(theme.tokens.spacingLg),
         });
         cardId = cardResult?.nodeId;
         op();
@@ -294,6 +351,11 @@ function register(server, context) {
         ...(theme.usedFallbackPalette ? {
           _fallbackPaletteNote: 'No colors were passed and the DS cache had no categorical palette match, so built-in neutral fallback colors were used (never Brand/Success/Warning/Error — those are reserved semantic colors banned from chart data).',
         } : {}),
+        ...(Object.values(theme.tokens).some(t => t.usedFallback) ? {
+          _spacingRadiusFallbackNote: 'The DS cache had no exact match for: ' +
+            Object.entries(theme.tokens).filter(([, t]) => t.usedFallback).map(([name, t]) => `${name} (used ${t.raw}px raw, no variable bound)`).join(', ') +
+            '. This chart\'s layout still renders correctly, but those gaps/corners aren\'t bound to a DS variable. Check figma_read_variable_values for your DS\'s actual spacing/radius variable names.',
+        } : {}),
         hint: results.failures.length > 0
           ? `Chart "${title}" built with ${totalElements} elements (${results.failures.length} warnings). Check failures.`
           : `Chart "${title}" built successfully: ${totalElements} elements in ${results.totalOperations} bridge operations.`,
@@ -326,7 +388,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
       layoutSizingHorizontal: 'FILL',
       height: chartHeight,
       layoutSizingVertical: 'FIXED',
-      gapVariable: 'spacing-lg',
+      ...gapParam(theme.tokens.spacingLg),
     });
     chartBodyId = r?.nodeId;
     op();
@@ -384,7 +446,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'FILL',
       layoutSizingVertical: 'FILL',
-      gapVariable: 'spacing-sm',
+      ...gapParam(theme.tokens.spacingSm),
     });
     barsFrameId = r?.nodeId;
     op();
@@ -421,7 +483,7 @@ async function buildBarChart(collector, bridge, cardId, geometry, palette, dimen
         height: Math.max(2, Math.round(bar.height)),
         layoutSizingHorizontal: 'FILL',
         fillVariable: color,
-        cornerRadiusVariable: 'radius-xs',
+        ...cornerRadiusParam(theme.tokens.radiusXs),
       });
       op();
       results.elements.rectangles++;
@@ -519,7 +581,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
       direction: 'VERTICAL',
       layoutSizingHorizontal: 'FILL',
       layoutSizingVertical: 'HUG',
-      gapVariable: 'spacing-lg',
+      ...gapParam(theme.tokens.spacingLg),
       counterAxisAlignItems: 'CENTER',
     });
     donutAreaId = r?.nodeId;
@@ -583,7 +645,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'HUG',
       layoutSizingVertical: 'HUG',
-      gapVariable: 'spacing-xl',
+      ...gapParam(theme.tokens.spacingXl),
       primaryAxisAlignItems: 'CENTER',
     });
     legendFrameId = r?.nodeId;
@@ -607,7 +669,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
           direction: 'HORIZONTAL',
           layoutSizingHorizontal: 'HUG',
           layoutSizingVertical: 'HUG',
-          gapVariable: 'spacing-xs',
+          ...gapParam(theme.tokens.spacingXs),
           counterAxisAlignItems: 'CENTER',
         });
         itemId = r?.nodeId;
@@ -618,7 +680,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
         continue;
       }
 
-      // Color dot (rectangle with radius-full)
+      // Color dot (full/pill radius, DS-validated or raw fallback)
       try {
         await collector.send('create_rectangle', {
           parentId: itemId,
@@ -626,7 +688,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
           width: 8,
           height: 8,
           fillVariable: color,
-          cornerRadiusVariable: 'radius-full',
+          ...cornerRadiusParam(theme.tokens.radiusFull),
         });
         op();
         results.elements.rectangles++;
@@ -912,7 +974,7 @@ async function buildRadarChart(collector, bridge, cardId, geometry, palette, ser
       direction: 'VERTICAL',
       layoutSizingHorizontal: 'FILL',
       layoutSizingVertical: 'HUG',
-      gapVariable: 'spacing-lg',
+      ...gapParam(theme.tokens.spacingLg),
       counterAxisAlignItems: 'CENTER',
     });
     radarAreaId = r?.nodeId;
@@ -1054,7 +1116,7 @@ async function buildLegend(collector, bridge, parentId, labels, palette, results
       direction: 'HORIZONTAL',
       layoutSizingHorizontal: 'HUG',
       layoutSizingVertical: 'HUG',
-      gapVariable: 'spacing-xl',
+      ...gapParam(theme.tokens.spacingXl),
       primaryAxisAlignItems: 'CENTER',
     });
     legendFrameId = r?.nodeId;
@@ -1077,7 +1139,7 @@ async function buildLegend(collector, bridge, parentId, labels, palette, results
         direction: 'HORIZONTAL',
         layoutSizingHorizontal: 'HUG',
         layoutSizingVertical: 'HUG',
-        gapVariable: 'spacing-xs',
+        ...gapParam(theme.tokens.spacingXs),
         counterAxisAlignItems: 'CENTER',
       });
       itemId = r?.nodeId;
@@ -1096,7 +1158,7 @@ async function buildLegend(collector, bridge, parentId, labels, palette, results
         width: 8,
         height: 8,
         fillVariable: color,
-        cornerRadiusVariable: 'radius-full',
+        ...cornerRadiusParam(theme.tokens.radiusFull),
       });
       op();
       results.elements.rectangles++;

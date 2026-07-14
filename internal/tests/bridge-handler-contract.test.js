@@ -112,6 +112,15 @@ describe('Bridge <-> plugin handler contract', () => {
     );
   });
 
+  it('regression: preload_fonts (B14 — DS-agnostic font pre-warm) is registered', () => {
+    const registered = collectRegisteredHandlers();
+    assert.ok(
+      registered.has('preload_fonts'),
+      'plugin/code.js must define handlers.preload_fonts — the generic, non-Inter-only ' +
+        'font pre-warm entry point (see internal/tests/plugin-font-preload.test.js for behavior coverage)'
+    );
+  });
+
   it('sanity: the extraction regex actually finds known handlers (guards against a silently broken parser)', () => {
     const registered = collectRegisteredHandlers();
     assert.ok(registered.has('set_layout_sizing'));

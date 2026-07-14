@@ -18,6 +18,64 @@ var styleCache = new Map();
 /** @type {Map<string, Variable>} variable path → Variable object */
 var variableCache = new Map();
 
+/** @type {Set<string>} "family::style" keys already loaded via loadFontAsync this session */
+var loadedFontKeys = new Set();
+
+// ── Font Loading ───────────────────────────────────────────────────────────────
+// Startup only pre-warms Inter (see the figma.loadFontAsync calls near the
+// message dispatcher below) — that's a safe cold-start default, but any DS
+// whose components/text styles use a different font family fails on the
+// FIRST text node that isn't Inter, because Figma requires a font to be
+// loaded before you can set characters/fontName on a node that uses it.
+// ensureFontLoaded() closes that gap generically: it loads whatever font(s)
+// a given text node ACTUALLY needs (reading them off the node itself, so
+// this works for any DS, not just Inter), tolerating individual failures.
+
+function fontKey(fontName) {
+  return (fontName && fontName.family || '') + '::' + (fontName && fontName.style || '');
+}
+
+/** Loads a font once per session (deduped). Returns true/false, never throws. */
+async function loadFont(fontName) {
+  if (!fontName || !fontName.family) return false;
+  var key = fontKey(fontName);
+  if (loadedFontKeys.has(key)) return true;
+  try {
+    await figma.loadFontAsync(fontName);
+    loadedFontKeys.add(key);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Ensures every font a TEXT node's characters currently use is loaded
+ * before the caller mutates .characters/.fontName on it. Text nodes can
+ * carry more than one font across character ranges (mixed fontName) — all
+ * distinct fonts in the range are loaded. Best-effort: a font that fails
+ * to load (e.g. offline library) is skipped, not thrown — the subsequent
+ * .characters assignment will surface Figma's own error in that case.
+ */
+async function ensureFontLoaded(node) {
+  if (!node || node.type !== 'TEXT') return;
+  var fontName = node.fontName;
+  if (fontName === figma.mixed) {
+    var len = node.characters.length;
+    var seen = {};
+    for (var i = 0; i < len; i++) {
+      var fn = node.getRangeFontName(i, i + 1);
+      var key = fontKey(fn);
+      if (!seen[key]) {
+        seen[key] = true;
+        await loadFont(fn);
+      }
+    }
+  } else if (fontName) {
+    await loadFont(fontName);
+  }
+}
+
 // ── Type Coercion Helpers ─────────────────────────────────────────────────────
 // MCP protocol may deliver booleans as strings and arrays as JSON strings.
 
@@ -574,6 +632,58 @@ handlers.preload_variables = async function (payload) {
   return {
     preloadedVars: preloadedVars,
     variableCacheSize: variableCache.size,
+  };
+};
+
+/**
+ * handlers.preload_fonts — explicit, DS-agnostic font pre-warm.
+ *
+ * Accepts a list of { family, style } pairs (any font, not just Inter) and
+ * loads each via figma.loadFontAsync, deduped against loadedFontKeys and
+ * tolerating individual failures (a missing/uninstalled font is reported
+ * in `failed`, not thrown). Intended call site: after DS discovery caches
+ * text styles, the MCP server collects the distinct font families/styles
+ * those styles actually use and sends them here so every font the DS
+ * needs is warm before the first component text override — instead of
+ * only ever pre-warming Inter at cold start.
+ *
+ * NOTE (for whoever wires the MCP-side call): as of this change, the
+ * per-node ensureFontLoaded() helper above already loads whatever font an
+ * existing text node needs at the point of use (set_component_text,
+ * set_component_text_by_id, batch_set_component_text, set_text), so a
+ * missing preload_fonts call is no longer a hard failure — this handler
+ * is for shaving the latency of that first-use load, not correctness.
+ */
+handlers.preload_fonts = async function (payload) {
+  var fonts = coerceArray(payload.fonts) || [];
+  var loaded = [];
+  var failed = [];
+  var seen = {};
+
+  for (var i = 0; i < fonts.length; i++) {
+    var f = fonts[i] || {};
+    var family = f.family || f.fontFamily;
+    var style = f.style || f.fontStyle || 'Regular';
+    if (!family) continue;
+    var key = fontKey({ family: family, style: style });
+    if (seen[key]) continue;
+    seen[key] = true;
+
+    var ok = await loadFont({ family: family, style: style });
+    if (ok) {
+      loaded.push({ family: family, style: style });
+    } else {
+      failed.push({ family: family, style: style });
+    }
+  }
+
+  return {
+    requested: fonts.length,
+    loaded: loaded,
+    failed: failed,
+    loadedCount: loaded.length,
+    failedCount: failed.length,
+    loadedFontCacheSize: loadedFontKeys.size,
   };
 };
 
@@ -1470,7 +1580,7 @@ handlers.create_svg = function (payload) {
 
 // ── Stubs for Task 9 — Edit handlers ───────────────────────────────────────────
 
-handlers.set_component_text = function (payload) {
+handlers.set_component_text = async function (payload) {
   var node = figma.getNodeById(normalizeNodeId(payload.nodeId));
   if (!node) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check nodeId.' };
 
@@ -1512,6 +1622,7 @@ handlers.set_component_text = function (payload) {
     };
   }
 
+  await ensureFontLoaded(found);
   found.characters = content;
 
   // Optionally apply fill variable to the text
@@ -1532,7 +1643,7 @@ handlers.set_component_text = function (payload) {
   };
 };
 
-handlers.set_component_text_by_id = function (payload) {
+handlers.set_component_text_by_id = async function (payload) {
   var root = figma.getNodeById(normalizeNodeId(payload.nodeId));
   if (!root) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check component instance nodeId.' };
 
@@ -1564,6 +1675,7 @@ handlers.set_component_text_by_id = function (payload) {
   }
 
   var content = payload.content || payload.characters || '';
+  await ensureFontLoaded(found);
   found.characters = content;
 
   var bt = createBindingTracker();
@@ -1584,7 +1696,7 @@ handlers.set_component_text_by_id = function (payload) {
   };
 };
 
-handlers.batch_set_component_text = function (payload) {
+handlers.batch_set_component_text = async function (payload) {
   var node = figma.getNodeById(normalizeNodeId(payload.nodeId));
   if (!node) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check nodeId.' };
 
@@ -1625,6 +1737,7 @@ handlers.batch_set_component_text = function (payload) {
       continue;
     }
 
+    await ensureFontLoaded(found);
     found.characters = content;
 
     if (ov.fillVariable) {
@@ -1692,12 +1805,13 @@ handlers.set_variant = function (payload) {
   };
 };
 
-handlers.set_text = function (payload) {
+handlers.set_text = async function (payload) {
   var node = figma.getNodeById(normalizeNodeId(payload.nodeId));
   if (!node) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check nodeId.' };
   if (node.type !== 'TEXT') throw { error: 'INVALID_NODE_TYPE', property: 'nodeId', message: 'Node is not a text node: ' + node.type, available: [], recovery: 'Provide a TEXT nodeId.' };
 
   var content = payload.content || payload.characters || '';
+  await ensureFontLoaded(node);
   node.characters = content;
 
   return {
