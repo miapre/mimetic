@@ -121,6 +121,18 @@ describe('Bridge <-> plugin handler contract', () => {
     );
   });
 
+  it('regression: fill_slot / reset_slot (Figma Slots, GA June 2026) are registered', () => {
+    const registered = collectRegisteredHandlers();
+    assert.ok(
+      registered.has('fill_slot'),
+      'plugin/code.js must define handlers.fill_slot — src/tools/components.js\'s figma_fill_slot sends it'
+    );
+    assert.ok(
+      registered.has('reset_slot'),
+      'plugin/code.js must define handlers.reset_slot — src/tools/components.js\'s figma_reset_slot sends it'
+    );
+  });
+
   it('sanity: the extraction regex actually finds known handlers (guards against a silently broken parser)', () => {
     const registered = collectRegisteredHandlers();
     assert.ok(registered.has('set_layout_sizing'));

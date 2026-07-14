@@ -339,6 +339,15 @@ function register(server, context) {
         name: { type: 'string', description: 'Semantic name describing the HTML role (e.g., "Header Section", "Metrics Row", "Card: Revenue"). Never use generic names like "Frame".' },
         parentId: { type: 'string', description: 'Parent node ID. Omit for page-level.' },
         direction: { type: 'string', enum: ['HORIZONTAL', 'VERTICAL', 'NONE'], description: 'Auto-layout direction. Prefer HORIZONTAL or VERTICAL — NONE breaks portability. Use layoutPositioning ABSOLUTE for overlay children instead.' },
+        layoutMode: { type: 'string', enum: ['GRID'], description: 'Set to GRID to use CSS-grid-style layout (Grid automation, May 2026) instead of auto-layout. Requires gridRowCount/gridColumnCount. Errors clearly on Figma versions that do not support GRID layoutMode — fall back to direction HORIZONTAL/VERTICAL in that case.' },
+        gridRowCount: { type: 'number', description: 'Number of grid rows. Only used when layoutMode is GRID.' },
+        gridColumnCount: { type: 'number', description: 'Number of grid columns. Only used when layoutMode is GRID.' },
+        gridRowGap: { type: 'number', description: 'Raw row gap in pixels. Only used when layoutMode is GRID.' },
+        gridColumnGap: { type: 'number', description: 'Raw column gap in pixels. Only used when layoutMode is GRID.' },
+        gridRowGapVariable: { type: 'string', description: 'DS spacing variable path for GRID row gap.' },
+        gridColumnGapVariable: { type: 'string', description: 'DS spacing variable path for GRID column gap.' },
+        gridRowSpan: { type: 'number', description: 'When this frame is a child of a GRID-layoutMode parent, how many rows it should span.' },
+        gridColumnSpan: { type: 'number', description: 'When this frame is a child of a GRID-layoutMode parent, how many columns it should span.' },
         layoutPositioning: { type: 'string', enum: ['AUTO', 'ABSOLUTE'], description: 'Set to ABSOLUTE to position this frame as an overlay inside an auto-layout parent (out of flow but still contained). Use for grid lines, positioned labels, etc.' },
         width: { type: 'number', description: 'Fixed width in pixels.' },
         height: { type: 'number', description: 'Fixed height in pixels.' },
@@ -400,8 +409,10 @@ function register(server, context) {
       // stored layoutConfig, apply it as defaults for unspecified props.
       let layoutReplay;
       const prefix = getPatternPrefix(args.name);
+      let replayPattern;
       if (prefix && knowledgeStore) {
         const pattern = knowledgeStore.getPattern(prefix);
+        replayPattern = pattern;
         if (pattern?.layoutConfig && (pattern.confidence === 'confirmed' || pattern.confidence === 'verified')) {
           const replay = applyLayoutReplay(args, pattern.layoutConfig, knowledgeStore, prefix);
           if (Object.keys(replay.applied).length > 0) {
@@ -409,6 +420,38 @@ function register(server, context) {
             layoutReplay = replay.applied;
             session.replaySavings = (session.replaySavings || 0) + 1;
           }
+        }
+      }
+
+      // ── Pattern demotion signal (spec acceptance criterion 17) ──
+      // A caller who EXPLICITLY re-specifies a value for a property this
+      // pattern would otherwise auto-apply — even on a call where the
+      // replay itself didn't need to fire that particular property because
+      // it was already provided — is signaling the stored layoutConfig no
+      // longer matches intent for this prefix. Tracked per prefix at session
+      // level (explicitArgs, captured before ANY replay merge/mutation, so
+      // this reflects only what THIS call actually specified — same
+      // capture-pollution guard as _frameLayoutConfigs above). Only counted
+      // against confirmed/verified patterns (the same eligibility gate
+      // applyLayoutReplay itself uses) since a 'new' pattern was never
+      // actually being replayed in the first place. learning.js demotes the
+      // pattern at report time when >=2 instances of the SAME prefix
+      // correct it in this build.
+      if (replayPattern?.layoutConfig
+          && (replayPattern.confidence === 'confirmed' || replayPattern.confidence === 'verified')) {
+        const overrides = {};
+        for (const [key, storedValue] of Object.entries(replayPattern.layoutConfig)) {
+          const explicitValue = explicitArgs[key];
+          if (explicitValue !== undefined && explicitValue !== null && explicitValue !== storedValue) {
+            overrides[key] = explicitValue;
+          }
+        }
+        if (Object.keys(overrides).length > 0) {
+          if (!session._layoutReplayCorrections) session._layoutReplayCorrections = new Map();
+          const entry = session._layoutReplayCorrections.get(prefix) || { count: 0, config: {} };
+          entry.count++;
+          entry.config = { ...entry.config, ...overrides };
+          session._layoutReplayCorrections.set(prefix, entry);
         }
       }
 

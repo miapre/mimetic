@@ -93,6 +93,19 @@ function coerceArray(val) {
   return null;
 }
 
+// Component property keys (instance.componentProperties, component-set
+// componentPropertyDefinitions) carry a "#nodeId"-style uniqueness suffix
+// (e.g. "Label#12:3") that isn't part of the human-meaningful property
+// name and isn't present on variantGroupProperties keys. Strip it so a
+// property can be matched by name across these two different Plugin API
+// surfaces (needed for SLOT lookup and for merging property `type` onto
+// variantGroupProperties-derived entries).
+function stripPropSuffix(key) {
+  var k = String(key);
+  var idx = k.indexOf('#');
+  return idx === -1 ? k : k.slice(0, idx);
+}
+
 // ── Enforcement Gate ───────────────────────────────────────────────────────────
 
 function enforceText(params) {
@@ -394,6 +407,7 @@ function collectConfigurationHints(instance) {
   var textNodes = [];
   var booleanProperties = {};
   var variantProperties = {};
+  var slotProperties = [];
   var iconSlots = [];
 
   // Walk the instance to find overridable text and icon slots
@@ -421,7 +435,12 @@ function collectConfigurationHints(instance) {
 
   walk(instance);
 
-  // Collect all component properties (booleans + variants with current values)
+  // Collect all component properties (booleans + variants with current values,
+  // and — Figma Slots, GA June 2026 — SLOT-typed properties). instance.
+  // componentProperties is feature-detected implicitly: on Figma versions
+  // that predate Slots, no property in this object ever has type === 'SLOT',
+  // so slotProperties simply stays empty rather than requiring a separate
+  // capability check.
   try {
     var props = instance.componentProperties;
     if (props) {
@@ -431,6 +450,13 @@ function collectConfigurationHints(instance) {
         var prop = props[key];
         if (prop.type === 'BOOLEAN') {
           booleanProperties[key] = prop.value;
+        }
+        if (prop.type === 'SLOT') {
+          slotProperties.push({
+            key: key,
+            name: stripPropSuffix(key),
+            current: prop.value !== undefined ? prop.value : null,
+          });
         }
       }
     }
@@ -470,10 +496,34 @@ function collectConfigurationHints(instance) {
     // Not all instances have component sets
   }
 
+  // Attach property TYPE (VARIANT|BOOLEAN|TEXT|INSTANCE_SWAP|SLOT) onto each
+  // variantProperties entry, sourced from instance.componentProperties —
+  // which already carries `type` per property, keyed with the "#nodeId"
+  // suffix that variantGroupProperties keys lack (stripPropSuffix bridges
+  // the two). This is the live-instance path fingerprint.js's variant-
+  // schema hash relies on for VARIANT<->SLOT/BOOLEAN migration detection
+  // (see src/ds/fingerprint.js computeVariantSchemaHash); it's best-effort
+  // — a missing/unreadable componentProperties object just leaves `type`
+  // unset on the affected entries, matching pre-existing behavior.
+  try {
+    var typedProps = instance.componentProperties;
+    if (typedProps) {
+      var typedKeys = Object.keys(typedProps);
+      for (var ti = 0; ti < typedKeys.length; ti++) {
+        var rawKey = typedKeys[ti];
+        var baseName = stripPropSuffix(rawKey);
+        if (variantProperties[baseName] && typedProps[rawKey].type) {
+          variantProperties[baseName].type = typedProps[rawKey].type;
+        }
+      }
+    }
+  } catch (e3) { /* best-effort — type stays unset */ }
+
   return {
     textNodes: textNodes,
     booleanProperties: booleanProperties,
     variantProperties: variantProperties,
+    slotProperties: slotProperties,
     iconSlots: iconSlots,
   };
 }
@@ -708,6 +758,14 @@ handlers.discover_library_variables = async function (payload) {
     }
     libraries[libName].collections.push(col.name);
 
+    // Extended variable collections (Enterprise theming, 2026): a collection
+    // that extends another exposes rootVariableCollectionId pointing at the
+    // base/root collection. Feature-detected — collections from Figma
+    // versions/plans without this field simply don't have the property at
+    // all, so `'rootVariableCollectionId' in col` is false and rc stays
+    // null (an ordinary, non-extended collection — the common case).
+    var rootCollectionId = ('rootVariableCollectionId' in col) ? (col.rootVariableCollectionId || null) : null;
+
     // Enumerate variables in this collection
     var vars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
     for (var v = 0; v < vars.length; v++) {
@@ -717,6 +775,13 @@ handlers.discover_library_variables = async function (payload) {
         key: libVar.key,
         resolvedType: libVar.resolvedType,
         collection: col.name,
+        // collectionKey: stable identifier for the variable's OWN home
+        // collection (col.key — library collections are addressed by key,
+        // not id). Distinct from `collection` (a human display name that
+        // can be renamed) so the fingerprint's override-detection can
+        // compare like-for-like against rootVariableCollectionId.
+        collectionKey: col.key || null,
+        rootVariableCollectionId: rootCollectionId,
         libraryName: libName,
       });
     }
@@ -802,17 +867,59 @@ handlers.discover_library_components = async function (payload) {
       var isRemote = mainComp.remote;
       var variantCount = compSet ? compSet.children.length : 1;
 
-      // Collect variant property names if it's a set
+      // Collect variant property names if it's a set, plus property TYPE
+      // (VARIANT|BOOLEAN|TEXT|INSTANCE_SWAP|SLOT) from componentPropertyDefinitions
+      // when the host Figma version/component exposes it (feature-detected —
+      // wrapped in its own try/catch so its absence never breaks the
+      // variantGroupProperties-derived list below). Types let fingerprint.js
+      // register VARIANT->SLOT/BOOLEAN migrations as variant_schema_changed
+      // instead of silently missing them (see computeVariantSchemaHash).
+      var propDefs = null;
+      try { propDefs = compSet && compSet.componentPropertyDefinitions ? compSet.componentPropertyDefinitions : null; } catch (eDefs) { propDefs = null; }
+
       var variantProps = [];
+      var seenPropNames = {};
       if (compSet && compSet.variantGroupProperties) {
         var props = compSet.variantGroupProperties;
         for (var propName in props) {
           if (props.hasOwnProperty(propName)) {
+            var propType = 'VARIANT';
+            if (propDefs) {
+              for (var defKey in propDefs) {
+                if (propDefs.hasOwnProperty(defKey) && stripPropSuffix(defKey) === propName) {
+                  propType = propDefs[defKey].type || 'VARIANT';
+                  break;
+                }
+              }
+            }
             variantProps.push({
               name: propName,
               values: props[propName].values || [],
+              type: propType,
             });
+            seenPropNames[propName] = true;
           }
+        }
+      }
+      // Non-VARIANT properties (BOOLEAN/TEXT/INSTANCE_SWAP/SLOT) never appear
+      // in variantGroupProperties (they have no enumerable "values" set) —
+      // componentPropertyDefinitions is the ONLY source for them, so surface
+      // them here with an empty values list. This is what lets a component
+      // gain/lose a SLOT (or any non-variant) property register as a schema
+      // change, not just VARIANT property edits.
+      if (propDefs) {
+        for (var defKey2 in propDefs) {
+          if (!propDefs.hasOwnProperty(defKey2)) continue;
+          var baseName2 = stripPropSuffix(defKey2);
+          if (seenPropNames[baseName2]) continue;
+          var def = propDefs[defKey2];
+          if (def.type === 'VARIANT') continue; // would already be captured above
+          variantProps.push({
+            name: baseName2,
+            values: [],
+            type: def.type || 'BOOLEAN',
+          });
+          seenPropNames[baseName2] = true;
         }
       }
 
@@ -846,8 +953,44 @@ handlers.create_frame = async function (payload) {
   // Name
   frame.name = payload.name || 'Frame';
 
-  // Auto-layout is ALWAYS on
-  frame.layoutMode = payload.direction || 'VERTICAL';
+  // Auto-layout is ALWAYS on — GRID is an alternative layoutMode (Grid
+  // automation, May 2026) selected via the dedicated `layoutMode` param
+  // rather than overloading `direction` (which is meaningless for GRID).
+  // Feature-detected: older Figma versions don't accept 'GRID' as a
+  // layoutMode value at all, so the assignment is guarded and surfaces a
+  // clear, actionable error instead of an opaque plugin-sandbox throw.
+  var requestedLayoutMode = payload.layoutMode === 'GRID' ? 'GRID' : (payload.direction || 'VERTICAL');
+  if (requestedLayoutMode === 'GRID') {
+    try {
+      frame.layoutMode = 'GRID';
+    } catch (eGrid) {
+      throw {
+        error: 'GRID_LAYOUT_UNSUPPORTED',
+        property: 'layoutMode',
+        message: 'This Figma version does not support GRID layoutMode (Grid automation, May 2026). Update the Figma desktop app, or use direction: "HORIZONTAL"/"VERTICAL" auto-layout instead.',
+        available: [],
+        recovery: 'Retry without layoutMode: "GRID" (use direction instead), or update Figma.',
+      };
+    }
+    if (typeof payload.gridRowCount === 'number') {
+      try { frame.gridRowCount = payload.gridRowCount; } catch (eRc) { /* older Grid API surface — non-fatal */ }
+    }
+    if (typeof payload.gridColumnCount === 'number') {
+      try { frame.gridColumnCount = payload.gridColumnCount; } catch (eCc) { /* older Grid API surface — non-fatal */ }
+    }
+    if (payload.gridRowGapVariable) {
+      bt.track('gridRowGapVariable', bindVariable(frame, 'gridRowGap', payload.gridRowGapVariable), 'variable "' + payload.gridRowGapVariable + '" not found, or this Figma version has no gridRowGap property');
+    } else if (typeof payload.gridRowGap === 'number') {
+      try { frame.gridRowGap = payload.gridRowGap; } catch (eRg) { /* non-fatal */ }
+    }
+    if (payload.gridColumnGapVariable) {
+      bt.track('gridColumnGapVariable', bindVariable(frame, 'gridColumnGap', payload.gridColumnGapVariable), 'variable "' + payload.gridColumnGapVariable + '" not found, or this Figma version has no gridColumnGap property');
+    } else if (typeof payload.gridColumnGap === 'number') {
+      try { frame.gridColumnGap = payload.gridColumnGap; } catch (eCg) { /* non-fatal */ }
+    }
+  } else {
+    frame.layoutMode = requestedLayoutMode;
+  }
 
   // Alignment
   if (payload.primaryAxisAlignItems) frame.primaryAxisAlignItems = payload.primaryAxisAlignItems;
@@ -1015,6 +1158,17 @@ handlers.create_frame = async function (payload) {
   // Absolute positioning within AL parent (opt-in overlay)
   if (payload.layoutPositioning === 'ABSOLUTE') {
     try { frame.layoutPositioning = 'ABSOLUTE'; } catch (e) { /* parent may not be AL */ }
+  }
+
+  // Grid-child placement — only meaningful when `parent` is a GRID-layoutMode
+  // frame; feature-detected + tracked (not thrown) so placing a span on a
+  // non-grid parent, or on a pre-Grid Figma version, degrades to a no-op
+  // reported in `warnings` rather than failing the whole frame creation.
+  if (typeof payload.gridRowSpan === 'number') {
+    bt.track('gridRowSpan', (function () { try { frame.gridRowSpan = payload.gridRowSpan; return true; } catch (e) { return false; } })(), 'parent is not a GRID layout, or this Figma version has no gridRowSpan property');
+  }
+  if (typeof payload.gridColumnSpan === 'number') {
+    bt.track('gridColumnSpan', (function () { try { frame.gridColumnSpan = payload.gridColumnSpan; return true; } catch (e) { return false; } })(), 'parent is not a GRID layout, or this Figma version has no gridColumnSpan property');
   }
 
   // Apply position AFTER appendChild
@@ -1268,6 +1422,17 @@ handlers.insert_component = function (payload) {
       instance.layoutSizingVertical = deferInstSizingV;
     } catch (e) { /* not in auto-layout parent */ }
 
+    // Grid-child placement (per-instance alternative to figma_set_layout_
+    // sizing's gridRowSpan/gridColumnSpan) — only meaningful when `parent`
+    // is a GRID-layoutMode frame; feature-detected, non-fatal on failure.
+    var gridSpanWarnings = [];
+    if (typeof payload.gridRowSpan === 'number') {
+      try { instance.gridRowSpan = payload.gridRowSpan; } catch (eRs) { gridSpanWarnings.push('gridRowSpan: parent is not a GRID layout, or this Figma version has no gridRowSpan property'); }
+    }
+    if (typeof payload.gridColumnSpan === 'number') {
+      try { instance.gridColumnSpan = payload.gridColumnSpan; } catch (eCs) { gridSpanWarnings.push('gridColumnSpan: parent is not a GRID layout, or this Figma version has no gridColumnSpan property'); }
+    }
+
     // ── Auto-disable all boolean properties ──────────────────────
     // Booleans default ON in most DS components (hint text, help icons,
     // trailing icons, asterisks, etc.).  The builder should only re-enable
@@ -1303,10 +1468,178 @@ handlers.insert_component = function (payload) {
       resolvedVariantKey: imported.key || payload.componentKey,
       configurationHints: hints,
       disabledBooleans: disabledBooleans,
+      gridSpanWarnings: gridSpanWarnings.length > 0 ? gridSpanWarnings : undefined,
     };
   });
 
   return Promise.race([importAndBuild, timeoutPromise]);
+};
+
+// ── Slots (Figma Slots, GA June 2026) ───────────────────────────────────────────
+//
+// Finds the SLOT-typed component property on an instance matching `slotName`
+// (by stripped base name — see stripPropSuffix). Returns { matchedKey, slotKeys }
+// where slotKeys lists every SLOT property name found (for the "available"
+// hint on a not-found error). Feature-detection is implicit: on a Figma
+// version that predates Slots, no componentProperties entry ever has
+// type === 'SLOT', so this simply reports SLOT_NOT_FOUND with an empty
+// `available` list rather than crashing on an unknown API shape.
+function findSlotProperty(node, slotName) {
+  var props = node.componentProperties || {};
+  var keys = Object.keys(props);
+  var slotKeys = [];
+  var matchedKey = null;
+  for (var i = 0; i < keys.length; i++) {
+    if (props[keys[i]].type === 'SLOT') {
+      var baseName = stripPropSuffix(keys[i]);
+      slotKeys.push(baseName);
+      if (baseName === slotName) matchedKey = keys[i];
+    }
+  }
+  return { matchedKey: matchedKey, slotKeys: slotKeys };
+}
+
+/**
+ * handlers.fill_slot — inserts a DS component instance INTO a SLOT-type
+ * component property on an existing instance.
+ *
+ * API SHAPE ASSUMED, NOT VERIFIED (flagged per the worker instructions —
+ * no live Figma Slots-enabled file was available to confirm against real
+ * docs/behavior): the Slots feature (SlotNode, createSlot()/resetSlot())
+ * went GA June 2026, but its plugin-API write shape for "fill this slot
+ * with an instance" has no confirmed public example as of this change.
+ * SLOT is simply another entry in componentProperties/
+ * componentPropertyDefinitions (same family as BOOLEAN/TEXT/INSTANCE_SWAP),
+ * and this codebase's one existing mechanism for writing an INSTANCE_SWAP-
+ * shaped property is `instance.setProperties({ [key]: value })` (see
+ * handlers.set_variant) — so that is tried FIRST, passing the newly created
+ * fill instance's node id as the value, mirroring INSTANCE_SWAP semantics.
+ * A `node.fillSlot(key, instance)`-style method is tried as a fallback in
+ * case the real API instead exposes a dedicated slot-write call. If neither
+ * works, a structured SLOT_FILL_UNSUPPORTED error is returned (never thrown
+ * as an opaque error) so the caller gets a clear "needs manual verification"
+ * signal instead of a silent no-op or a crash. MANUAL VERIFICATION NEEDED.
+ */
+handlers.fill_slot = function (payload) {
+  var node = figma.getNodeById(normalizeNodeId(payload.nodeId));
+  if (!node) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check nodeId.' };
+  if (!payload.slotName) throw { error: 'MISSING_PARAM', property: 'slotName', message: 'slotName is required.', available: [], recovery: 'Provide the SLOT property name from configurationHints.slotProperties.' };
+  if (!payload.componentKey) throw { error: 'MISSING_PARAM', property: 'componentKey', message: 'componentKey is required.', available: [], recovery: 'Provide the DS component key to insert into the slot.' };
+
+  var found = findSlotProperty(node, payload.slotName);
+  if (!found.matchedKey) {
+    throw {
+      error: 'SLOT_NOT_FOUND',
+      property: 'slotName',
+      message: 'No SLOT-type component property named "' + payload.slotName + '" found on this instance. Either this Figma version does not support Slots, or the component has no slot with that name.',
+      available: found.slotKeys,
+      recovery: 'Check configurationHints.slotProperties from figma_insert_component for the exact slot name.',
+    };
+  }
+
+  return figma.importComponentByKeyAsync(payload.componentKey).then(function (imported) {
+    var fillInstance = imported.createInstance();
+    var matchedKey = found.matchedKey;
+    var filled = false;
+    try {
+      var update = {};
+      update[matchedKey] = fillInstance.id;
+      node.setProperties(update);
+      filled = true;
+    } catch (eSetProps) {
+      try {
+        if (typeof node.fillSlot === 'function') {
+          node.fillSlot(matchedKey, fillInstance);
+          filled = true;
+        }
+      } catch (eFillSlot) { /* both attempts failed — handled below */ }
+    }
+
+    if (!filled) {
+      throw {
+        error: 'SLOT_FILL_UNSUPPORTED',
+        property: 'slotName',
+        message: 'Could not fill slot "' + payload.slotName + '" — the Slots plugin-API write shape this handler assumes (setProperties, then a fillSlot() fallback) did not work on this instance. Needs manual verification against a live Figma Slots-enabled file.',
+        available: [],
+        recovery: 'Report this for manual verification — the SLOT write API shape needs confirming against real Figma docs/behavior.',
+      };
+    }
+
+    var hints = collectConfigurationHints(node);
+    return {
+      nodeId: node.id,
+      slotName: payload.slotName,
+      filledWithKey: payload.componentKey,
+      filledInstanceId: fillInstance.id,
+      configurationHints: hints,
+    };
+  });
+};
+
+/**
+ * handlers.reset_slot — restores a SLOT-type component property to its
+ * default content.
+ *
+ * API SHAPE ASSUMED, NOT VERIFIED (see handlers.fill_slot doc comment for
+ * the same caveat). resetSlot() is the documented Slots-GA method name, but
+ * which object it lives on (the instance? the SLOT node the property
+ * currently points at?) has no confirmed public example. Both plausible
+ * call sites are tried; if neither exists, a structured
+ * SLOT_RESET_UNSUPPORTED error is returned. MANUAL VERIFICATION NEEDED.
+ */
+handlers.reset_slot = function (payload) {
+  var node = figma.getNodeById(normalizeNodeId(payload.nodeId));
+  if (!node) throw { error: 'NODE_NOT_FOUND', property: 'nodeId', message: 'Node not found: ' + payload.nodeId, available: [], recovery: 'Check nodeId.' };
+  if (!payload.slotName) throw { error: 'MISSING_PARAM', property: 'slotName', message: 'slotName is required.', available: [], recovery: 'Provide the SLOT property name.' };
+
+  var found = findSlotProperty(node, payload.slotName);
+  if (!found.matchedKey) {
+    throw {
+      error: 'SLOT_NOT_FOUND',
+      property: 'slotName',
+      message: 'No SLOT-type component property named "' + payload.slotName + '" found on this instance.',
+      available: found.slotKeys,
+      recovery: 'Check configurationHints.slotProperties for the exact slot name.',
+    };
+  }
+
+  var resetOk = false;
+  try {
+    if (typeof node.resetSlot === 'function') {
+      node.resetSlot(found.matchedKey);
+      resetOk = true;
+    }
+  } catch (eResetOnNode) { /* fall through to alternate call site */ }
+
+  if (!resetOk) {
+    try {
+      var props = node.componentProperties || {};
+      var current = props[found.matchedKey] && props[found.matchedKey].value;
+      var currentNode = current ? figma.getNodeById(normalizeNodeId(current)) : null;
+      if (currentNode && typeof currentNode.resetSlot === 'function') {
+        currentNode.resetSlot();
+        resetOk = true;
+      }
+    } catch (eResetOnSlotNode) { /* fall through */ }
+  }
+
+  if (!resetOk) {
+    throw {
+      error: 'SLOT_RESET_UNSUPPORTED',
+      property: 'slotName',
+      message: 'Could not reset slot "' + payload.slotName + '" — this Figma version may not support resetSlot(), or the API shape differs from what this handler assumes. Needs manual verification against a live Figma Slots-enabled file.',
+      available: [],
+      recovery: 'Report this for manual verification.',
+    };
+  }
+
+  var hints = collectConfigurationHints(node);
+  return {
+    nodeId: node.id,
+    slotName: payload.slotName,
+    reset: true,
+    configurationHints: hints,
+  };
 };
 
 // ── Stubs for Task 9 — Shape creation ──────────────────────────────────────────
@@ -1929,6 +2262,17 @@ handlers.set_layout_sizing = function (payload) {
     node.itemSpacing = payload.gap;
   }
 
+  // Grid-child placement (Grid automation, May 2026) — feature-detected +
+  // tracked rather than thrown: meaningful only when this node's parent is
+  // a GRID-layoutMode frame, so a mismatched/pre-Grid host just reports a
+  // non-fatal warning instead of failing the whole sizing call.
+  if (typeof payload.gridRowSpan === 'number') {
+    bt.track('gridRowSpan', (function () { try { node.gridRowSpan = payload.gridRowSpan; return true; } catch (e) { return false; } })(), 'parent is not a GRID layout, or this Figma version has no gridRowSpan property');
+  }
+  if (typeof payload.gridColumnSpan === 'number') {
+    bt.track('gridColumnSpan', (function () { try { node.gridColumnSpan = payload.gridColumnSpan; return true; } catch (e) { return false; } })(), 'parent is not a GRID layout, or this Figma version has no gridColumnSpan property');
+  }
+
   var bindingResult = bt.result();
   return {
     nodeId: node.id,
@@ -2233,7 +2577,13 @@ handlers.restyle_artboard = function (payload) {
   // Name
   if (payload.name) node.name = payload.name;
 
-  // Fill
+  // Fill — unlike figma_create_frame (a brand-new node with nothing to
+  // preserve), this handler only ever touches node.fills when the caller
+  // explicitly passes fillVariable/fill. No payload -> node.fills is left
+  // completely untouched, so any existing paint the caller didn't ask to
+  // change — including a SHADER paint, which this handler has no explicit
+  // support for and never needs any, since it never rewrites what it
+  // doesn't understand — survives a restyle call unmodified.
   if (payload.fillVariable) {
     bt.track('fillVariable', bindFillVariable(node, payload.fillVariable), 'variable "' + payload.fillVariable + '" not found');
   } else if (payload.fill) {
@@ -2392,7 +2742,13 @@ handlers.get_node_props = function (payload) {
     props.paddingLeft = node.paddingLeft;
   }
 
-  // Fills
+  // Fills — every entry keeps its real `type` regardless of what that type
+  // is (SOLID/GRADIENT_*/IMAGE/VIDEO/SHADER/anything future). Only SOLID
+  // gets a decoded `color`; unknown/unhandled paint types (e.g. the SHADER
+  // union member added alongside Grid/Slots in 2026) still get a fills[]
+  // entry with their type and visibility intact — never dropped, never
+  // thrown on. This is a read path (node.fills is inspected, not
+  // reassigned), so no paint is ever stripped here.
   if ('fills' in node && Array.isArray(node.fills)) {
     props.fills = [];
     for (var i = 0; i < node.fills.length; i++) {

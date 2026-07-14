@@ -31,6 +31,15 @@ class DsCache {
   getFillStyle(key) { return this.fillStyles.get(key) || null; }
   addEffectStyle(key, style) { this.effectStyles.set(key, style); }
   getEffectStyle(key) { return this.effectStyles.get(key) || null; }
+  // `variable` is a free-form info object (key, collection, category,
+  // libraryName, ...). Extended variable collections (Enterprise theming,
+  // 2026) add two optional fields callers may include:
+  //   - collectionKey: the variable's own home collection identifier
+  //     (stable across renames, unlike `collection` which is a display name)
+  //   - rootVariableCollectionId: the id of the collection this variable's
+  //     value is inherited from, when the home collection extends another
+  //   Both are passed straight through — this Map is intentionally
+  //   schema-less so new discovery fields never require a cache change.
   addVariable(path, variable) { this.variables.set(path, variable); }
   getVariable(path) { return this.variables.get(path) || null; }
   addComponent(key, component) { this.components.set(key, component); }
@@ -109,7 +118,8 @@ class DsCache {
       if (field.startsWith('fill')) expectedCategory = 'background';
       if (field.startsWith('stroke')) expectedCategory = 'border';
       if (field === 'fillVariable' && args.content !== undefined) expectedCategory = 'text'; // text node fill → text color
-      if (field.startsWith('padding') || field.startsWith('gap')) expectedCategory = 'spacing';
+      if (field.startsWith('padding') || field.startsWith('gap')
+          || field === 'gridRowGapVariable' || field === 'gridColumnGapVariable') expectedCategory = 'spacing';
       if (field.startsWith('cornerRadius')) expectedCategory = 'radius';
 
       const cached = this.variables.get(path);

@@ -46,6 +46,15 @@ describe('FigmaRest', () => {
     assert.equal(result[1].key, 's3');
   });
 
+  it('getFileComponents requests page_size=1000 (team/library components pagination cap raised, 2026)', async () => {
+    const rest = new FigmaRest('figd_test');
+    let requestedPath = null;
+    rest._get = async (p) => { requestedPath = p; return { meta: { components: [] } }; };
+
+    await rest.getFileComponents('abc123');
+    assert.equal(requestedPath, '/files/abc123/components?page_size=1000');
+  });
+
   it('parseComponentsResponse handles empty/missing meta gracefully', () => {
     const rest = new FigmaRest('figd_test');
     assert.deepEqual(rest.parseComponentsResponse({}), []);

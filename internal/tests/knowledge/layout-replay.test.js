@@ -524,3 +524,132 @@ describe('Layout Replay — end-to-end flow', () => {
     assert.strictEqual(createMsgs[0].payload.gap, 24);
   });
 });
+
+// ─── Pattern demotion from in-build corrections (spec acceptance 17) ────
+
+describe('Layout Replay — pattern demotion on >=2 corrected instances (acceptance criterion 17)', () => {
+  let handlers, bridge, session, knowledgeStore;
+
+  beforeEach(() => {
+    const setup = createTestContext();
+    handlers = setup.handlers;
+    bridge = setup.bridge;
+    session = setup.session;
+    knowledgeStore = setup.knowledgeStore;
+    try { fs.unlinkSync(STORE_PATH); } catch {}
+
+    bridge.setResponse('get_page_nodes', { nodes: [] });
+  });
+
+  it('demotes verified -> confirmed and re-captures layoutConfig when 2 instances explicitly override the same replayed property', async () => {
+    knowledgeStore.setPattern('Card', {
+      description: 'Card pattern',
+      buildCount: 8,
+      occurrences: 16,
+      confidence: 'verified',
+      layoutConfig: { direction: 'VERTICAL', gap: 24, padding: 16 },
+    });
+
+    // Instance 1 — explicitly overrides gap (differs from stored 24)
+    await handlers.figma_create_frame({ name: 'Card: Revenue', parentId: 'parent:1', gap: 8 });
+    // Instance 2 — also explicitly overrides gap, same new value
+    await handlers.figma_create_frame({ name: 'Card: Users', parentId: 'parent:1', gap: 8 });
+
+    session.phaseToolCalls[3] = 10;
+    await handlers.mimic_generate_build_report({
+      screenName: 'Correction Test',
+      components: [],
+      primitives: [],
+      toolCallCount: 20,
+      cacheHits: 0,
+    });
+
+    const pattern = knowledgeStore.getPattern('Card');
+    assert.strictEqual(pattern.confidence, 'confirmed', 'verified should demote to confirmed');
+    assert.strictEqual(pattern.layoutConfig.gap, 8, 'layoutConfig re-captures the corrected value');
+    assert.strictEqual(pattern.layoutConfig.direction, 'VERTICAL', 'untouched properties are preserved from the old config');
+    assert.strictEqual(pattern.layoutConfig.padding, 16);
+    assert.ok(Array.isArray(pattern.layoutConfigHistory), 'layoutConfigHistory should record the previous config');
+    assert.strictEqual(pattern.layoutConfigHistory.length, 1);
+    assert.strictEqual(pattern.layoutConfigHistory[0].config.gap, 24, 'history keeps the OLD (pre-correction) config');
+  });
+
+  it('does NOT demote when only 1 instance overrides the replayed property', async () => {
+    knowledgeStore.setPattern('Card', {
+      description: 'Card pattern',
+      buildCount: 8,
+      occurrences: 16,
+      confidence: 'verified',
+      layoutConfig: { direction: 'VERTICAL', gap: 24 },
+    });
+
+    await handlers.figma_create_frame({ name: 'Card: Revenue', parentId: 'parent:1', gap: 8 });
+    await handlers.figma_create_frame({ name: 'Card: Users', parentId: 'parent:1' }); // no override — replays normally
+
+    session.phaseToolCalls[3] = 10;
+    await handlers.mimic_generate_build_report({
+      screenName: 'Single Correction Test',
+      components: [],
+      primitives: [],
+      toolCallCount: 20,
+      cacheHits: 0,
+    });
+
+    const pattern = knowledgeStore.getPattern('Card');
+    assert.strictEqual(pattern.confidence, 'verified', 'a single correction is not enough to demote');
+    assert.strictEqual(pattern.layoutConfig.gap, 24, 'layoutConfig unchanged');
+  });
+
+  it('does NOT demote a "new" (unconfirmed) pattern even with 2+ differing explicit values', async () => {
+    knowledgeStore.setPattern('Card', {
+      description: 'Card pattern',
+      buildCount: 1,
+      occurrences: 2,
+      confidence: 'new',
+      layoutConfig: { direction: 'VERTICAL', gap: 24 },
+    });
+
+    await handlers.figma_create_frame({ name: 'Card: Revenue', parentId: 'parent:1', gap: 8 });
+    await handlers.figma_create_frame({ name: 'Card: Users', parentId: 'parent:1', gap: 8 });
+
+    session.phaseToolCalls[3] = 10;
+    await handlers.mimic_generate_build_report({
+      screenName: 'New Pattern Test',
+      components: [],
+      primitives: [],
+      toolCallCount: 20,
+      cacheHits: 0,
+    });
+
+    const pattern = knowledgeStore.getPattern('Card');
+    assert.strictEqual(pattern.confidence, 'new');
+    assert.strictEqual(pattern.layoutConfig.gap, 24, 'a pattern never actually being replayed is never treated as corrected');
+    assert.strictEqual(pattern.layoutConfigHistory, undefined);
+  });
+
+  it('a confirmed (not verified) pattern with 2+ corrections re-captures layoutConfig but stays confirmed', async () => {
+    knowledgeStore.setPattern('Card', {
+      description: 'Card pattern',
+      buildCount: 4,
+      occurrences: 8,
+      confidence: 'confirmed',
+      layoutConfig: { direction: 'VERTICAL', gap: 24 },
+    });
+
+    await handlers.figma_create_frame({ name: 'Card: Revenue', parentId: 'parent:1', gap: 12 });
+    await handlers.figma_create_frame({ name: 'Card: Users', parentId: 'parent:1', gap: 12 });
+
+    session.phaseToolCalls[3] = 10;
+    await handlers.mimic_generate_build_report({
+      screenName: 'Confirmed Correction Test',
+      components: [],
+      primitives: [],
+      toolCallCount: 20,
+      cacheHits: 0,
+    });
+
+    const pattern = knowledgeStore.getPattern('Card');
+    assert.strictEqual(pattern.confidence, 'confirmed', 'demote() only ever downgrades verified -> confirmed, never lower');
+    assert.strictEqual(pattern.layoutConfig.gap, 12);
+  });
+});

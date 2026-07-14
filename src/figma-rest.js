@@ -71,9 +71,18 @@ class FigmaRest {
     return { version: raw?.version ?? null, lastModified: raw?.lastModified ?? null };
   }
 
-  /** Get all published components from a file */
+  /**
+   * Get all published (team-library) components from a file.
+   * `page_size=1000` is passed explicitly — Figma raised the team/library
+   * components pagination cap to 1000 (platform update, 2026); the
+   * per-file /components endpoint has historically returned its full,
+   * unpaginated list regardless of this param, so pinning it is a
+   * forward-compatible no-op today rather than a behavior change, and
+   * avoids silently falling back to a smaller implicit default page if
+   * Figma ever applies the team-components pagination model here too.
+   */
   async getFileComponents(fileKey) {
-    const raw = await this._get(`/files/${fileKey}/components`);
+    const raw = await this._get(`/files/${fileKey}/components?page_size=1000`);
     return this.parseComponentsResponse(raw);
   }
 

@@ -783,6 +783,15 @@ function register(server, context) {
           dsCache.addVariable(path, {
             key: v.key,
             collection: v.collection || null,
+            // Extended variable collections (Enterprise theming, 2026):
+            // collectionKey/rootVariableCollectionId come from the plugin's
+            // discover_library_variables handler (feature-detected there —
+            // absent entirely on Figma versions/plans without the field).
+            // Consumed by src/ds/fingerprint.js to classify a variable whose
+            // root collection differs from its own as an override, not a
+            // new root variable.
+            collectionKey: v.collectionKey || null,
+            rootVariableCollectionId: v.rootVariableCollectionId || null,
             category,
             libraryName: v.libraryName || null,
           });

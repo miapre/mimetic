@@ -805,6 +805,94 @@ function register(server, context) {
       };
     }
   );
+
+  // ── figma_fill_slot ────────────────────────────────────────────
+  // Figma Slots (GA June 2026): inserts a DS component instance into a
+  // SLOT-type component property on an existing instance. componentKey
+  // validation mirrors figma_insert_component's previously-failed-key
+  // guard, since a slot fill is itself an import + createInstance() and
+  // can fail the same permanent (bad key / library not enabled) or
+  // transient (import timeout) ways.
+  registerTool(
+    'figma_fill_slot',
+    'Inserts a DS component instance into a SLOT-type component property on an existing instance (Figma Slots, GA June 2026). Use configurationHints.slotProperties from figma_insert_component to find the slotName.',
+    {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Instance node ID that owns the slot.' },
+        slotName: { type: 'string', description: 'SLOT property name from configurationHints.slotProperties.' },
+        componentKey: { type: 'string', description: 'DS component key to insert into the slot.' },
+      },
+      required: ['nodeId', 'slotName', 'componentKey'],
+    },
+    async (args) => {
+      requirePhase(2, PHASE_HINT);
+
+      if (dsCache.hasFailed(args.componentKey)) {
+        return {
+          error: 'COMPONENT_PREVIOUSLY_FAILED',
+          componentKey: args.componentKey,
+          hint: 'This component key failed before. Verify the key is correct and the library is enabled in the file.',
+        };
+      }
+
+      let result;
+      try {
+        result = await bridge.send('fill_slot', args);
+      } catch (err) {
+        const isTimeout = err.message && /timed?\s*out/i.test(err.message);
+        dsCache.markFailed(args.componentKey, !isTimeout);
+        throw err;
+      }
+      session.toolCallCount++;
+
+      // Record the slot fill as an OBSERVATION only — spec: SLOT props are
+      // never replayed, checklist only (schema-v3-spec.md §4.1). This never
+      // feeds figma_insert_component's auto-apply path; it exists purely so
+      // the build report / future tooling can see which slots get used and
+      // with what, without ever auto-filling a slot on the caller's behalf.
+      const hostComponentKey = session._nodeComponentKeys?.get(args.nodeId);
+      if (hostComponentKey && knowledgeStore) {
+        const recipe = knowledgeStore.getComponent(hostComponentKey)
+          || { names: [hostComponentKey], instances: 0, buildCount: 0, componentKey: hostComponentKey, confidence: 'new' };
+        recipe.slots = recipe.slots || {};
+        const slotEntry = recipe.slots[args.slotName] || { observed: 0 };
+        slotEntry.observed = (slotEntry.observed || 0) + 1;
+        recipe.slots[args.slotName] = slotEntry;
+        knowledgeStore.setComponent(hostComponentKey, recipe);
+      }
+
+      return {
+        ...result,
+        hint: result?.error
+          ? result.error
+          : 'Slot filled. Override text/variants on the inserted instance as usual — slot fills are recorded for visibility only and are never auto-replayed.',
+      };
+    }
+  );
+
+  // ── figma_reset_slot ───────────────────────────────────────────
+  registerTool(
+    'figma_reset_slot',
+    'Resets a SLOT-type component property back to its default content (Figma Slots, GA June 2026).',
+    {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Instance node ID that owns the slot.' },
+        slotName: { type: 'string', description: 'SLOT property name to reset.' },
+      },
+      required: ['nodeId', 'slotName'],
+    },
+    async (args) => {
+      requirePhase(2, PHASE_HINT);
+      const result = await bridge.send('reset_slot', args);
+      session.toolCallCount++;
+      return {
+        ...result,
+        hint: 'Slot reset to its default content.',
+      };
+    }
+  );
 }
 
 module.exports = { register };

@@ -479,6 +479,30 @@ function register(server, context) {
         knowledgeStore.incrementBuildCount();
         session.phaseToolCalls[3] = 0;
       }
+      // ── Pattern demotion from in-build corrections (spec acceptance
+      // criterion 17) ── build.js's figma_create_frame tracked, per prefix,
+      // every instance in THIS build that explicitly overrode a property a
+      // confirmed/verified pattern would have replayed
+      // (session._layoutReplayCorrections). >=2 such instances of the SAME
+      // prefix is treated as a deliberate design change, not a one-off
+      // exception: demote() drops verified -> confirmed, pushes the OLD
+      // layoutConfig onto layoutConfigHistory (capped at 3), and re-captures
+      // layoutConfig from the corrected values so the next replay reflects
+      // the new intent.
+      const layoutCorrections = session._layoutReplayCorrections || new Map();
+      for (const [prefix, correction] of layoutCorrections) {
+        if (!correction || correction.count < 2) continue;
+        const existingPattern = knowledgeStore.getPattern(prefix);
+        if (!existingPattern || !existingPattern.layoutConfig) continue;
+        const correctedConfig = { ...existingPattern.layoutConfig, ...correction.config };
+        // buildCount was already incremented above (if phase3Ops > 0), so
+        // knowledgeStore.data.meta.buildCount here IS the build this
+        // correction happened in — same value `currentBuildNumber` below
+        // computes.
+        const demoted = promoter.demote(existingPattern, correctedConfig, knowledgeStore.data.meta.buildCount || null);
+        knowledgeStore.setPattern(prefix, demoted);
+      }
+
       // ── Flush session signals to knowledge store ──
       const currentBuildNumber = knowledgeStore.data.meta.buildCount;
       if (session._signals && session._signals.size > 0) {

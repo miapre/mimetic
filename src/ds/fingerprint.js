@@ -46,14 +46,22 @@ function sha256(value) {
  * defect I) into a canonical sorted structure and hash it.
  *
  * Property TYPE (VARIANT|BOOLEAN|TEXT|INSTANCE_SWAP|SLOT) is included only
- * when the source data carries it. Today neither the plugin's page-scan nor
- * the REST API surfaces componentPropertyDefinitions with types through the
- * existing discovery handlers (plugin/code.js is out of this worker's file
- * domain — see report), so `type` defaults to 'VARIANT' when values are
- * present and absent otherwise. This means a VARIANT -> SLOT migration is
- * NOT detected by this hash alone unless/until the plugin-side discovery
- * handler is extended to collect componentPropertyDefinitions types — a
- * documented deviation, not a silent gap.
+ * when the source data carries it. plugin/code.js's discover_library_
+ * components handler now reads componentSet.componentPropertyDefinitions
+ * (feature-detected — older Figma versions/component sets may not expose
+ * it) and attaches a real `type` per property; the REST path still cannot
+ * surface types (Figma's REST /components endpoint has no variant-schema
+ * data at all), so `type` defaults to 'VARIANT' when values are present and
+ * is absent otherwise. This default is intentionally a NO-OP for same-
+ * source comparisons: a component whose properties were always genuinely
+ * VARIANT hashes identically before and after the plugin gained type
+ * awareness (default 'VARIANT' === real 'VARIANT'), while a real VARIANT ->
+ * SLOT/BOOLEAN migration changes the hash because the newly-observed type
+ * differs from the old default. Cross-source (REST <-> page_scan)
+ * comparisons never reach this level of detail — diffFingerprints reports
+ * a source change instead of diffing component-by-component — so the
+ * REST-side "no types ever" limitation can't produce a false positive
+ * against a typed page_scan capture.
  *
  * @returns {string|null}
  */
@@ -126,7 +134,17 @@ function buildStructuredFingerprint({ dsCache, knowledgeStore, source, restFresh
     variables[variableKey] = {
       p: path,
       t: info.resolvedType || null,
-      c: info.collection || null,
+      // `c` must be an ID-shaped identifier so it can be meaningfully
+      // compared against `rc` (rootVariableCollectionId) below — a display
+      // NAME (e.g. "Colors") would never equal a collection id/key, making
+      // the override-detection comparison always-true false positives.
+      // `info.collectionKey` (the variable's own home collection id, set by
+      // the extended-collections discovery path — plugin/code.js's
+      // discover_library_variables + status.js's caching of it) is the
+      // correct source; fall back to the display name only for older/
+      // externally-injected variable entries that predate this field, where
+      // `rc` will also be absent so the comparison never fires anyway.
+      c: info.collectionKey || info.collection || null,
       rc: info.rootVariableCollectionId || null,
     };
   }
