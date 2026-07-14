@@ -5,6 +5,14 @@ const path = require('node:path');
 
 const SCHEMA_VERSION = 2;
 
+/**
+ * Split a string into lowercase alphanumeric word tokens.
+ * Used for whole-word rule matching — see findMatchingRules().
+ */
+function tokenize(str) {
+  return (str || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
 function createEmptyStore() {
   return {
     version: SCHEMA_VERSION,
@@ -31,15 +39,60 @@ class KnowledgeStore {
   constructor(filePath) {
     this.filePath = filePath;
     this.data = createEmptyStore();
+    // Set when load() had to recover from a corrupt/unsupported-version file.
+    // Not part of `this.data` — it's ephemeral, process-local operational
+    // state, not knowledge to persist. Callers (mcp.js, mimic_status,
+    // mimic_ai_knowledge_read) should surface this loudly to the user.
+    this.loadWarning = null;
+  }
+
+  /**
+   * Back up an unreadable/corrupt knowledge file and reset to a fresh
+   * empty schema-v2 store. Never let a bad knowledge file prevent the
+   * MCP server from starting — a build with no learning is recoverable,
+   * a server that never connects is not.
+   */
+  _recoverFromCorruption(rawContent, reason) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = `${this.filePath}.corrupt-${stamp}`;
+    let backedUp = false;
+    try {
+      fs.writeFileSync(backupPath, rawContent, 'utf-8');
+      backedUp = true;
+    } catch { /* best effort — still proceed with a fresh store */ }
+
+    this.data = createEmptyStore();
+    this.loadWarning = {
+      code: 'KNOWLEDGE_STORE_CORRUPT',
+      reason,
+      backupPath: backedUp ? backupPath : null,
+      message: `⚠ Knowledge store at ${this.filePath} could not be loaded (${reason}). ` +
+        (backedUp
+          ? `The unreadable file was backed up to ${backupPath}. `
+          : `A backup could not be written. `) +
+        `Starting with a fresh knowledge store — previously learned components, ` +
+        `patterns, and rules are unavailable unless recovered manually from the backup.`,
+    };
+
+    // Persist the fresh store immediately so a restart doesn't re-trigger
+    // recovery (and re-write a new backup) against the same bad file.
+    try { this.save(); } catch { /* non-fatal — in-memory store still usable */ }
+
+    return this;
   }
 
   /** Load existing store from disk. Creates empty store if file missing. */
   load() {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed.version !== SCHEMA_VERSION) {
-        throw new Error(`Unsupported schema version: ${parsed.version}`);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (parseErr) {
+        return this._recoverFromCorruption(raw, `invalid JSON: ${parseErr.message}`);
+      }
+      if (!parsed || parsed.version !== SCHEMA_VERSION) {
+        return this._recoverFromCorruption(raw, `unsupported schema version: ${parsed && parsed.version}`);
       }
       this.data = parsed;
       // Backfill new fields for existing stores
@@ -61,13 +114,15 @@ class KnowledgeStore {
     return this;
   }
 
-  /** Persist current state to disk. */
+  /** Persist current state to disk. Atomic: write to a temp file, then rename over the target. */
   save() {
     const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
+    const tmpPath = path.join(dir, `.${path.basename(this.filePath)}.tmp-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, this.filePath);
     return this;
   }
 
@@ -171,25 +226,45 @@ class KnowledgeStore {
 
   /**
    * Find rules relevant to a given context. Matches by:
-   * - scope substring match against context keywords
+   * - scope word-token match against context keywords
    * - category match
-   * - rule text containing any context keyword
+   * - rule text word-token match against any context keyword
+   *
+   * Uses whole-word (token) matching, not substring matching — a keyword
+   * like "tab" must never match rule text mentioning "table". Keywords
+   * that are themselves multi-word phrases (e.g. "card header") still
+   * match when ALL of their words appear as whole tokens in the scope or
+   * rule text, so multi-word phrase matching keeps working.
+   *
+   * Only considers ACTIVE rules (same eligibility as getActiveRules()):
+   * user-defined rules (no `source`) are always eligible; auto-compiled
+   * candidates (`source` set) are only eligible once `status === 'active'`.
+   * Candidate and dismissed auto-compiled rules must never be injected
+   * into build tool responses as if they were confirmed guidance.
    *
    * @param {string[]} keywords - Context words (e.g., ['card', 'revenue', 'badge'])
    * @param {string} [category] - Optional category filter
    * @returns {Array<{id: string, rule: string, category: string, reason?: string}>}
    */
   findMatchingRules(keywords, category) {
-    const rules = this.data.rules || {};
-    const lowerKeywords = keywords.map(k => k.toLowerCase());
+    const rules = this.getActiveRules();
+    const keywordTokenSets = keywords
+      .map(k => tokenize(k))
+      .filter(toks => toks.length > 0);
     const matches = [];
     for (const [id, r] of Object.entries(rules)) {
       if (category && r.category !== category) continue;
-      const scope = (r.scope || '').toLowerCase();
-      const ruleText = (r.rule || '').toLowerCase();
-      const hit = lowerKeywords.some(k =>
-        scope.includes(k) || ruleText.includes(k)
-      );
+      const scopeTokens = new Set(tokenize(r.scope));
+      const ruleTokens = new Set(tokenize(r.rule));
+      const hit = keywordTokenSets.some(toks => {
+        // Multi-word keyword: match as a phrase — all its words must appear
+        // as whole tokens in the same field (scope or rule text).
+        if (toks.length > 1) {
+          return toks.every(t => scopeTokens.has(t)) || toks.every(t => ruleTokens.has(t));
+        }
+        // Single-word keyword: whole-token match anywhere in scope or rule text.
+        return scopeTokens.has(toks[0]) || ruleTokens.has(toks[0]);
+      });
       if (hit) matches.push({ id, rule: r.rule, category: r.category, reason: r.reason });
     }
     return matches;

@@ -2,12 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { ChartCalculator } = require('../charts/calculator');
 const { PatternMatcher } = require('../knowledge/patterns');
 const { compileNoGoods } = require('../knowledge/compiler');
 
 function register(server, context) {
-  const { registerTool, knowledgeStore, buildManifest, dsCache, session, advancePhase } = context;
+  const { registerTool, knowledgeStore, buildManifest, dsCache, session, advancePhase, bridge } = context;
 
   // ── mimic_ai_knowledge_read ────────────────────────────────────
   registerTool(
@@ -22,6 +23,10 @@ function register(server, context) {
         gaps: knowledgeStore.data.gaps,
         rules: knowledgeStore.data.rules || {},
         meta: knowledgeStore.data.meta,
+        // Surfaced when a corrupt/unsupported-version knowledge file was
+        // recovered (backed up + reset to fresh) at some point this session.
+        // See KnowledgeStore._recoverFromCorruption in src/knowledge/store.js.
+        _storeWarning: knowledgeStore.loadWarning || undefined,
       };
     }
   );
@@ -72,7 +77,7 @@ function register(server, context) {
           break;
         }
         default:
-          return { error: `Unknown type: ${type}. Use component, pattern, or gap.` };
+          return { error: `Unknown type: ${type}. Use component, pattern, gap, or rule.` };
       }
 
       knowledgeStore.save();
@@ -534,17 +539,20 @@ function register(server, context) {
           lines.push(`| #${h.buildNumber} | ${h.screenName} | ${h.toolCalls} | ${h.cacheHits} | ${h.replaySavings || 0} | ${h.componentCount} | ${h.primitiveCount} | ${h.componentUsagePercent}% |`);
         }
         lines.push('');
-        const first = history[0];
-        const last = history[history.length - 1];
-        if (first.toolCalls > 0 && last.toolCalls > 0) {
-          const reduction = Math.round((1 - last.toolCalls / first.toolCalls) * 100);
-          if (reduction > 0) {
-            lines.push(`**Learning impact:** ${reduction}% fewer tool calls from build #${first.buildNumber} to #${last.buildNumber}.`);
-          } else {
-            lines.push(`**Learning impact:** Tool calls have not decreased yet. Knowledge may need more builds to accumulate.`);
-          }
-          lines.push('');
-        }
+        // NOTE: this used to compare build #1's tool-call count against the
+        // latest build's to claim an "X% fewer tool calls" learning impact.
+        // That comparison was removed — it conflates learning with screen
+        // complexity, which varies per build and makes the delta meaningless.
+        // Cache hits and replay savings (columns above) are the reliable,
+        // non-comparative signals that stored knowledge is being reused.
+        const totalCacheHits = history.reduce((sum, h) => sum + (h.cacheHits || 0), 0);
+        const totalReplaySavings = history.reduce((sum, h) => sum + (h.replaySavings || 0), 0);
+        lines.push(
+          `**Learning signal:** ${totalCacheHits} cache hit(s) and ${totalReplaySavings} template/layout ` +
+          `replay(s) saved across ${history.length} tracked build(s). Tool-call counts vary with screen ` +
+          `complexity and aren't directly comparable across builds — cache hits and replay savings above are.`
+        );
+        lines.push('');
       }
 
       // ── DS Changes ──
@@ -590,6 +598,19 @@ function register(server, context) {
       // ── User Recommendations ──
       // Actionable suggestions for the user to improve their DS.
       const recommendations = [];
+
+      // 0. Component-first quality gate failure — always leads the list when
+      // failing. A build with a failing gate is never "all good", regardless
+      // of what else is (or isn't) in this array.
+      if (componentQualityGate === 'FAIL') {
+        recommendations.push(
+          `**Component-first quality gate failed:** ${componentUsagePercent}% component usage ` +
+          `(minimum is 80%). ${unjustifiedPrimitives.length} unjustified primitive(s) were used ` +
+          `where a DS component should have been found first. Resolve missing elements with ` +
+          `\`mimic_map_components\`, library search, and \`figma_insert_component\` before falling ` +
+          `back to primitives in future builds.`
+        );
+      }
 
       // 1. Missing variable categories detected from binding failures
       const missingVarCategories = new Set();
@@ -659,27 +680,21 @@ function register(server, context) {
         }
       }
 
-      // 5. Learning velocity insight
-      const buildHistory = knowledgeStore.getBuildHistory();
-      if (buildHistory.length >= 3) {
-        const recent = buildHistory.slice(-3);
-        const avgRecent = recent.reduce((sum, h) => sum + (h.cacheHits || 0), 0) / recent.length;
-        const first = buildHistory[0];
-        if (first.toolCalls > 0 && recent.length > 0) {
-          const lastBuild = recent[recent.length - 1];
-          const reduction = Math.round((1 - lastBuild.toolCalls / first.toolCalls) * 100);
-          if (reduction > 20) {
-            recommendations.push(
-              `**Learning is working:** ${reduction}% fewer tool calls compared to your first build. ` +
-              `Cache hits averaging ${Math.round(avgRecent)} per build. Component recipes are saving configuration time.`
-            );
-          } else if (reduction < 0) {
-            recommendations.push(
-              `**Build complexity increasing:** Tool calls are higher than early builds. ` +
-              `This may be expected for more complex screens, or may indicate DS gaps slowing builds down.`
-            );
-          }
-        }
+      // 5. Learning signal from this build's own valid, non-comparative metrics.
+      // NOTE: this used to compare tool-call counts across builds ("N% fewer tool
+      // calls than your first build") to claim learning was working. That
+      // comparison was removed — screen complexity varies too much between
+      // builds for a raw tool-call delta to mean anything. Cache hits and
+      // template/layout replay savings are measured directly on this build and
+      // don't depend on comparing unlike screens, so they're what's reported here.
+      if (cacheHits > 0 || replaySavings > 0) {
+        const parts = [];
+        if (cacheHits > 0) parts.push(`${cacheHits} cache hit${cacheHits === 1 ? '' : 's'}`);
+        if (replaySavings > 0) parts.push(`${replaySavings} tool call${replaySavings === 1 ? '' : 's'} saved via template/layout replay`);
+        recommendations.push(
+          `**Learning is active:** ${parts.join(' and ')} on this build, from confirmed/verified ` +
+          `component recipes and layout patterns reused from prior builds.`
+        );
       }
 
       // 6. Components approaching promotion
@@ -830,13 +845,20 @@ function register(server, context) {
       // ── Post-Build Structural Validation ──
       // Runs automatically before report to catch broken layouts.
       const validationResults = [];
-      let validationStatus = 'PASS'; // PASS | WARN | FAIL
+      // PASS | WARN | FAIL | UNAVAILABLE — starts as UNAVAILABLE so the
+      // report never claims "Passed" unless checks actually executed. Only
+      // flips to PASS once we've successfully reached the bridge and have an
+      // artboard to inspect.
+      let validationStatus = 'UNAVAILABLE';
 
       // Try to validate the artboard structure via the bridge
       try {
         const artboardId = buildManifest.artboardId || session.artboardId;
         if (artboardId) {
           const artboardProps = await bridge.send('get_node_props', { nodeId: artboardId });
+          // We reached the bridge and got the artboard — validation is actually
+          // running now. Downgrade to WARN/FAIL below if a check flags an issue.
+          validationStatus = 'PASS';
 
           // 1. LAYOUT SANITY — height:width ratio check
           if (artboardProps && artboardProps.width > 0) {
@@ -922,14 +944,23 @@ function register(server, context) {
             }
           } catch (e2) { /* deep scan failed — non-fatal */ }
         }
-      } catch (e) { /* artboard not found — skip validation */ }
+      } catch (e) {
+        // Artboard not found, or the bridge call itself failed — validation
+        // never ran. Only downgrade if nothing was actually checked yet; if
+        // earlier checks already ran and pushed results, keep their status.
+        if (validationResults.length === 0) validationStatus = 'UNAVAILABLE';
+      }
 
-      // Add validation section to report
+      // Add validation section to report — the header must always match
+      // validationStatus honestly. "Passed" is never shown unless checks
+      // actually executed (validationStatus === 'PASS').
       const validationHeader = validationStatus === 'FAIL'
         ? '## ⚠ BUILD NEEDS REVIEW — Structural Validation'
         : validationStatus === 'WARN'
           ? '## ⚠ Build Warnings — Structural Validation'
-          : '## ✓ Structural Validation Passed';
+          : validationStatus === 'UNAVAILABLE'
+            ? '## ⚠ Structural Validation Skipped'
+            : '## ✓ Structural Validation Passed';
       lines.push(validationHeader);
       lines.push('');
       if (validationResults.length > 0) {
@@ -938,29 +969,58 @@ function register(server, context) {
           lines.push(`- ${icon} **${v.check}**: ${v.detail}`);
         });
       } else {
-        lines.push('Validation could not run (no artboard ID available).');
+        lines.push('Validation could not run (no artboard ID available, or the artboard could not be reached). This is NOT the same as passing — treat it as unverified.');
       }
       lines.push('');
 
       const reportContent = lines.join('\n');
-
-      // Save report file
-      const reportsDir = path.join(process.cwd(), 'mimic', 'reports');
-      if (!fs.existsSync(reportsDir)) {
-        fs.mkdirSync(reportsDir, { recursive: true });
-      }
       const safeName = screenName.replace(/[^a-zA-Z0-9_-]/g, '-');
-      const reportPath = path.join(reportsDir, `build-${date}-${safeName}.md`);
-      fs.writeFileSync(reportPath, reportContent, 'utf-8');
 
-      // Save build manifest
-      const buildsDir = path.join(process.cwd(), 'mimic', 'builds');
-      if (!fs.existsSync(buildsDir)) fs.mkdirSync(buildsDir, { recursive: true });
-      buildManifest.save(path.join(buildsDir, 'last-build.json'));
-
-      // Advance phase to 5 (report) and clear report enforcement
+      // ── Unblock the session BEFORE attempting any file writes ──
+      // Learning has already been persisted (knowledgeStore.save() above).
+      // If cwd is unwritable, the report/manifest writes below may fail —
+      // that must degrade to a warning, never leave the user stuck in
+      // REPORT_REQUIRED forever. The report content is returned inline
+      // below regardless of whether either file write succeeds.
       advancePhase(5);
       session.buildsSinceReport = 0;
+
+      // Save report file — fall back to ~/.mimic-ai/reports/ if cwd is unwritable.
+      let reportPath = null;
+      let reportWriteWarning = null;
+      try {
+        const reportsDir = path.join(process.cwd(), 'mimic', 'reports');
+        if (!fs.existsSync(reportsDir)) fs.mkdirSync(reportsDir, { recursive: true });
+        reportPath = path.join(reportsDir, `build-${date}-${safeName}.md`);
+        fs.writeFileSync(reportPath, reportContent, 'utf-8');
+      } catch (err) {
+        try {
+          const fallbackDir = path.join(os.homedir(), '.mimic-ai', 'reports');
+          if (!fs.existsSync(fallbackDir)) fs.mkdirSync(fallbackDir, { recursive: true });
+          reportPath = path.join(fallbackDir, `build-${date}-${safeName}.md`);
+          fs.writeFileSync(reportPath, reportContent, 'utf-8');
+          reportWriteWarning = `Could not write the report to the project directory (${err.message}). Saved to ${reportPath} instead.`;
+        } catch (fallbackErr) {
+          reportPath = null;
+          reportWriteWarning = `Could not save the build report to disk (project dir: ${err.message}; fallback: ${fallbackErr.message}). The report content in this response is the only copy — save it manually if you need it.`;
+        }
+      }
+
+      // Save build manifest — same fallback strategy.
+      let manifestWriteWarning = null;
+      try {
+        const buildsDir = path.join(process.cwd(), 'mimic', 'builds');
+        if (!fs.existsSync(buildsDir)) fs.mkdirSync(buildsDir, { recursive: true });
+        buildManifest.save(path.join(buildsDir, 'last-build.json'));
+      } catch (err) {
+        try {
+          const fallbackBuildsDir = path.join(os.homedir(), '.mimic-ai', 'builds');
+          buildManifest.save(path.join(fallbackBuildsDir, 'last-build.json'));
+          manifestWriteWarning = `Could not write the build manifest to the project directory (${err.message}). Saved to ${fallbackBuildsDir} instead.`;
+        } catch (fallbackErr) {
+          manifestWriteWarning = `Could not save the build manifest to disk (project dir: ${err.message}; fallback: ${fallbackErr.message}).`;
+        }
+      }
 
       const promotionSummary = promotions.length > 0
         ? ` ${promotions.length} component(s) auto-promoted to strong: ${promotions.join(', ')}.`
@@ -982,6 +1042,8 @@ function register(server, context) {
 
       return {
         reportPath,
+        reportWriteWarning: reportWriteWarning || undefined,
+        manifestWriteWarning: manifestWriteWarning || undefined,
         bindingFailureCount: bindingFailures.length,
         unoverriddenTextCount: unoverriddenCount,
         unusedMappedComponentCount: unusedMappedComponents.length,
@@ -1003,7 +1065,7 @@ function register(server, context) {
           'After the summary, OFFER to generate an HTML version: "Would you like the full report as an HTML file?"',
           'The report file is for persistence — the user must SEE the results in the conversation.',
         ],
-        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified. ${recommendations.length} recommendation(s).${dsChangesSummary}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''}${unusedMappedSummary} Structural validation: ${validationStatus}.${promotionSummary}`,
+        summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified. ${recommendations.length} recommendation(s).${dsChangesSummary}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''}${unusedMappedSummary} Structural validation: ${validationStatus}.${promotionSummary}${reportWriteWarning ? ` ⚠ ${reportWriteWarning}` : ''}${manifestWriteWarning ? ` ⚠ ${manifestWriteWarning}` : ''}`,
       };
     }
   );

@@ -33,6 +33,55 @@ function resolveFigmaToken() {
 }
 
 /**
+ * Resolve the canonical knowledge store path.
+ *
+ * Previously this was `path.join(process.cwd(), 'ds-knowledge.json')` — since
+ * cwd depends entirely on how the MCP client launches the server, learning
+ * silently fragmented into a different file per working directory. The
+ * canonical location is now `~/.mimic-ai/ds-knowledge.json`, stable
+ * regardless of launch cwd.
+ *
+ * MIMIC_KNOWLEDGE_PATH overrides this if set (e.g. for tests, or a user who
+ * wants the store somewhere else deliberately).
+ */
+function resolveKnowledgeStorePath() {
+  if (process.env.MIMIC_KNOWLEDGE_PATH) return process.env.MIMIC_KNOWLEDGE_PATH;
+  return path.join(os.homedir(), '.mimic-ai', 'ds-knowledge.json');
+}
+
+/**
+ * One-time migration: if the canonical knowledge store doesn't exist yet,
+ * check legacy locations — cwd/ds-knowledge.json (the old default), then
+ * ~/ds-knowledge.json (a path some workarounds referenced but the code never
+ * actually used) — and copy the first one found to the canonical path. The
+ * original file is left in place (never deleted — it's the user's data).
+ *
+ * Returns a human-readable migration note, or null if nothing needed migrating.
+ */
+function migrateKnowledgeStoreIfNeeded(canonicalPath) {
+  if (fs.existsSync(canonicalPath)) return null;
+
+  const legacyCandidates = [
+    path.join(process.cwd(), 'ds-knowledge.json'),
+    path.join(os.homedir(), 'ds-knowledge.json'),
+  ];
+
+  for (const legacyPath of legacyCandidates) {
+    if (path.resolve(legacyPath) === path.resolve(canonicalPath)) continue;
+    try {
+      if (!fs.existsSync(legacyPath)) continue;
+      const canonicalDir = path.dirname(canonicalPath);
+      if (!fs.existsSync(canonicalDir)) fs.mkdirSync(canonicalDir, { recursive: true });
+      fs.copyFileSync(legacyPath, canonicalPath);
+      return `Migrated knowledge store from ${legacyPath} to ${canonicalPath} (original left in place).`;
+    } catch {
+      // Best-effort migration — try the next candidate.
+    }
+  }
+  return null;
+}
+
+/**
  * MCP clients (including Claude Code) may deliver array/object tool arguments
  * as JSON-encoded strings instead of parsed values. This function walks the
  * args object and parses any string that looks like JSON array/object.
@@ -170,9 +219,16 @@ bridge._onDisconnect = () => {
 };
 const dsCache = new DsCache();
 const dsResolver = new DsResolver(dsCache);
-const knowledgeStore = new KnowledgeStore(
-  path.join(process.cwd(), 'ds-knowledge.json')
-);
+const knowledgeStorePath = resolveKnowledgeStorePath();
+const knowledgeStoreDir = path.dirname(knowledgeStorePath);
+if (!fs.existsSync(knowledgeStoreDir)) {
+  fs.mkdirSync(knowledgeStoreDir, { recursive: true });
+}
+// One-time migration from legacy locations (old cwd-based default, or the
+// ~/ds-knowledge.json path some workarounds referenced) into the canonical
+// path. Runs before load() so the migrated data is what actually loads.
+const knowledgeStoreMigrationNote = migrateKnowledgeStoreIfNeeded(knowledgeStorePath);
+const knowledgeStore = new KnowledgeStore(knowledgeStorePath);
 const buildManifest = new BuildManifest();
 // Lazy-resolved on each discovery call — re-reads config file so token
 // updates take effect without restarting the MCP server process.
@@ -453,14 +509,40 @@ async function main() {
   // Start bridge (auto-starts, invisible to user)
   await bridge.start();
 
-  // Load knowledge store if it exists
+  // Load knowledge store if it exists. load() never throws — a corrupt file
+  // or unsupported schema version is backed up and replaced with a fresh
+  // store instead of preventing the server from connecting (see store.js).
   knowledgeStore.load();
+
+  // Surface knowledge-store startup notices loudly. These aren't fatal, but
+  // they mean learning silently reset or moved — the user should know.
+  // Stashed on `session` too so a future mimic_status update can surface
+  // them in-band, the same way session.buildInterrupted does today.
+  if (knowledgeStoreMigrationNote) {
+    console.error(`[mimic-ai] ${knowledgeStoreMigrationNote}`);
+    session.knowledgeStoreNotice = knowledgeStoreMigrationNote;
+  }
+  if (knowledgeStore.loadWarning) {
+    console.error(`[mimic-ai] ${knowledgeStore.loadWarning.message}`);
+    session.knowledgeStoreNotice = knowledgeStore.loadWarning.message;
+  }
 
   // Connect MCP
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch(console.error);
+// Only auto-start when run directly (`node mcp.js` / the `mimic-ai` bin entry),
+// not when required by tests — requiring this module registers tools and
+// constructs shared instances (harmless), but must not open the bridge port
+// or attempt a stdio connection as a side effect of `require()`.
+if (require.main === module) {
+  main().catch(console.error);
+}
 
-module.exports = { server, context };
+module.exports = {
+  server,
+  context,
+  resolveKnowledgeStorePath,
+  migrateKnowledgeStoreIfNeeded,
+};
