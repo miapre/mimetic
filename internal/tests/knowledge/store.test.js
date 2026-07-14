@@ -55,11 +55,11 @@ describe('KnowledgeStore', () => {
 
   it('persists library file keys across save/load', () => {
     const store = new KnowledgeStore(TEST_PATH);
-    store.setLibraryFileKey('LayerLens Theme', 'abc123');
+    store.setLibraryFileKey('Acme Design System', 'abc123');
     store.save();
     const store2 = new KnowledgeStore(TEST_PATH);
     store2.load();
-    assert.equal(store2.getLibraryFileKey('LayerLens Theme'), 'abc123');
+    assert.equal(store2.getLibraryFileKey('Acme Design System'), 'abc123');
   });
 
   it('backfills libraryFileKeys on load of old store', () => {

@@ -259,7 +259,7 @@ Complete rewrite from scratch.
 
 #### Community library support (skipRestApi)
 - New `skipRestApi` parameter on `mimic_discover_ds` allows discovery to proceed without the library file key
-- Community libraries (e.g. Material UI, HeroUI) are accessible via Figma but their file keys are not available to users
+- Community libraries are accessible via Figma but their file keys are not available to users
 - When set, discovery uses plugin-only data (variables + page-scan components) and skips the REST API component fetch
 - Components are then found via the Figma MCP `search_design_system` + `mimic_map_components` two-call workflow
 - Discovery prompt now mentions the `skipRestApi` escape hatch

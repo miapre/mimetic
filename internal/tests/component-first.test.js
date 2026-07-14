@@ -86,7 +86,7 @@ describe('component-first enforcement', () => {
     const second = await setup.handlers.mimic_map_components({
       elementTypes: ['button', 'header', 'badge'],
       librarySearchResults: [
-        { name: '<Button>', componentKey: 'btn-key-123', libraryName: 'Material UI', assetType: 'component_set' },
+        { name: '<Button>', componentKey: 'btn-key-123', libraryName: 'Acme UI', assetType: 'component_set' },
         { name: 'Some unrelated thing', componentKey: 'unrelated-key', libraryName: 'Other Lib', assetType: 'component' },
       ],
     });

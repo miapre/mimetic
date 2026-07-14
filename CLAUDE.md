@@ -448,9 +448,12 @@ mimic_build_chart({
   ],
   dimensions: { chartHeight: 200 },
   colors: [
-    "Component colors/Utility/Brand/utility-brand-500",
-    "Component colors/Utility/Success/utility-success-500"
+    "Colors/Data/series-blue-500",
+    "Colors/Data/series-purple-500"
   ]
+  // Use real variable paths from YOUR discovered DS
+  // (figma_read_variable_values) — neutral data colors only,
+  // never Brand/Success/Warning/Error (see rule 6)
 })
 ```
 

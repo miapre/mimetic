@@ -194,7 +194,7 @@ Full specification: [`CLAUDE.md`](CLAUDE.md)
 |---|---|
 | **Team library** (components + tokens) | Full usage: components, variables, text styles |
 | **Team library** (components only) | Uses components, flags missing tokens, recommends adding them |
-| **Community libraries** (Material Design, Apple iOS, etc.) | Full support including variable and component discovery |
+| **Community libraries** (public kits from Figma Community) | Full support including variable and component discovery |
 
 Enforcement adapts to what the DS provides. A library with text styles but no color variables enforces text styles and accepts raw colors. The build report shows what's missing and what adding it would unlock.
 
@@ -351,7 +351,7 @@ Intelligence flows down. Binding feedback flows up. The MCP layer validates vari
 ## FAQ
 
 <details>
-<summary><strong>Does it work with community libraries like Material Design or Apple iOS kits?</strong></summary>
+<summary><strong>Does it work with community libraries from Figma Community?</strong></summary>
 
 Yes. Mimic discovers components and variables from any library enabled in your Figma file, including community-published libraries.
 
