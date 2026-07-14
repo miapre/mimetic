@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.3 (2026-07-14)
+## 2.1.0 (2026-07-14)
 
 ### Security
 
@@ -99,6 +99,58 @@ Three vulnerabilities fixed from an internal audit:
   `~/.mimic-ai` fallback instead of wedging the session in
   `REPORT_REQUIRED`
 
+### Learning system v3
+
+- Knowledge is scoped per design system: recipes, patterns, gaps,
+  fingerprints, signals, and build history live in per-library
+  buckets; existing stores migrate automatically, and migrated
+  recipes move to the right library as discovery proves where their
+  component keys live. Rules can be global or per-library.
+- Majority-wins variant learning replaces last-write-wins: defaults
+  are derived from per-instance observation counts (3+ observations,
+  60% share) and a split vote yields no default instead of an
+  arbitrary one. Replay explains its provenance, validates against
+  the live schema before applying, and treats per-key apply errors
+  as failures. Confidence demotes on DS changes and repeated replay
+  failures (targeted per-property unlearning).
+- Structured fingerprints track components, styles, and variables by
+  their stable keys: renames are recognized (recipes keep working),
+  token renames update the rules that cite them, and removed variant
+  values stale exactly the recipes that stored them. A freshness
+  probe skips the diff entirely when the library is unchanged.
+- Reports: DS Changes leads with gap resolutions, regression
+  detection asks when a previously-componentized element is rebuilt
+  as a primitive, the learning trend is median tool-calls-per-element,
+  and auto-compiled rules propose replacement variables that exist in
+  the discovered design system.
+- Concurrent sessions merge per library bucket on save; deletions are
+  tombstoned so removed rules stay removed.
+
+### Figma platform
+
+- Slot-based components: insertion hints include SLOT properties,
+  and figma_fill_slot / figma_reset_slot place DS instances into
+  slots (feature-detected, structured errors on older hosts).
+- Extended variable collections (multi-brand theming) are discovered,
+  cached, and change-detected as extension overrides.
+- GRID layout support on frame creation (row/column counts, gaps with
+  variable binding, child spans), gated with a clear error on hosts
+  without Grid.
+- Shader-type paints pass through read/restyle paths untouched.
+- Component text edits load the node's actual fonts before mutating
+  characters, fixing first-text failures on non-Inter design systems.
+
+### Testing
+
+- The plugin enforcement gate (~3k LOC, 49 handlers) is under direct
+  test for the first time: importable in Node via a sandbox-inert
+  footer, driven by a reusable Figma stub. Fixed an insert timeout
+  race that could create a duplicate instance after the caller was
+  told the insert failed.
+- Fixed the .gitignore pattern that silently kept half the test suite
+  untracked; the full suite now ships in the repository and runs in
+  CI (GitHub Actions, Node 20/22).
+
 ### Bridge
 
 - Startup no longer kills processes on the bridge port. On
@@ -145,7 +197,7 @@ Three vulnerabilities fixed from an internal audit:
 - Server version is read from `package.json` (was a hardcoded string
   that had drifted to 2.0.0)
 
-### Test count: 485 (was 384)
+### Test count: 708 (was 384)
 
 ---
 
