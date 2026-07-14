@@ -1,0 +1,44 @@
+{
+  "version": 2,
+  "dsFingerprint": null,
+  "components": {},
+  "patterns": {
+    "Card": {
+      "description": "Recurring frame structure \"Card: ...\" (2 instances in E2E Layout 1)",
+      "buildCount": 1,
+      "occurrences": 2,
+      "confidence": "new",
+      "screen": "E2E Layout 1",
+      "layoutConfig": {
+        "direction": "VERTICAL",
+        "gap": 24,
+        "padding": 16,
+        "cornerRadius": 8
+      },
+      "lastUsed": "2026-07-14T13:49:42.286Z"
+    }
+  },
+  "gaps": {},
+  "rules": {},
+  "libraryFileKeys": {},
+  "buildHistory": [
+    {
+      "screenName": "E2E Layout 1",
+      "buildNumber": 2,
+      "date": "2026-07-14T13:49:42.287Z",
+      "toolCalls": 20,
+      "cacheHits": 0,
+      "replaySavings": 0,
+      "componentCount": 0,
+      "primitiveCount": 0,
+      "bindingFailures": 0,
+      "componentUsagePercent": 100
+    }
+  ],
+  "signals": [],
+  "meta": {
+    "buildCount": 1,
+    "lastBuild": "2026-07-14T13:49:42.286Z",
+    "created": "2026-07-14T13:49:42.286Z"
+  }
+}

@@ -1,7 +1,7 @@
 node_modules/
 ds-knowledge.json
 mimic/
-internal/
+internal/*
 !internal/tests/
 docs/superpowers/
 research/

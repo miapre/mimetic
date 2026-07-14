@@ -1,0 +1,45 @@
+{
+  "version": 2,
+  "dsFingerprint": null,
+  "components": {
+    "cell-key-1": {
+      "names": [
+        "Table cell"
+      ],
+      "instances": 1,
+      "buildCount": 1,
+      "componentKey": "cell-key-1",
+      "variantConfig": null,
+      "confidence": "new",
+      "textNodes": [
+        "Text",
+        "Supporting text"
+      ],
+      "lastUsed": "2026-07-14T13:49:42.351Z"
+    }
+  },
+  "patterns": {},
+  "gaps": {},
+  "rules": {},
+  "libraryFileKeys": {},
+  "buildHistory": [
+    {
+      "screenName": "E2E Text Batch",
+      "buildNumber": 2,
+      "date": "2026-07-14T13:49:42.351Z",
+      "toolCalls": 10,
+      "cacheHits": 0,
+      "replaySavings": 0,
+      "componentCount": 1,
+      "primitiveCount": 0,
+      "bindingFailures": 0,
+      "componentUsagePercent": 100
+    }
+  ],
+  "signals": [],
+  "meta": {
+    "buildCount": 1,
+    "lastBuild": "2026-07-14T13:49:42.351Z",
+    "created": "2026-07-14T13:49:42.350Z"
+  }
+}

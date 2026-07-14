@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "dsFingerprint": null,
+  "components": {},
+  "patterns": {},
+  "gaps": {
+    "Actions Row": {
+      "elements": [
+        "Actions Row"
+      ],
+      "evidence": "No action bar component found in DS. Screen: Container With Terms Test",
+      "estimatedSavings": "~7 tool calls per instance if DS component existed",
+      "searchTerms": [
+        "action bar",
+        "toolbar"
+      ],
+      "firstSeen": "2026-07-14T13:49:42.367Z",
+      "lastSeen": "2026-07-14T13:49:42.367Z"
+    }
+  },
+  "rules": {},
+  "libraryFileKeys": {},
+  "buildHistory": [
+    {
+      "screenName": "Container With Terms Test",
+      "buildNumber": 2,
+      "date": "2026-07-14T13:49:42.367Z",
+      "toolCalls": 10,
+      "cacheHits": 0,
+      "replaySavings": 0,
+      "componentCount": 0,
+      "primitiveCount": 1,
+      "bindingFailures": 0,
+      "componentUsagePercent": 100
+    }
+  ],
+  "signals": [],
+  "meta": {
+    "buildCount": 1,
+    "lastBuild": "2026-07-14T13:49:42.367Z",
+    "created": "2026-07-14T13:49:42.367Z"
+  }
+}
