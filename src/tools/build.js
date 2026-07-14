@@ -3,7 +3,7 @@
 const { surfaceBindingFeedback } = require('../utils/binding-feedback');
 const { wordBoundaryMatch } = require('../utils/text-match');
 
-const PHASE_HINT = 'Complete DS Discovery and Style Inventory first (call mimic_discover_ds → preload → figma_set_session_defaults).';
+const PHASE_HINT = 'Complete DS Discovery and Style Inventory first (call mimic_discover_ds → mimic_ds_assets → mimic_ds_assets action="set_defaults").';
 
 // Element names that likely have DS components.
 // If create_frame is called with one of these, require an explicit primitive override.
@@ -24,7 +24,7 @@ function getComponentFirstMatch(name) {
 // hardcoded \n / \r\n in text content fights auto-layout instead of letting
 // it wrap. Strip line breaks before the content ever reaches the bridge —
 // this is MCP-side, not a plugin/bridge concern. Scoped strictly to
-// figma_create_text; component text overrides (set_component_text) are a
+// figma_create_text; component text overrides (figma_component_text) are a
 // different tool in a different file and are NOT touched by this helper.
 function stripLineBreaks(content) {
   if (typeof content !== 'string' || !/[\r\n]/.test(content)) {
@@ -332,7 +332,7 @@ function register(server, context) {
   // ── figma_create_frame ────────────────────────────────────────
   registerTool(
     'figma_create_frame',
-    'Creates an auto-layout frame in Figma. All sizing uses DS variables when available. The name parameter should describe the HTML section or element role (e.g., "Header Section", "Metrics Row", "Card: Revenue"). Meaningful names enable iteration. IMPORTANT: Before creating frames for section-level elements (header, footer, sidebar), first check if the DS has a component for it via mimic_map_components or Figma MCP search_design_system.',
+    'Creates an auto-layout container frame (layout primitive) — the fallback when NO DS component exists for a section or layout. Every fill/padding/gap/radius binds to DS variables; component-like names are gated (pass confirmedNoComponent + primitiveOverrideReason for confirmed gaps). Name frames after their HTML role ("Header Section", "Card: Revenue"). Key params: parentId (omit for page-level artboard), direction, layoutSizing*, *Variable bindings, GRID mode. Check mimic_map_components FIRST. Phase 2+.',
     {
       type: 'object',
       properties: {
@@ -367,7 +367,7 @@ function register(server, context) {
         x: { type: 'number', description: 'X position in pixels. Required for page-level artboards. Use rightmost existing artboard x + width + 80.' },
         y: { type: 'number', description: 'Y position in pixels. Defaults to 0 for artboards.' },
         maxWidth: { type: 'number', description: 'Max width constraint.' },
-        fillStyleId: { type: 'string', description: 'DS fill style key for background (from figma_list_fill_styles). Preferred over fillVariable when DS has fill styles but no variables.' },
+        fillStyleId: { type: 'string', description: 'DS fill style key for background (from figma_list_ds (kind: "fill_styles")). Preferred over fillVariable when DS has fill styles but no variables.' },
         fill: { type: 'string', description: 'Raw hex color for background fill (e.g. "#ffffff"). Fallback when no DS styles/variables.' },
         stroke: { type: 'string', description: 'Raw hex color for stroke (e.g. "#e4e6ee"). Fallback when no DS stroke variables.' },
         strokeVariable: { type: 'string', description: 'DS variable path for stroke color.' },
@@ -477,7 +477,7 @@ function register(server, context) {
       if (enforcement.enforceRadiusVars && args.cornerRadius !== undefined && !args.cornerRadiusVariable) {
         categoryWarnings.push(
           `cornerRadius: raw value ${args.cornerRadius}px used but the DS has radius variables. ` +
-          `Use cornerRadiusVariable instead. Check figma_read_variable_values with category "radius" for available paths.`
+          `Use cornerRadiusVariable instead. Check figma_list_ds (kind: "variables") with category "radius" for available paths.`
         );
       }
 
@@ -544,13 +544,16 @@ function register(server, context) {
               ? 'Frame created but some DS bindings FAILED — check warnings above. Fix before continuing.'
               : 'Frame created. Add children with figma_create_text, figma_create_frame, or figma_insert_component.',
       };
+    },
+    {
+      annotations: { title: 'Create an auto-layout frame', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     }
   );
 
   // ── figma_create_text ─────────────────────────────────────────
   registerTool(
     'figma_create_text',
-    'Creates a text node in Figma with DS text style and color variable. The name parameter should describe the HTML element role (e.g., "Page Title", "Card: Revenue Label", "Subtitle"). Meaningful names enable iteration.',
+    'Creates a standalone text node bound to a DS text style (textStyleId — accepts style name or key) and DS color variable (fillVariable) — both are mandatory when the DS has them. Use for text OUTSIDE components; text inside a component instance uses figma_component_text instead. Strips hardcoded line breaks (container width controls wrapping). Name nodes after their HTML role ("Page Title", "Card: Revenue Label"). Params: parentId + content required. Phase 2+.',
     {
       type: 'object',
       properties: {
@@ -558,7 +561,7 @@ function register(server, context) {
         parentId: { type: 'string', description: 'Parent node ID.' },
         content: { type: 'string', description: 'Text content.' },
         textStyleId: { type: 'string', description: 'DS text style — accepts style name (e.g. "Text sm/Semibold") or style key. Names are resolved to keys automatically.' },
-        fillStyleId: { type: 'string', description: 'DS fill style key for text color (from figma_list_fill_styles). Preferred over fillVariable when DS has fill styles but no variables.' },
+        fillStyleId: { type: 'string', description: 'DS fill style key for text color (from figma_list_ds (kind: "fill_styles")). Preferred over fillVariable when DS has fill styles but no variables.' },
         fillVariable: { type: 'string', description: 'DS variable path for text color.' },
         fontSizeVariable: { type: 'string', description: 'DS variable path for font size (if no text style).' },
         lineHeightVariable: { type: 'string', description: 'DS variable path for line height.' },
@@ -611,73 +614,44 @@ function register(server, context) {
             ? `Text node created. ⚠ CATEGORY MISMATCH: ${catWarnings[0]}`
             : 'Text node created.',
       };
-    }
-  );
-
-  // ── figma_create_rectangle ────────────────────────────────────
-  registerTool(
-    'figma_create_rectangle',
-    'Creates a rectangle node in Figma.',
-    {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Node name.' },
-        parentId: { type: 'string', description: 'Parent node ID.' },
-        width: { type: 'number', description: 'Width in pixels.' },
-        height: { type: 'number', description: 'Height in pixels.' },
-        fillStyleId: { type: 'string', description: 'DS fill style key (from figma_list_fill_styles).' },
-        fillVariable: { type: 'string', description: 'DS variable path for fill color.' },
-        fill: { type: 'string', description: 'Raw hex color for fill (e.g. "#e4e6ee"). Fallback when no DS styles/variables.' },
-        cornerRadius: { type: 'number', description: 'Raw corner radius in pixels.' },
-        cornerRadiusVariable: { type: 'string', description: 'DS variable path for corner radius.' },
-        stroke: { type: 'string', description: 'Raw hex color for stroke. Fallback when no DS stroke variables.' },
-        strokeVariable: { type: 'string', description: 'DS variable path for stroke color.' },
-        strokeWeight: { type: 'number', description: 'Stroke weight in pixels.' },
-        layoutPositioning: { type: 'string', enum: ['AUTO', 'ABSOLUTE'], description: 'Set to ABSOLUTE to overlay this rectangle inside an auto-layout parent (e.g., grid lines behind bars).' },
-        layoutSizingHorizontal: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'], description: 'Horizontal sizing mode. Auto-defaults to FIXED when width is specified.' },
-        layoutSizingVertical: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'], description: 'Vertical sizing mode. Auto-defaults to FIXED when height is specified.' },
-      },
-      required: ['parentId'],
     },
-    async (args) => {
-      requirePhase(2, PHASE_HINT);
-      const validation = dsCache.validateVariables(args);
-      if (validation.hasPathErrors) {
-        return {
-          error: 'INVALID_VARIABLE_PATHS',
-          warnings: validation.warnings,
-          message: 'Fix the variable paths and try again. Do not proceed with invalid paths.',
-        };
-      }
-      const result = await bridge.send('create_rectangle', args);
-      session.toolCallCount++;
-      advancePhase(3);
-      surfaceBindingFeedback(result, args.name || 'create_rectangle');
-      const catWarnings = validation.categoryMismatches || [];
-      return {
-        nodeId: result?.nodeId || result?.id,
-        ...result,
-        _categoryWarnings: catWarnings.length > 0 ? catWarnings : undefined,
-        _categoryMismatchDetails: (validation.categoryMismatchDetails && validation.categoryMismatchDetails.length > 0) ? validation.categoryMismatchDetails : undefined,
-      };
+    {
+      annotations: { title: 'Create a text node', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     }
   );
 
-  // ── figma_create_ellipse ──────────────────────────────────────
+  /**
+   * v3.0.0 consolidation: figma_create_rectangle + figma_create_ellipse
+   * merge into figma_create_shape via a `shape` discriminant. Each
+   * dispatches unchanged to its original bridge handler ('create_rectangle'
+   * / 'create_ellipse') with unchanged validation/response logic — the
+   * merge is a routing layer only.
+   */
   registerTool(
-    'figma_create_ellipse',
-    'Creates an ellipse node in Figma. Supports arcData for donut charts.',
+    'figma_create_shape',
+    'Creates a rectangle or ellipse primitive node bound to DS variables. Use for dividers, backgrounds, chart bars/grid-lines/data-points, avatars-as-circles, or any shape with no DS component. Params: shape ("rectangle"|"ellipse", required), parentId (required), name, width, height, fillStyleId/fillVariable/fill, and for rectangle: cornerRadius(Variable), stroke(Variable), strokeWeight, layoutPositioning, layoutSizing*; for ellipse: arcData ({startingAngle, endingAngle, innerRadius} — donut/pie segments). Requires Phase 2. Prefer a DS component over a shape when one exists.',
     {
       type: 'object',
       properties: {
+        shape: { type: 'string', enum: ['rectangle', 'ellipse'], description: 'Which primitive to create.' },
         name: { type: 'string', description: 'Node name.' },
         parentId: { type: 'string', description: 'Parent node ID.' },
         width: { type: 'number', description: 'Width in pixels.' },
         height: { type: 'number', description: 'Height in pixels.' },
+        fillStyleId: { type: 'string', description: 'DS fill style key (from figma_list_ds kind="fill_styles"). Rectangle only.' },
         fillVariable: { type: 'string', description: 'DS variable path for fill color.' },
+        fill: { type: 'string', description: 'Raw hex color for fill (e.g. "#e4e6ee"). Fallback when no DS styles/variables. Rectangle only.' },
+        cornerRadius: { type: 'number', description: 'Raw corner radius in pixels. Rectangle only.' },
+        cornerRadiusVariable: { type: 'string', description: 'DS variable path for corner radius. Rectangle only.' },
+        stroke: { type: 'string', description: 'Raw hex color for stroke. Fallback when no DS stroke variables. Rectangle only.' },
+        strokeVariable: { type: 'string', description: 'DS variable path for stroke color. Rectangle only.' },
+        strokeWeight: { type: 'number', description: 'Stroke weight in pixels. Rectangle only.' },
+        layoutPositioning: { type: 'string', enum: ['AUTO', 'ABSOLUTE'], description: 'Set to ABSOLUTE to overlay this shape inside an auto-layout parent (e.g., grid lines behind bars). Rectangle only.' },
+        layoutSizingHorizontal: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'], description: 'Horizontal sizing mode. Auto-defaults to FIXED when width is specified. Rectangle only.' },
+        layoutSizingVertical: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'], description: 'Vertical sizing mode. Auto-defaults to FIXED when height is specified. Rectangle only.' },
         arcData: {
           type: 'object',
-          description: 'Arc data for donut/pie segments.',
+          description: 'Arc data for donut/pie segments. Ellipse only.',
           properties: {
             startingAngle: { type: 'number' },
             endingAngle: { type: 'number' },
@@ -685,7 +659,7 @@ function register(server, context) {
           },
         },
       },
-      required: ['parentId'],
+      required: ['shape', 'parentId'],
     },
     async (args) => {
       requirePhase(2, PHASE_HINT);
@@ -697,21 +671,45 @@ function register(server, context) {
           message: 'Fix the variable paths and try again. Do not proceed with invalid paths.',
         };
       }
-      const result = await bridge.send('create_ellipse', args);
-      session.toolCallCount++;
-      advancePhase(3);
-      surfaceBindingFeedback(result, args.name || 'create_ellipse');
-      return {
-        nodeId: result?.nodeId || result?.id,
-        ...result,
-      };
+
+      if (args.shape === 'ellipse') {
+        const { shape, ...payload } = args;
+        const result = await bridge.send('create_ellipse', payload);
+        session.toolCallCount++;
+        advancePhase(3);
+        surfaceBindingFeedback(result, args.name || 'create_ellipse');
+        return {
+          nodeId: result?.nodeId || result?.id,
+          ...result,
+        };
+      }
+
+      if (args.shape === 'rectangle') {
+        const { shape, ...payload } = args;
+        const result = await bridge.send('create_rectangle', payload);
+        session.toolCallCount++;
+        advancePhase(3);
+        surfaceBindingFeedback(result, args.name || 'create_rectangle');
+        const catWarnings = validation.categoryMismatches || [];
+        return {
+          nodeId: result?.nodeId || result?.id,
+          ...result,
+          _categoryWarnings: catWarnings.length > 0 ? catWarnings : undefined,
+          _categoryMismatchDetails: (validation.categoryMismatchDetails && validation.categoryMismatchDetails.length > 0) ? validation.categoryMismatchDetails : undefined,
+        };
+      }
+
+      return { error: 'INVALID_SHAPE', message: `Unknown shape "${args.shape}". Use "rectangle" or "ellipse".` };
+    },
+    {
+      annotations: { title: 'Create a rectangle or ellipse primitive', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     }
   );
 
   // ── figma_create_svg ──────────────────────────────────────────
   registerTool(
     'figma_create_svg',
-    'Creates a node from an SVG string in Figma. Useful for icons and custom graphics. Returns unboundChildren — a list of child nodes that need DS variable bindings. You MUST apply figma_set_node_fill to every unbound vector and figma_set_text_style + figma_set_node_fill to every unbound text. Leaving unbound children breaks DS compliance and light/dark mode.',
+    'Creates a node from an SVG string in Figma. Useful for icons and custom graphics. Returns unboundChildren — a list of child nodes that need DS variable bindings. You MUST apply figma_update_node (op: "fill") to every unbound vector and figma_update_node (op: "text_style" then op: "fill") to every unbound text. Leaving unbound children breaks DS compliance and light/dark mode.',
     {
       type: 'object',
       properties: {
@@ -752,7 +750,7 @@ function register(server, context) {
         if (unboundVectors.length > 0) {
           checklist.push({
             action: 'BIND_VECTOR_FILLS',
-            message: `${unboundVectors.length} vector node(s) have NO DS color variable. Apply figma_set_node_fill to each one. Grid lines → Colors/Border/border-secondary. Data elements → use palette from _chartColorHint.`,
+            message: `${unboundVectors.length} vector node(s) have NO DS color variable. Apply figma_update_node (op: "fill") to each one. Grid lines → Colors/Border/border-secondary. Data elements → use palette from _chartColorHint.`,
             nodes: unboundVectors.map(v => ({ nodeId: v.nodeId, type: v.type, name: v.name })),
           });
         }
@@ -760,7 +758,7 @@ function register(server, context) {
         if (unboundTexts.length > 0) {
           checklist.push({
             action: 'BIND_TEXT_STYLES',
-            message: `${unboundTexts.length} text node(s) have NO DS bindings. Apply BOTH figma_set_node_fill (color variable) AND figma_set_text_style (DS text style) to each one. Fill alone is NOT enough — font properties are also hardcoded from SVG.`,
+            message: `${unboundTexts.length} text node(s) have NO DS bindings. Apply BOTH figma_update_node (op: "fill") AND figma_update_node (op: "text_style") to each one. Fill alone is NOT enough — font properties are also hardcoded from SVG.`,
             nodes: unboundTexts.map(t => ({ nodeId: t.nodeId, name: t.name, characters: t.characters })),
           });
         }
@@ -774,6 +772,9 @@ function register(server, context) {
           ? '✓ All children have DS bindings.'
           : `⚠ ${unboundChildren.length} child node(s) need DS bindings. See configurationChecklist — this is MANDATORY.`,
       };
+    },
+    {
+      annotations: { title: 'Create a node from SVG markup', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     }
   );
 }

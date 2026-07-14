@@ -51,7 +51,6 @@ function createToolContext() {
   require('../../src/tools/components').register(null, context);
   require('../../src/tools/edit').register(null, context);
   require('../../src/tools/learning').register(null, context);
-  require('../../src/tools/batch').register(null, context);
 
   return { bridge, dsCache, knowledgeStore, session, handlers };
 }
@@ -150,20 +149,10 @@ describe('component-first enforcement', () => {
     assert.equal(setup.bridge.getMessages('create_frame').length, 1);
   });
 
-  it('applies the same component-first gate inside figma_batch', async () => {
-    const result = await setup.handlers.figma_batch({
-      operations: [
-        { type: 'create_frame', payload: { name: 'Header Navigation', parentId: 'parent:1' } },
-        { type: 'create_frame', payload: { name: 'Hero Section', parentId: 'parent:1' } },
-      ],
-    });
-
-    assert.equal(result.total, 2);
-    assert.equal(result.succeeded, 1);
-    assert.equal(result.failed, 1);
-    assert.equal(result.results[0].error, 'COMPONENT_FIRST_REQUIRED');
-    assert.equal(setup.bridge.getMessages('create_frame').length, 1);
-  });
+  // v3.0.0: figma_batch was removed from the MCP surface (it bypassed
+  // per-tool validation by design flaw); its component-first-gate test
+  // went with it. The gate itself is still covered by the
+  // figma_create_frame tests above.
 
   it('passes known single-component import mode to component insertion', async () => {
     setup.dsCache.addComponent('single-component-key', {
@@ -175,29 +164,6 @@ describe('component-first enforcement', () => {
       componentKey: 'single-component-key',
       parentId: 'parent:1',
       name: 'Smoke button',
-    });
-
-    const insert = setup.bridge.getMessages('insert_component')[0];
-    assert.equal(insert.payload.importMode, 'component');
-  });
-
-  it('passes known single-component import mode to batch component insertion', async () => {
-    setup.dsCache.addComponent('single-component-key', {
-      name: 'Buttons/Button',
-      isComponentSet: false,
-    });
-
-    await setup.handlers.figma_batch({
-      operations: [
-        {
-          type: 'insert_component',
-          payload: {
-            componentKey: 'single-component-key',
-            parentId: 'parent:1',
-            name: 'Smoke button',
-          },
-        },
-      ],
     });
 
     const insert = setup.bridge.getMessages('insert_component')[0];
@@ -253,7 +219,8 @@ describe('component-first enforcement', () => {
   });
 
   it('sets node position directly for placement correction', async () => {
-    const result = await setup.handlers.figma_set_node_position({
+    const result = await setup.handlers.figma_update_node({
+      op: 'position',
       nodeId: 'artboard:1',
       x: 1360,
       y: 0,
@@ -264,17 +231,18 @@ describe('component-first enforcement', () => {
     assert.equal(setup.bridge.getMessages('set_node_position').length, 1);
   });
 
-  it('sets component text by exact text node id', async () => {
-    const result = await setup.handlers.figma_set_component_text_by_id({
+  it('sets component text by exact text node id (figma_component_text with textNodeId override)', async () => {
+    const result = await setup.handlers.figma_component_text({
       nodeId: 'component:1',
-      textNodeId: 'Icomponent:1;child:2',
-      content: 'Run verification',
+      overrides: [
+        { textNodeId: 'Icomponent:1;child:2', content: 'Run verification' },
+      ],
     });
 
     const message = setup.bridge.getMessages('set_component_text_by_id')[0];
     assert.equal(message.payload.nodeId, 'component:1');
     assert.equal(message.payload.textNodeId, 'Icomponent:1;child:2');
-    assert.equal(result.characters, 'Run verification');
+    assert.equal(result.results[0].characters, 'Run verification');
   });
 
   // ── Fix 2: MAPPED_COMPONENT_AVAILABLE enforcement ──

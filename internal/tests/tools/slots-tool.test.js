@@ -1,8 +1,13 @@
 'use strict';
 
 /**
- * MCP-tool-level tests for figma_fill_slot / figma_reset_slot
- * (src/tools/components.js), against a MockBridge (no real plugin).
+ * MCP-tool-level tests for figma_manage_slot (src/tools/components.js),
+ * against a MockBridge (no real plugin).
+ *
+ * v3.0.0: figma_fill_slot + figma_reset_slot were merged into
+ * figma_manage_slot ({ action: 'fill' | 'reset', ... }) in the tool-surface
+ * consolidation. Bridge handler names ('fill_slot' / 'reset_slot') are
+ * unchanged — only the MCP-level entry point changed.
  *
  * Covers: phase gating (like every other component tool), the previously-
  * failed-componentKey guard (mirrors figma_insert_component), and the
@@ -58,7 +63,7 @@ function createTestContext() {
   return { context, handlers, bridge, session, dsCache, knowledgeStore };
 }
 
-describe('figma_fill_slot', () => {
+describe('figma_manage_slot — action: fill', () => {
   let handlers, bridge, session, dsCache, knowledgeStore;
 
   beforeEach(() => {
@@ -73,14 +78,14 @@ describe('figma_fill_slot', () => {
   it('requires phase >= 2', async () => {
     session.phase = 1;
     await assert.rejects(
-      () => handlers.figma_fill_slot({ nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' }),
+      () => handlers.figma_manage_slot({ action: 'fill', nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' }),
       (err) => { assert.ok(err instanceof PhaseError); return true; }
     );
   });
 
   it('sends fill_slot to the bridge and returns the result', async () => {
     bridge.setResponse('fill_slot', { nodeId: 'n1', slotName: 'Content', filledWithKey: 'metric-card', filledInstanceId: 'n2' });
-    const result = await handlers.figma_fill_slot({ nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' });
+    const result = await handlers.figma_manage_slot({ action: 'fill', nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' });
 
     const msgs = bridge.getMessages('fill_slot');
     assert.equal(msgs.length, 1);
@@ -89,16 +94,23 @@ describe('figma_fill_slot', () => {
     assert.equal(session.toolCallCount, 1);
   });
 
+  it('defaults to action="fill" when action is omitted', async () => {
+    bridge.setResponse('fill_slot', { nodeId: 'n1', slotName: 'Content', filledWithKey: 'metric-card' });
+    const result = await handlers.figma_manage_slot({ nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' });
+    assert.equal(bridge.getMessages('fill_slot').length, 1);
+    assert.notEqual(result.error, 'MISSING_COMPONENT_KEY');
+  });
+
   it('rejects a previously-failed componentKey without calling the bridge (mirrors figma_insert_component)', async () => {
     dsCache.markFailed('bad-key', true);
-    const result = await handlers.figma_fill_slot({ nodeId: 'n1', slotName: 'Content', componentKey: 'bad-key' });
+    const result = await handlers.figma_manage_slot({ action: 'fill', nodeId: 'n1', slotName: 'Content', componentKey: 'bad-key' });
     assert.equal(result.error, 'COMPONENT_PREVIOUSLY_FAILED');
     assert.equal(bridge.getMessages('fill_slot').length, 0);
   });
 
   it('marks a componentKey failed (permanent) when the bridge rejects with a non-timeout error', async () => {
     bridge.setResponse('fill_slot', () => { throw new Error('COMPONENT_NOT_FOUND'); });
-    await assert.rejects(() => handlers.figma_fill_slot({ nodeId: 'n1', slotName: 'Content', componentKey: 'missing-key' }));
+    await assert.rejects(() => handlers.figma_manage_slot({ action: 'fill', nodeId: 'n1', slotName: 'Content', componentKey: 'missing-key' }));
     assert.equal(dsCache.hasFailed('missing-key'), true);
   });
 
@@ -106,12 +118,18 @@ describe('figma_fill_slot', () => {
     bridge.setResponse('fill_slot', { nodeId: 'n1', slotName: 'Content', filledWithKey: 'metric-card' });
     session._nodeComponentKeys = new Map([['n1', 'card-key']]);
 
-    await handlers.figma_fill_slot({ nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' });
-    await handlers.figma_fill_slot({ nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' });
+    await handlers.figma_manage_slot({ action: 'fill', nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' });
+    await handlers.figma_manage_slot({ action: 'fill', nodeId: 'n1', slotName: 'Content', componentKey: 'metric-card' });
 
     const recipe = knowledgeStore.getComponent('card-key');
     assert.ok(recipe, 'a recipe should be created for the host component');
     assert.equal(recipe.slots.Content.observed, 2);
+  });
+
+  it('rejects action="fill" without componentKey', async () => {
+    const result = await handlers.figma_manage_slot({ action: 'fill', nodeId: 'n1', slotName: 'Content' });
+    assert.equal(result.error, 'MISSING_COMPONENT_KEY');
+    assert.equal(bridge.getMessages('fill_slot').length, 0);
   });
 
   it('never auto-replays a slot fill on figma_insert_component (slots are checklist-only)', async () => {
@@ -134,7 +152,7 @@ describe('figma_fill_slot', () => {
   });
 });
 
-describe('figma_reset_slot', () => {
+describe('figma_manage_slot — action: reset', () => {
   let handlers, bridge, session;
 
   beforeEach(() => {
@@ -147,16 +165,22 @@ describe('figma_reset_slot', () => {
   it('requires phase >= 2', async () => {
     session.phase = 0;
     await assert.rejects(
-      () => handlers.figma_reset_slot({ nodeId: 'n1', slotName: 'Content' }),
+      () => handlers.figma_manage_slot({ action: 'reset', nodeId: 'n1', slotName: 'Content' }),
       (err) => { assert.ok(err instanceof PhaseError); return true; }
     );
   });
 
   it('sends reset_slot to the bridge and returns the result', async () => {
     bridge.setResponse('reset_slot', { nodeId: 'n1', slotName: 'Content', reset: true });
-    const result = await handlers.figma_reset_slot({ nodeId: 'n1', slotName: 'Content' });
+    const result = await handlers.figma_manage_slot({ action: 'reset', nodeId: 'n1', slotName: 'Content' });
     assert.equal(bridge.getMessages('reset_slot').length, 1);
     assert.equal(result.reset, true);
     assert.equal(session.toolCallCount, 1);
+  });
+
+  it('does not require componentKey for action="reset"', async () => {
+    bridge.setResponse('reset_slot', { nodeId: 'n1', slotName: 'Content', reset: true });
+    const result = await handlers.figma_manage_slot({ action: 'reset', nodeId: 'n1', slotName: 'Content' });
+    assert.notEqual(result.error, 'MISSING_COMPONENT_KEY');
   });
 });

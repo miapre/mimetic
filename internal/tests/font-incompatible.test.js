@@ -38,7 +38,6 @@ function createToolContext() {
 
   require('../../src/tools/build').register(null, context);
   require('../../src/tools/components').register(null, context);
-  require('../../src/tools/batch').register(null, context);
 
   return { bridge, dsCache, session, handlers };
 }

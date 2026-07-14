@@ -47,8 +47,8 @@ the gate, never skip discovery, never end a build without a report.
    `layoutSizingHorizontal: FILL` by default.
 
 5. **Batch instead of looping:**
-   - `figma_batch_set_component_text` for all text on one instance, not
-     repeated single-node calls.
+   - One `figma_component_text` call with the full `overrides` array for
+     all text on one instance, not repeated single-node calls.
    - `mimic_build_table` for any data table.
    - `mimic_build_chart` for any chart (bar/line/donut/radar, fully DS-
      bound), never hand-built SVG or manual geometry.
@@ -72,7 +72,8 @@ the gate, never skip discovery, never end a build without a report.
   completely. Wait for reconnection, call `mimic_status` to confirm the
   session is clear, and resume.
 - **`bindingFailures: true` means stop, not continue.** Fix the variable
-  path (`figma_read_variable_values` shows what's cached) first.
+  path (`figma_list_ds` with `kind: "variables"` shows what's cached)
+  first.
 - **Feedback iterates the existing artboard.** Never delete an artboard
   to start over.
 - **A correction repeated twice is a rule, not a one-off.** Offer to save

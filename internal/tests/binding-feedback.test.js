@@ -248,7 +248,8 @@ describe('Binding Feedback', () => {
 
       ctx.dsCache.addVariable('bg-card', { key: 'k6', category: 'background' });
 
-      const result = await ctx.toolHandlers.figma_set_node_fill({
+      const result = await ctx.toolHandlers.figma_update_node({
+        op: 'fill',
         nodeId: 'node:1',
         fillVariable: 'bg-card',
       });
@@ -273,7 +274,8 @@ describe('Binding Feedback', () => {
       ctx.dsCache.addVariable('sp-lg', { key: 'k7', category: 'spacing' });
       ctx.dsCache.addVariable('sp-md', { key: 'k8', category: 'spacing' });
 
-      const result = await ctx.toolHandlers.figma_set_layout_sizing({
+      const result = await ctx.toolHandlers.figma_update_node({
+        op: 'layout',
         nodeId: 'node:2',
         layoutSizingHorizontal: 'FILL',
         paddingVariable: 'sp-lg',

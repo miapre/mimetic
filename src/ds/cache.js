@@ -180,7 +180,7 @@ class DsCache {
         warnings.push(`${field}: '${path}' not found in DS. Available: ${allSuggestions.join(', ')}`);
       } else {
         const count = this.variables.size;
-        warnings.push(`${field}: '${path}' not found in DS (${count} variables cached). Use figma_read_variable_values to see available variables.`);
+        warnings.push(`${field}: '${path}' not found in DS (${count} variables cached). Use figma_list_ds (kind: "variables") to see available variables.`);
       }
     }
     // Category mismatches are warnings, not blocking errors — variable paths

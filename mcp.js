@@ -207,29 +207,26 @@ const MAX_PHASE3_CALLS_BEFORE_CHECKPOINT = 20;
 const MAX_PHASE3_CALLS_BEFORE_STOP = 300;
 
 /**
- * B21 fix: every tool in src/tools/edit.js mutates the Figma document
- * (text, fill, layout sizing, visibility, variable modes, position, node
- * moves/deletes, artboard restyle) but none of them call requirePhase() —
- * they were usable at Phase 0, before DS discovery, inconsistent with every
- * other build/edit tool's "blocked until Phase 2" contract. edit.js is
- * owned by a different worker, so the gate is enforced centrally here by
- * name instead of inside each handler (see the tool-call wrapper below,
- * which calls requirePhase(2, ...) for any name in this set before invoking
- * the handler). All 11 edit.js tools are gated — none are read-only, so
- * there's no recovery-flow exemption to carve out.
+ * B21 fix (v3.0.0 update): originally every tool in src/tools/edit.js
+ * mutated the Figma document but none called requirePhase() themselves, so
+ * the gate was enforced centrally here by name. The v3.0.0 consolidation
+ * merged 8 of those 11 tools (figma_set_text, figma_set_node_fill,
+ * figma_set_layout_sizing, figma_set_visibility, figma_set_text_style,
+ * figma_set_node_position, figma_restyle_artboard, figma_move_node) plus
+ * figma_select_node and figma_change_page (from inspect.js, previously
+ * ungated) into `figma_update_node`, and figma_set_variable_mode +
+ * figma_set_all_variable_modes into `figma_variable_modes`. Both new tools
+ * now self-gate inside their handlers (edit.js calls requirePhase(2, ...)
+ * directly, matching the pattern already used in components.js) so the
+ * mutating ops keep the original Phase-2 requirement while
+ * figma_update_node's 'select' and 'page' ops stay ungated exactly as
+ * figma_select_node/figma_change_page were before the merge — a single
+ * name-keyed Set can't express "gate some ops of this tool but not others."
+ * figma_delete_node is unchanged — still centrally gated here, since its
+ * handler still doesn't call requirePhase() itself.
  */
 const EDIT_TOOLS_REQUIRE_PHASE_2 = new Set([
-  'figma_set_text',
-  'figma_set_node_fill',
-  'figma_set_layout_sizing',
-  'figma_set_visibility',
-  'figma_set_variable_mode',
-  'figma_set_all_variable_modes',
-  'figma_set_text_style',
-  'figma_set_node_position',
-  'figma_move_node',
   'figma_delete_node',
-  'figma_restyle_artboard',
 ]);
 
 function requirePhase(minPhase, hint) {
@@ -352,10 +349,34 @@ function resetBuildState() {
 }
 
 // ── Tool Registry ─────────────────────────────────────────────────────
-const toolRegistry = { tools: [], handlers: {} };
+const toolRegistry = { tools: [], handlers: {}, outputSchemas: {} };
 
-function registerTool(name, description, inputSchema, handler) {
-  toolRegistry.tools.push({ name, description, inputSchema });
+/**
+ * Register an MCP tool.
+ *
+ * `meta` (optional, 5th arg) carries the v3.0.0 tool-surface additions:
+ *   - annotations: MCP ToolAnnotations hint object (readOnlyHint,
+ *     destructiveHint, idempotentHint, title, ...) — see SDK 1.29
+ *     `ToolAnnotationsSchema`. Purely advisory metadata for hosts; never
+ *     changes handler behavior.
+ *   - outputSchema: JSON Schema (type: 'object') describing the shape of
+ *     the tool's structured result. When present, the CallToolRequest
+ *     handler below also returns `structuredContent` alongside the
+ *     existing `content` text block (kept for backwards compatibility —
+ *     see CallToolResultSchema in the SDK).
+ *
+ * Kept as an optional trailing param (not a breaking change to the
+ * function signature) so every existing call site that doesn't need
+ * annotations/outputSchema is untouched.
+ */
+function registerTool(name, description, inputSchema, handler, meta) {
+  const tool = { name, description, inputSchema };
+  if (meta && meta.annotations) tool.annotations = meta.annotations;
+  if (meta && meta.outputSchema) {
+    tool.outputSchema = meta.outputSchema;
+    toolRegistry.outputSchemas[name] = meta.outputSchema;
+  }
+  toolRegistry.tools.push(tool);
   toolRegistry.handlers[name] = handler;
 }
 
@@ -426,13 +447,16 @@ const context = {
 };
 
 // Tool registration
+// NOTE (v3.0.0): src/tools/batch.js (figma_batch) was removed in the
+// tool-surface consolidation — see CHANGELOG.md 3.0.0. The plugin-side
+// `batch_execute` bridge handler and its tests are untouched; only the
+// MCP-level tool + its registration were deleted.
 require('./src/tools/status').register(server, context);
 require('./src/tools/ds-setup').register(server, context);
 require('./src/tools/build').register(server, context);
 require('./src/tools/components').register(server, context);
 require('./src/tools/edit').register(server, context);
 require('./src/tools/inspect').register(server, context);
-require('./src/tools/batch').register(server, context);
 require('./src/tools/learning').register(server, context);
 require('./src/tools/compliance').register(server, context);
 require('./src/tools/rendering').register(server, context);
@@ -445,6 +469,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: toolRegistry.tools,
 }));
 
+/**
+ * Build a CallToolResult payload. When the tool declared an outputSchema
+ * (registerTool's `meta.outputSchema`), the SDK's CallToolResultSchema
+ * expects `structuredContent` to accompany `content` — see the 1.29
+ * ToolSchema/CallToolResultSchema definitions in
+ * node_modules/@modelcontextprotocol/sdk/dist/cjs/types.js. `content` is
+ * always populated too (kept for backwards compatibility with clients that
+ * don't read structuredContent).
+ */
+function buildCallResult(name, payload) {
+  const result = { content: [{ type: 'text', text: JSON.stringify(payload) }] };
+  if (toolRegistry.outputSchemas[name] && payload && typeof payload === 'object') {
+    result.structuredContent = payload;
+  }
+  return result;
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   const handler = toolRegistry.handlers[name];
@@ -453,20 +494,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown tool', name }) }],
     };
   }
-  // These tools are always allowed, even when circuit breaker is active
+  // These tools are always allowed, even when circuit breaker is active.
+  // v3.0.0: updated for the consolidated surface — figma_inspect covers every
+  // former figma_get_* read, figma_list_ds covers the list/read caches, and
+  // mimic_ds_assets covers the manual discover/preload/set_defaults escape
+  // hatches. mimic_generate_design_md folded into mimic_ai_knowledge_read.
   const EXEMPT_TOOLS = new Set([
     // Status & reporting
-    'mimic_status', 'mimic_generate_build_report', 'mimic_generate_design_md',
+    'mimic_status', 'mimic_generate_build_report',
     // Discovery & setup (failures here shouldn't block builds)
     'mimic_discover_ds', 'mimic_map_components', 'mimic_ai_knowledge_read',
-    'figma_discover_library_styles', 'figma_discover_library_variables',
-    'figma_discover_library_components',
-    'figma_preload_styles', 'figma_preload_variables', 'figma_set_session_defaults',
-    // Inspect & QA
-    'figma_validate_ds_compliance', 'figma_get_node_props', 'figma_get_node_children',
-    'figma_get_node_parent', 'figma_get_page_nodes', 'figma_get_pages',
-    'figma_get_selection', 'figma_get_text_info', 'figma_get_component_variants',
-    'figma_read_variable_values', 'figma_list_text_styles',
+    'mimic_ds_assets',
+    // Inspect & QA (read-only)
+    'figma_validate_ds_compliance', 'figma_inspect', 'figma_list_ds',
   ]);
 
   // Build interrupt guard: plugin disconnected during an active build.
@@ -611,9 +651,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const merged = typeof result === 'object' && result !== null
         ? { ...result, _checkpoint: checkpoint }
         : { result, _checkpoint: checkpoint };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(merged) }],
-      };
+      return buildCallResult(name, merged);
     }
 
     // Inject report reminder sparingly — every 10th build op or on status checks
@@ -624,9 +662,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result) }],
-    };
+    return buildCallResult(name, result);
   } catch (err) {
     const { isInfraError } = require('./src/utils/errors');
     const infraFailure = isInfraError(err);
@@ -675,7 +711,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : /Bridge timeout/i.test(err.message)
             ? 'Bridge timed out — the plugin may be busy or disconnected. Wait a moment and retry.'
             : /Parent node not found/i.test(err.message) || /Parent node not found/i.test(err.pluginError?.message || '')
-              ? 'Parent node disappeared — this is a plugin state issue. Verify the parent still exists with figma_get_node_children on its container, then retry.'
+              ? 'Parent node disappeared — this is a plugin state issue. Verify the parent still exists with figma_inspect (target: "children") on its container, then retry.'
             : /plugin disconnected/i.test(err.message)
               ? 'Plugin disconnected — ask the user to restart the Figma plugin, then retry.'
               : 'Infrastructure error detected. Retry or check plugin status.',

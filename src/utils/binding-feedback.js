@@ -10,7 +10,7 @@ function surfaceBindingFeedback(result, toolName) {
     .filter(([, ok]) => ok === false)
     .map(([name]) => name);
   if (failedBindings.length > 0) {
-    result._bindingWarning = `⚠ ${failedBindings.length} DS binding(s) FAILED on ${toolName}: ${failedBindings.join(', ')}. Check variable paths against figma_read_variable_values.`;
+    result._bindingWarning = `⚠ ${failedBindings.length} DS binding(s) FAILED on ${toolName}: ${failedBindings.join(', ')}. Check variable paths against figma_list_ds (kind: "variables").`;
   }
   return result;
 }

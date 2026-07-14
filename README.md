@@ -345,19 +345,23 @@ Intelligence flows down. Binding feedback flows up. The MCP layer validates vari
 </details>
 
 <details>
-<summary><strong>58 tools available</strong></summary>
+<summary><strong>26 tools available</strong></summary>
 
-**Status and learning:** `mimic_status`, `mimic_discover_ds`, `mimic_ai_knowledge_read`, `mimic_ai_knowledge_write`, `mimic_generate_build_report`, `mimic_generate_design_md`
+A lean, consolidated surface (v3.0.0) — every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) and the key workflow tools return structured output (`outputSchema`).
 
-**DS setup:** `figma_preload_styles`, `figma_preload_fill_styles`, `figma_preload_variables`, `figma_discover_library_styles`, `figma_discover_library_variables`, `figma_discover_library_components`, `figma_set_session_defaults`, `figma_list_text_styles`, `figma_list_fill_styles`, `figma_read_variable_values`, `mimic_map_components`
+**Status and learning:** `mimic_status`, `mimic_discover_ds`, `mimic_ai_knowledge_read`, `mimic_ai_knowledge_write`, `mimic_generate_build_report`
 
-**Build:** `figma_create_frame`, `figma_create_text`, `figma_create_rectangle`, `figma_create_ellipse`, `figma_create_svg`, `figma_insert_component`, `figma_batch`, `mimic_build_table`, `mimic_build_chart`
+**DS setup:** `mimic_ds_assets` (discover / preload / set_defaults), `figma_list_ds` (text styles / fill styles / variables), `mimic_map_components`
 
-**Edit:** `figma_set_component_text`, `figma_batch_set_component_text`, `figma_set_component_text_by_id`, `figma_set_text`, `figma_set_text_style`, `figma_set_node_fill`, `figma_set_node_position`, `figma_set_layout_sizing`, `figma_set_variant`, `figma_set_visibility`, `figma_set_variable_mode`, `figma_set_all_variable_modes`, `figma_swap_main_component`, `figma_replace_component`, `figma_restyle_artboard`, `figma_move_node`, `figma_delete_node`
+**Build:** `figma_create_frame`, `figma_create_text`, `figma_create_shape` (rectangle / ellipse), `figma_create_svg`, `figma_insert_component`, `mimic_build_table`, `mimic_build_chart`
 
-**Inspect and QA:** `figma_get_node_props`, `figma_get_node_children`, `figma_get_node_parent`, `figma_get_text_info`, `figma_get_component_variants`, `figma_get_selection`, `figma_select_node`, `figma_get_page_nodes`, `figma_get_pages`, `figma_change_page`, `figma_validate_ds_compliance`, `mimic_find_node`
+**Components:** `figma_component_text` (single or batch overrides), `figma_set_variant`, `figma_swap_main_component` (swap / replace), `figma_manage_slot` (fill / reset)
 
-**Rendering and charts:** `mimic_pipeline_resolve`, `mimic_render_url`, `mimic_compute_chart`
+**Edit:** `figma_update_node` (text, text_style, fill, layout, visibility, position, restyle, move, select, page), `figma_variable_modes`, `figma_delete_node`
+
+**Inspect and QA:** `figma_inspect` (node, children, parent, text, pages, page, selection, variants, section), `figma_validate_ds_compliance`
+
+**Rendering and charts:** `mimic_pipeline_resolve`, `mimic_compute_chart`
 
 </details>
 

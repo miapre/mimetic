@@ -14,8 +14,9 @@ and the session switches to primitives-only mode.
 
 ### INSERT_TIMEOUT does not mean failure
 When `figma_insert_component` returns INSERT_TIMEOUT, the component
-MAY have been created. Always check via `figma_get_node_children`
-on the parent before retrying. Duplicates are hard to detect.
+MAY have been created. Always check via `figma_inspect`
+(target: `"children"`) on the parent before retrying. Duplicates
+are hard to detect.
 
 ### Phantom libraries in search results
 `search_design_system` returns libraries that appear in Figma's

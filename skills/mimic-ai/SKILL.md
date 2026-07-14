@@ -52,9 +52,9 @@ operational sequence to follow every time.
    `layoutSizingHorizontal: FILL` by default.
 
 5. **Batch instead of looping one call per node:**
-   - All text overrides on one component instance:
-     `figma_batch_set_component_text`, not repeated
-     `figma_set_component_text` calls.
+   - All text overrides on one component instance: one
+     `figma_component_text` call with the full `overrides` array, not
+     one call per text node.
    - Any data table: `mimic_build_table` (headers, cells, variants, text
      in one call), not cell-by-cell construction.
    - Any chart: `mimic_build_chart` (bar/line/donut/radar, fully bound to
@@ -82,8 +82,8 @@ operational sequence to follow every time.
   reconnection, call `mimic_status` to confirm the session is clear, and
   resume where the build left off.
 - **`bindingFailures: true` means stop, not continue.** Fix the variable
-  path (`figma_read_variable_values` shows what's actually cached) before
-  the next operation.
+  path (`figma_list_ds` with `kind: "variables"` shows what's actually
+  cached) before the next operation.
 - **Feedback iterates the existing artboard.** Never delete an artboard
   to "start over."
 - **A user correction repeated twice is a rule, not a one-off.** Offer to

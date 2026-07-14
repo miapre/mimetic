@@ -15,7 +15,7 @@ const { wordBoundaryMatch } = require('../utils/text-match');
 // illustrate a plausible path shape (collection/variable naming) — they
 // are NOT real paths from any actual design system, and every field they
 // cover is clearly labeled as an example via _exampleFields below. Callers
-// are told to verify with figma_read_variable_values / figma_list_text_styles
+// are told to verify with figma_list_ds (kind: "variables") / figma_list_ds (kind: "text_styles")
 // before binding to them.
 const EXAMPLE_PALETTE = [
   'Colors/Data/series-blue-500',
@@ -56,9 +56,9 @@ function buildChartColorHint(dsCache) {
   const allExample = exampleFields.length === Object.keys(usedExample).length;
 
   const message = allExample
-    ? 'No DS has been discovered yet (or the cache has no matching variables/styles). Every path below is an INVENTED EXAMPLE illustrating path shape only — NOT a path in your file and not from any real design system. Run mimic_discover_ds, then use figma_read_variable_values / figma_list_text_styles to find the real paths before binding anything.'
+    ? 'No DS has been discovered yet (or the cache has no matching variables/styles). Every path below is an INVENTED EXAMPLE illustrating path shape only — NOT a path in your file and not from any real design system. Run mimic_discover_ds, then use figma_list_ds (kind: "variables") / figma_list_ds (kind: "text_styles") to find the real paths before binding anything.'
     : exampleFields.length > 0
-      ? `After creating this chart with figma_create_svg, check the configurationChecklist in the response — it lists every unbound child node that MUST receive DS variable bindings. Pass layoutSizingHorizontal: "FILL" to figma_create_svg so the chart stretches to the container width. NOTE: ${exampleFields.join(', ')} had no match in your discovered DS cache and fall back to an INVENTED EXAMPLE path (see _exampleFields) — verify against figma_read_variable_values / figma_list_text_styles before binding those specific fields.`
+      ? `After creating this chart with figma_create_svg, check the configurationChecklist in the response — it lists every unbound child node that MUST receive DS variable bindings. Pass layoutSizingHorizontal: "FILL" to figma_create_svg so the chart stretches to the container width. NOTE: ${exampleFields.join(', ')} had no match in your discovered DS cache and fall back to an INVENTED EXAMPLE path (see _exampleFields) — verify against figma_list_ds (kind: "variables") / figma_list_ds (kind: "text_styles") before binding those specific fields.`
       : 'After creating this chart with figma_create_svg, check the configurationChecklist in the response — it lists every unbound child node that MUST receive DS variable bindings. Pass layoutSizingHorizontal: "FILL" to figma_create_svg so the chart stretches to the container width. suggestedPalette/gridColor/labelColor/dataLabelStyle below were resolved from your discovered DS.';
 
   return {
@@ -92,13 +92,90 @@ let _reportInvocationCounter = 0;
 function register(server, context) {
   const { registerTool, knowledgeStore, buildManifest, dsCache, session, advancePhase, bridge } = context;
 
+  /**
+   * v3.0.0 consolidation: mimic_generate_design_md folds into
+   * mimic_ai_knowledge_read as format="design_md" — same underlying
+   * knowledgeStore/dsCache read, just rendered as a DESIGN.md string
+   * instead of raw JSON. Unchanged extraction of the former standalone
+   * handler's body.
+   */
+  function buildDesignMd() {
+    const lines = ['# Design System Reference', ''];
+
+    // Text styles
+    const textStyles = [...dsCache.textStyles.entries()];
+    lines.push(`## Text Styles (${textStyles.length})`);
+    lines.push('');
+    if (textStyles.length > 0) {
+      textStyles.forEach(([key, style]) => {
+        lines.push(`- **${style.name || key}**: ${style.fontFamily || ''} ${style.fontSize || ''}px / ${style.lineHeight || 'auto'}`);
+      });
+    } else {
+      lines.push('No text styles cached.');
+    }
+    lines.push('');
+
+    // Variables
+    const variables = [...dsCache.variables.entries()];
+    lines.push(`## Variables (${variables.length})`);
+    lines.push('');
+    if (variables.length > 0) {
+      variables.forEach(([key, variable]) => {
+        lines.push(`- **${variable.name || key}**: ${variable.resolvedValue || variable.value || 'N/A'}`);
+      });
+    } else {
+      lines.push('No variables cached.');
+    }
+    lines.push('');
+
+    // Components
+    const components = [...dsCache.components.entries()];
+    lines.push(`## Components (${components.length})`);
+    lines.push('');
+    if (components.length > 0) {
+      components.forEach(([key, comp]) => {
+        lines.push(`- **${comp.name || key}**`);
+      });
+    } else {
+      lines.push('No components cached.');
+    }
+    lines.push('');
+
+    // Knowledge store components (recipes)
+    const recipes = Object.entries(knowledgeStore.data.components);
+    if (recipes.length > 0) {
+      lines.push(`## Component Recipes (${recipes.length})`);
+      lines.push('');
+      recipes.forEach(([name, recipe]) => {
+        lines.push(`### ${name}`);
+        lines.push(`\`\`\`json`);
+        lines.push(JSON.stringify(recipe, null, 2));
+        lines.push(`\`\`\``);
+        lines.push('');
+      });
+    }
+
+    return lines.join('\n');
+  }
+
   // ── mimic_ai_knowledge_read ────────────────────────────────────
   registerTool(
     'mimic_ai_knowledge_read',
-    'Loads and returns the full knowledge store contents: components, patterns, gaps, and meta.',
-    { type: 'object', properties: {}, required: [] },
-    async () => {
+    'Loads the knowledge store: learned component recipes, layout/pattern data, DS gaps, user-defined rules, and meta stats (build counts, replay savings). Call at the start of a session to see what Mimic has already learned about this DS. Params: format ("json" default — structured data; "design_md" — renders the current DS + recipes as a DESIGN.md-style markdown string for documentation/handoff).',
+    {
+      type: 'object',
+      properties: {
+        format: { type: 'string', enum: ['json', 'design_md'], description: '"json" (default) returns structured store contents. "design_md" returns a rendered DESIGN.md markdown string instead.' },
+      },
+      required: [],
+    },
+    async (args) => {
       knowledgeStore.load();
+
+      if (args && args.format === 'design_md') {
+        return { content: buildDesignMd() };
+      }
+
       return {
         components: knowledgeStore.data.components,
         patterns: knowledgeStore.data.patterns,
@@ -110,13 +187,16 @@ function register(server, context) {
         // See KnowledgeStore._recoverFromCorruption in src/knowledge/store.js.
         _storeWarning: knowledgeStore.loadWarning || undefined,
       };
+    },
+    {
+      annotations: { title: 'Read the knowledge store', readOnlyHint: true, idempotentHint: true },
     }
   );
 
   // ── mimic_ai_knowledge_write ───────────────────────────────────
   registerTool(
     'mimic_ai_knowledge_write',
-    'Saves a pattern, component recipe, or DS gap to the knowledge store.',
+    'Saves a component recipe, layout pattern, DS gap, or user-defined design rule to the persistent knowledge store — the mechanism that lets Mimic learn across builds. Use "rule" when the user corrects build behavior in a generalizable way (e.g. "cards always have a header + content frame"); other types are usually written automatically by the build pipeline. Params: type ("component"|"pattern"|"gap"|"rule", required), id (unique key, required), data (entry payload, required).',
     {
       type: 'object',
       properties: {
@@ -179,13 +259,16 @@ function register(server, context) {
 
       knowledgeStore.save();
       return { ok: true, type, id };
+    },
+    {
+      annotations: { title: 'Write a knowledge store entry', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     }
   );
 
   // ── mimic_generate_build_report ────────────────────────────────
   registerTool(
     'mimic_generate_build_report',
-    'Compiles build session data into a structured report (markdown or HTML). Advances phase to 5.',
+    'Compiles the current build session into a structured report — DS component usage, primitives with justifications, DS changes/staleness, gap recommendations, binding-quality failures, efficiency (tool calls, cache hits, replay savings), and design-rule compliance. MANDATORY at the end of every build, before responding to the user — advances phase to 5 and resets per-build counters. No params.',
     {
       type: 'object',
       properties: {
@@ -650,7 +733,7 @@ function register(server, context) {
             lines.push(`- \`${name}\`: failed ${count} time${count === 1 ? '' : 's'}`);
           });
           lines.push('');
-          lines.push('**Recovery:** Call `figma_read_variable_values` to verify cached variable paths. The variable may not be preloaded, or the path may be wrong.');
+          lines.push('**Recovery:** Call `figma_list_ds` (kind: "variables") to verify cached variable paths. The variable may not be preloaded, or the path may be wrong.');
           lines.push('');
         }
       } else {
@@ -697,7 +780,7 @@ function register(server, context) {
           lines.push(`- **${c.name}** (${c.overridden}/${c.total} overridden): ${c.missing.join(', ')}`);
         });
         lines.push('');
-        lines.push('These text nodes were not set via figma_set_component_text. They likely still show DS placeholder content instead of HTML source text.');
+        lines.push('These text nodes were not set via figma_component_text. They likely still show DS placeholder content instead of HTML source text.');
         lines.push('');
       }
 
@@ -1366,71 +1449,24 @@ function register(server, context) {
         ],
         summary: `Build report for "${screenName}": ${totalInstances} DS component instances, ${primitives.length} primitives, ${componentUsagePercent}% component usage (${componentQualityGate}), ${toolCallCount} tool calls (${cacheHits} cached${replaySavings > 0 ? `, ${replaySavings} replayed` : ''}). ${gapEntries.length} DS gaps identified. ${recommendations.length} recommendation(s).${dsChangesSummary}${ruleComplianceSummary} ${bindingFailures.length > 0 ? `⚠ ${bindingFailures.length} nodes with binding failures.` : 'All DS bindings succeeded.'}${unoverriddenCount > 0 ? ` ⚠ ${unoverriddenCount} text node(s) not overridden.` : ''}${unusedMappedSummary} Structural validation: ${validationStatus}.${promotionSummary}${reportWriteWarning ? ` ⚠ ${reportWriteWarning}` : ''}${manifestWriteWarning ? ` ⚠ ${manifestWriteWarning}` : ''}`,
       };
-    }
-  );
-
-  // ── mimic_generate_design_md ───────────────────────────────────
-  registerTool(
-    'mimic_generate_design_md',
-    'Compiles current DS knowledge into DESIGN.md format. Returns the content as a string.',
-    { type: 'object', properties: {}, required: [] },
-    async () => {
-      const lines = ['# Design System Reference', ''];
-
-      // Text styles
-      const textStyles = [...dsCache.textStyles.entries()];
-      lines.push(`## Text Styles (${textStyles.length})`);
-      lines.push('');
-      if (textStyles.length > 0) {
-        textStyles.forEach(([key, style]) => {
-          lines.push(`- **${style.name || key}**: ${style.fontFamily || ''} ${style.fontSize || ''}px / ${style.lineHeight || 'auto'}`);
-        });
-      } else {
-        lines.push('No text styles cached.');
-      }
-      lines.push('');
-
-      // Variables
-      const variables = [...dsCache.variables.entries()];
-      lines.push(`## Variables (${variables.length})`);
-      lines.push('');
-      if (variables.length > 0) {
-        variables.forEach(([key, variable]) => {
-          lines.push(`- **${variable.name || key}**: ${variable.resolvedValue || variable.value || 'N/A'}`);
-        });
-      } else {
-        lines.push('No variables cached.');
-      }
-      lines.push('');
-
-      // Components
-      const components = [...dsCache.components.entries()];
-      lines.push(`## Components (${components.length})`);
-      lines.push('');
-      if (components.length > 0) {
-        components.forEach(([key, comp]) => {
-          lines.push(`- **${comp.name || key}**`);
-        });
-      } else {
-        lines.push('No components cached.');
-      }
-      lines.push('');
-
-      // Knowledge store components (recipes)
-      const recipes = Object.entries(knowledgeStore.data.components);
-      if (recipes.length > 0) {
-        lines.push(`## Component Recipes (${recipes.length})`);
-        lines.push('');
-        recipes.forEach(([name, recipe]) => {
-          lines.push(`### ${name}`);
-          lines.push(`\`\`\`json`);
-          lines.push(JSON.stringify(recipe, null, 2));
-          lines.push(`\`\`\``);
-          lines.push('');
-        });
-      }
-
-      return { content: lines.join('\n') };
+    },
+    {
+      annotations: { title: 'Generate the build report', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'One-line human-readable summary of the whole build.' },
+          reportPath: { type: 'string' },
+          componentUsagePercent: { type: 'number' },
+          componentQualityGate: { type: 'string' },
+          bindingFailureCount: { type: 'number' },
+          unoverriddenTextCount: { type: 'number' },
+          recommendations: { type: 'array', items: { type: 'object' } },
+          dsChanges: { type: 'array', items: { type: 'object' } },
+          ruleViolations: { type: 'array', items: { type: 'object' } },
+        },
+        required: ['summary'],
+      },
     }
   );
 
@@ -1439,7 +1475,7 @@ function register(server, context) {
 
   registerTool(
     'mimic_compute_chart',
-    'Takes chart data and returns pre-computed geometry for building in Figma. Supports bar, donut, line, radar, scatter, and heatmap.',
+    'Computes chart geometry (bar positions, SVG paths, arc angles, grid lines, axis labels) from raw data WITHOUT building anything in Figma — pure math, no bridge/Figma calls, usable at any phase. Use when you need coordinates/paths to hand-build a chart yourself; use mimic_build_chart instead when you just want the finished chart created in one call. Supports chartType: bar, horizontalBar, donut, line, radar, scatter, heatmap. Params: chartType (required), data (required, points), dimensions (chart-type-specific sizing).',
     {
       type: 'object',
       properties: {
@@ -1538,17 +1574,20 @@ function register(server, context) {
           'NEVER include <text> in SVGs — Figma creates tiny fixed-width text nodes that break.',
           'NEVER use stroke="..." in SVGs — Figma converts strokes to filled shapes. Use filled rectangles (<rect>) for lines, or filled thin shapes for curves.',
           'Use <rect height="1" fill="..."> for grid lines — produces clean 1px lines.',
-          'After creation, bind ALL vector children to DS variables via figma_set_node_fill.',
+          'After creation, bind ALL vector children to DS variables via figma_update_node (op: "fill").',
         ],
         antiPatterns: [
           'NEVER use stroke in SVGs — Figma renders stroked paths as thick filled outlines, not thin lines. This breaks line charts, radar grids, and any "outlined" shape.',
           'NEVER put text in SVGs — Figma renders them as stacked single characters with tiny widths.',
           'NEVER leave SVG vector children without DS fill bindings — breaks light/dark mode.',
-          'NEVER use ● or other Unicode shapes in text nodes for chart legends — they cannot be individually colored. Use create_rectangle or create_ellipse for colored indicators.',
+          'NEVER use ● or other Unicode shapes in text nodes for chart legends — they cannot be individually colored. Use figma_create_shape (shape: "rectangle") for colored indicators.',
         ],
       };
 
       return result;
+    },
+    {
+      annotations: { title: 'Compute chart geometry', readOnlyHint: true, idempotentHint: true },
     }
   );
 }

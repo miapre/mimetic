@@ -82,7 +82,6 @@ function createTestContext() {
   require('../../../src/tools/edit').register(null, context);
   require('../../../src/tools/inspect').register(null, context);
   require('../../../src/tools/learning').register(null, context);
-  require('../../../src/tools/batch').register(null, context);
   require('../../../src/tools/compliance').register(null, context);
   require('../../../src/tools/rendering').register(null, context);
 
@@ -137,12 +136,12 @@ describe('MCP Tool Integration', () => {
     });
   });
 
-  // ── 2. figma_set_session_defaults ─────────────────────────────
+  // ── 2. mimic_ds_assets (set_defaults) ─────────────────────────
 
-  describe('figma_set_session_defaults', () => {
+  describe('mimic_ds_assets — action: set_defaults', () => {
     it('sends enforcement profile to plugin and advances to phase 2', async () => {
       dsCache.addTextStyle('key1', { name: 'Text sm' });
-      const result = await handlers.figma_set_session_defaults({});
+      const result = await handlers.mimic_ds_assets({ action: 'set_defaults' });
       const msgs = bridge.getMessages('set_session_defaults');
       assert.strictEqual(msgs.length, 1);
       assert.ok(msgs[0].payload.enforcementProfile);
@@ -151,7 +150,7 @@ describe('MCP Tool Integration', () => {
 
     it('rejects permissive mode when DS has tokens', async () => {
       dsCache.addVariable('bg-primary', { key: 'v1', category: 'background' });
-      const result = await handlers.figma_set_session_defaults({ dsMode: 'permissive' });
+      const result = await handlers.mimic_ds_assets({ action: 'set_defaults', dsMode: 'permissive' });
       assert.strictEqual(result.error, 'DS_MODE_REJECTED');
       // Should NOT have sent anything to the bridge
       assert.strictEqual(bridge.getMessages('set_session_defaults').length, 0);
@@ -329,19 +328,18 @@ describe('MCP Tool Integration', () => {
     });
   });
 
-  // ── 6. figma_set_component_text ───────────────────────────────
+  // ── 6. figma_component_text ───────────────────────────────────
 
-  describe('figma_set_component_text', () => {
-    it('sends correct params to bridge', async () => {
+  describe('figma_component_text', () => {
+    it('sends name-keyed overrides through the batch bridge handler', async () => {
       session.phase = 3;
-      await handlers.figma_set_component_text({
+      await handlers.figma_component_text({
         nodeId: 'mock:1',
-        textNodeName: 'Label',
-        content: 'Submit',
+        overrides: [{ textNodeName: 'Label', content: 'Submit' }],
       });
-      const msgs = bridge.getMessages('set_component_text');
-      assert.strictEqual(msgs[0].payload.textNodeName, 'Label');
-      assert.strictEqual(msgs[0].payload.content, 'Submit');
+      const msgs = bridge.getMessages('batch_set_component_text');
+      assert.strictEqual(msgs[0].payload.overrides[0].textNodeName, 'Label');
+      assert.strictEqual(msgs[0].payload.overrides[0].content, 'Submit');
       assert.strictEqual(msgs[0].payload.nodeId, 'mock:1');
     });
   });
@@ -363,13 +361,13 @@ describe('MCP Tool Integration', () => {
     });
   });
 
-  // ── 8. mimic_find_node ────────────────────────────────────────
+  // ── 8. figma_inspect (section lookup) ─────────────────────────
 
-  describe('mimic_find_node', () => {
+  describe('figma_inspect — target: section (formerly mimic_find_node)', () => {
     it('searches build manifest and returns match', async () => {
       buildManifest.addSection('Header Section', 'node:100', 'frame');
       buildManifest.addSection('Metrics Row', 'node:200', 'frame');
-      const result = await handlers.mimic_find_node({ sectionName: 'header' });
+      const result = await handlers.figma_inspect({ target: 'section', sectionName: 'header' });
       assert.strictEqual(result.found, true);
       assert.strictEqual(result.figmaNodeId, 'node:100');
     });
@@ -377,7 +375,7 @@ describe('MCP Tool Integration', () => {
     it('returns available sections when not found', async () => {
       buildManifest.addSection('Header', 'node:100', 'frame');
       buildManifest.addSection('Footer', 'node:200', 'frame');
-      const result = await handlers.mimic_find_node({ sectionName: 'sidebar' });
+      const result = await handlers.figma_inspect({ target: 'section', sectionName: 'sidebar' });
       assert.strictEqual(result.found, false);
       assert.ok(result.available.includes('Header'));
       assert.ok(result.available.includes('Footer'));
@@ -408,68 +406,10 @@ describe('MCP Tool Integration', () => {
   });
 
   // ── 10. figma_batch ───────────────────────────────────────────
-
-  describe('figma_batch', () => {
-    it('executes multiple operations sequentially', async () => {
-      session.phase = 3;
-      const result = await handlers.figma_batch({
-        operations: [
-          { type: 'create_frame', payload: { name: 'Row 1' } },
-          { type: 'create_text', payload: { content: 'Label', parentId: 'p:1' } },
-          { type: 'set_visibility', payload: { nodeId: 'n:1', visible: false } },
-        ],
-      });
-      assert.strictEqual(result.total, 3);
-      assert.strictEqual(result.succeeded, 3);
-      assert.strictEqual(result.failed, 0);
-      // Verify each operation sent the right bridge message
-      assert.strictEqual(bridge.getMessages('create_frame').length, 1);
-      assert.strictEqual(bridge.getMessages('create_text').length, 1);
-      assert.strictEqual(bridge.getMessages('set_visibility').length, 1);
-    });
-
-    it('requires phase >= 2', async () => {
-      session.phase = 0;
-      await assert.rejects(
-        () => handlers.figma_batch({ operations: [{ type: 'create_frame', payload: {} }] }),
-        (err) => err.error === 'PHASE_REQUIRED'
-      );
-    });
-
-    it('rejects empty batch', async () => {
-      session.phase = 3;
-      const result = await handlers.figma_batch({ operations: [] });
-      assert.strictEqual(result.error, 'EMPTY_BATCH');
-    });
-
-    it('rejects oversized batch', async () => {
-      session.phase = 3;
-      const ops = Array.from({ length: 7 }, (_, i) => ({
-        type: 'create_frame',
-        payload: { name: `Frame ${i}` },
-      }));
-      const result = await handlers.figma_batch({ operations: ops });
-      assert.strictEqual(result.error, 'BATCH_TOO_LARGE');
-    });
-
-    it('reports individual failures without stopping the batch', async () => {
-      session.phase = 3;
-      bridge.setResponse('create_frame', () => {
-        throw new Error('Plugin timeout');
-      });
-      const result = await handlers.figma_batch({
-        operations: [
-          { type: 'create_frame', payload: { name: 'Fail' } },
-          { type: 'create_text', payload: { content: 'OK', parentId: 'p:1' } },
-        ],
-      });
-      assert.strictEqual(result.total, 2);
-      assert.strictEqual(result.failed, 1);
-      assert.strictEqual(result.succeeded, 1);
-      assert.strictEqual(result.results[0].ok, false);
-      assert.strictEqual(result.results[1].ok, true);
-    });
-  });
+  // v3.0.0: figma_batch was removed from the MCP tool surface (it
+  // bypassed per-tool validation by design flaw). The plugin-side
+  // batch_execute bridge handler is untouched and still covered by
+  // internal/tests/batch-executor.test.js.
 
   // ── Cross-cutting: toolCallCount ──────────────────────────────
 
@@ -485,25 +425,14 @@ describe('MCP Tool Integration', () => {
 
     it('increments on inspect tools', async () => {
       session.phase = 3;
-      await handlers.figma_get_node_props({ nodeId: 'n:1' });
+      await handlers.figma_inspect({ target: 'node', nodeId: 'n:1' });
       assert.strictEqual(session.toolCallCount, 1);
-    });
-
-    it('increments per batch operation', async () => {
-      session.phase = 3;
-      await handlers.figma_batch({
-        operations: [
-          { type: 'create_frame', payload: { name: 'A' } },
-          { type: 'create_frame', payload: { name: 'B' } },
-        ],
-      });
-      assert.strictEqual(session.toolCallCount, 2);
     });
   });
 
   // ── DS setup flow ─────────────────────────────────────────────
 
-  describe('figma_preload_styles', () => {
+  describe('mimic_ds_assets — action: preload, kind: styles', () => {
     it('sends style keys to bridge and caches returned styles', async () => {
       bridge.setResponse('preload_styles', {
         preloadedStyles: 2,
@@ -513,7 +442,8 @@ describe('MCP Tool Integration', () => {
           { key: 'k2', name: 'Text lg', fontFamily: 'Inter', fontSize: 18 },
         ],
       });
-      const result = await handlers.figma_preload_styles({
+      const result = await handlers.mimic_ds_assets({
+        action: 'preload', kind: 'styles',
         styleKeys: ['k1', 'k2'],
       });
       assert.strictEqual(result.cached, 2);
@@ -526,7 +456,8 @@ describe('MCP Tool Integration', () => {
         preloadedStyles: 5,
         styles: [],
       });
-      const result = await handlers.figma_preload_styles({
+      const result = await handlers.mimic_ds_assets({
+        action: 'preload', kind: 'styles',
         styleKeys: ['k1', 'k2', 'k3', 'k4', 'k5'],
         expectedCount: 20,
       });
@@ -535,9 +466,10 @@ describe('MCP Tool Integration', () => {
     });
   });
 
-  describe('figma_preload_variables', () => {
+  describe('mimic_ds_assets — action: preload, kind: variables', () => {
     it('caches variables and sends to bridge', async () => {
-      const result = await handlers.figma_preload_variables({
+      const result = await handlers.mimic_ds_assets({
+        action: 'preload', kind: 'variables',
         variables: [
           { path: 'bg-primary', key: 'v1', collection: 'Colors', category: 'background' },
           { path: 'spacing-md', key: 'v2', collection: 'Spacing', category: 'spacing' },

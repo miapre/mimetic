@@ -2,11 +2,12 @@
 
 // Restored v1 rule: container width controls wrapping in Figma, so a
 // hardcoded \n / \r\n in text content fights auto-layout. figma_create_text
-// and figma_set_text must strip line breaks from `content` before the value
-// reaches the bridge, and must say so via `_textNote` when they do.
-// Component text overrides (figma_set_component_text and friends, in
-// components.js) are explicitly out of scope — this file only covers
-// build.js's figma_create_text and edit.js's figma_set_text.
+// and figma_update_node (op: "text") must strip line breaks from `content`
+// before the value reaches the bridge, and must say so via `_textNote` when
+// they do. Component text overrides (figma_component_text, in components.js)
+// are explicitly out of scope — this file only covers build.js's
+// figma_create_text and edit.js's figma_update_node op="text" (formerly the
+// standalone figma_set_text, merged in the v3.0.0 tool-surface consolidation).
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -91,7 +92,7 @@ describe('figma_create_text — line break stripping (build.js)', () => {
   });
 });
 
-describe('figma_set_text — line break stripping (edit.js)', () => {
+describe('figma_update_node op="text" — line break stripping (edit.js)', () => {
   let setup;
 
   beforeEach(() => {
@@ -99,7 +100,8 @@ describe('figma_set_text — line break stripping (edit.js)', () => {
   });
 
   it('strips embedded \\n and flags _textNote', async () => {
-    const result = await setup.handlers.figma_set_text({
+    const result = await setup.handlers.figma_update_node({
+      op: 'text',
       nodeId: 'text:1',
       content: 'Total revenue\nup 12% this quarter',
     });
@@ -110,7 +112,8 @@ describe('figma_set_text — line break stripping (edit.js)', () => {
   });
 
   it('leaves text without line breaks untouched and omits _textNote', async () => {
-    const result = await setup.handlers.figma_set_text({
+    const result = await setup.handlers.figma_update_node({
+      op: 'text',
       nodeId: 'text:1',
       content: 'Total revenue',
     });

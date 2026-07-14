@@ -1,5 +1,108 @@
 # Changelog
 
+## 3.0.0 (2026-07-14)
+
+**BREAKING — tool-surface consolidation: 58 registered tools → 26.**
+
+MCP hosts now defer or tool-search large servers instead of loading every
+tool schema up front. A lean surface with self-contained, keyword-rich
+descriptions gets discovered; 58 near-duplicate tools do not. This release
+consolidates the MCP schema layer only — the bridge protocol, plugin
+handlers (`plugin/code.js`), and all build/enforcement behavior are
+unchanged. Consolidated tools dispatch internally to the same handler
+logic the standalone tools ran.
+
+### Migration table (OLD → NEW)
+
+| Old tool | New call |
+| --- | --- |
+| `figma_get_node_props` | `figma_inspect` `{ target: "node" }` |
+| `figma_get_node_children` | `figma_inspect` `{ target: "children" }` |
+| `figma_get_node_parent` | `figma_inspect` `{ target: "parent" }` |
+| `figma_get_text_info` | `figma_inspect` `{ target: "text" }` |
+| `figma_get_pages` | `figma_inspect` `{ target: "pages" }` |
+| `figma_get_page_nodes` | `figma_inspect` `{ target: "page" }` |
+| `figma_get_selection` | `figma_inspect` `{ target: "selection" }` |
+| `figma_get_component_variants` | `figma_inspect` `{ target: "variants" }` |
+| `mimic_find_node` | `figma_inspect` `{ target: "section", sectionName }` |
+| `figma_set_text` | `figma_update_node` `{ op: "text" }` |
+| `figma_set_text_style` | `figma_update_node` `{ op: "text_style" }` |
+| `figma_set_node_fill` | `figma_update_node` `{ op: "fill" }` |
+| `figma_set_layout_sizing` | `figma_update_node` `{ op: "layout" }` |
+| `figma_set_visibility` | `figma_update_node` `{ op: "visibility" }` |
+| `figma_set_node_position` | `figma_update_node` `{ op: "position" }` |
+| `figma_restyle_artboard` | `figma_update_node` `{ op: "restyle" }` |
+| `figma_move_node` | `figma_update_node` `{ op: "move", parentId }` |
+| `figma_select_node` | `figma_update_node` `{ op: "select" }` |
+| `figma_change_page` | `figma_update_node` `{ op: "page" }` |
+| `figma_set_variable_mode` | `figma_variable_modes` (with `collectionName`) |
+| `figma_set_all_variable_modes` | `figma_variable_modes` (omit `collectionName`) |
+| `figma_set_component_text` | `figma_component_text` (one-item `overrides`) |
+| `figma_set_component_text_by_id` | `figma_component_text` (override with `textNodeId`) |
+| `figma_batch_set_component_text` | `figma_component_text` (same `overrides` shape) |
+| `figma_replace_component` | `figma_swap_main_component` `{ mode: "replace" }` |
+| `figma_fill_slot` | `figma_manage_slot` `{ action: "fill" }` |
+| `figma_reset_slot` | `figma_manage_slot` `{ action: "reset" }` |
+| `figma_create_rectangle` | `figma_create_shape` `{ shape: "rectangle" }` |
+| `figma_create_ellipse` | `figma_create_shape` `{ shape: "ellipse" }` |
+| `figma_discover_library_styles` | `mimic_ds_assets` `{ action: "discover", kind: "styles" }` |
+| `figma_discover_library_variables` | `mimic_ds_assets` `{ action: "discover", kind: "variables" }` |
+| `figma_discover_library_components` | `mimic_ds_assets` `{ action: "discover", kind: "components" }` |
+| `figma_preload_styles` | `mimic_ds_assets` `{ action: "preload", kind: "styles" }` |
+| `figma_preload_variables` | `mimic_ds_assets` `{ action: "preload", kind: "variables" }` |
+| `figma_preload_fill_styles` | `mimic_ds_assets` `{ action: "preload", kind: "fill_styles" }` |
+| `figma_set_session_defaults` | `mimic_ds_assets` `{ action: "set_defaults" }` |
+| `figma_list_text_styles` | `figma_list_ds` `{ kind: "text_styles" }` |
+| `figma_list_fill_styles` | `figma_list_ds` `{ kind: "fill_styles" }` |
+| `figma_read_variable_values` | `figma_list_ds` `{ kind: "variables" }` |
+| `mimic_generate_design_md` | `mimic_ai_knowledge_read` `{ format: "design_md" }` |
+
+### Removed outright
+
+- **`mimic_render_url`** — a never-implemented stub that only returned
+  "not implemented". `mimic_pipeline_resolve` remains for input
+  classification.
+- **`figma_batch`** — reversal of the 1.x batching feature at the MCP
+  layer. It executed raw bridge operations, bypassing every per-tool
+  validation gate (variable path checks, component-first, category
+  checks) by design flaw. The bulk builders (`mimic_build_table`,
+  `mimic_build_chart`) and `figma_component_text` cover the real batching
+  use cases with validation intact. The plugin-side `batch_execute`
+  bridge handler is untouched (bridge-level capability used internally by
+  the bulk builders) and keeps its tests.
+
+### Behavior notes
+
+- Phase gating is preserved per merged action: `figma_update_node` ops
+  `"select"` and `"page"` remain ungated (as `figma_select_node` /
+  `figma_change_page` were); every other op keeps the Phase 2 edit gate.
+  The gate moved from mcp.js's central name Set into the tool's own op
+  handlers; `figma_delete_node` is still gated centrally.
+- `figma_swap_main_component` `{ mode: "swap" }` (default) preserves
+  instance overrides; `{ mode: "replace" }` recreates the instance at the
+  same position — the two former tools dispatched to different bridge
+  handlers and still do.
+- `figma_component_text` routes `textNodeId` overrides through the by-id
+  bridge handler individually and groups `textNodeName` overrides through
+  the batch handler — same bridge messages as before.
+
+### Added
+
+- **MCP tool annotations on every tool** — `readOnlyHint` (true on
+  `mimic_status`, `figma_inspect`, `figma_list_ds`,
+  `mimic_ai_knowledge_read`, `mimic_compute_chart`,
+  `figma_validate_ds_compliance`, `mimic_pipeline_resolve`),
+  `destructiveHint: true` on `figma_delete_node`, `idempotentHint`
+  where accurate, plus human-readable `title`s.
+- **`outputSchema` + `structuredContent`** on the key workflow tools:
+  `mimic_status`, `mimic_discover_ds`, `mimic_map_components`,
+  `figma_validate_ds_compliance`, `mimic_generate_build_report`.
+  Responses carry both the JSON text block (backwards compatible) and
+  `structuredContent`.
+- Every kept tool's description rewritten to be self-contained and
+  keyword-rich for tool-search-era hosts: what it does, when to use it,
+  key params, and workflow position.
+
 ## 2.1.0 (2026-07-14)
 
 ### Security

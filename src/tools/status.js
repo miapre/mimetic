@@ -147,7 +147,7 @@ const PHASE_LABELS = {
 
 const PHASE_HINTS = {
   0: 'Call mimic_discover_ds with a fileKey to start DS discovery.',
-  1: 'Discovery in progress. Preload styles and variables, then call figma_set_session_defaults to advance to inventory.',
+  1: 'Discovery in progress. Preload styles and variables via mimic_ds_assets, then call mimic_ds_assets (action: "set_defaults") to advance to inventory.',
   2: 'DS inventory ready. You can now create frames, insert components, and build.',
   3: 'Build in progress. Use build/component/edit tools. When done, call mimic_generate_build_report — the build is NOT complete until the report is generated.',
   4: 'QA phase. Inspect nodes, verify DS compliance, fix issues. Then call mimic_generate_build_report.',
@@ -160,7 +160,7 @@ function register(server, context) {
   // ── mimic_status ──────────────────────────────────────────────
   registerTool(
     'mimic_status',
-    'Returns plugin connection status, current build phase, enforcement profile, knowledge store summary, and a contextual hint for what to do next.',
+    'START EVERY SESSION HERE. Returns Figma plugin connection status, the current build phase (0=idle through 5=report), enforcement profile, cached DS counts, knowledge store summary (learned components/patterns/gaps/rules), and a contextual `hint` telling you exactly what to call next. Also clears build-interrupt state after a plugin reconnect and warns if a completed build is missing its mandatory report. No params — call with no arguments.',
     { type: 'object', properties: {}, required: [] },
     async () => {
       let pluginConnected = false;
@@ -251,6 +251,40 @@ function register(server, context) {
           reportWarning: `⚠ BUILD REPORT REQUIRED: ${buildOps} build operations completed but no report generated. The build is NOT complete until you call mimic_generate_build_report. This is the tool's key differentiator — it teaches users about their DS usage, gaps, and patterns.`,
         } : {}),
       };
+    },
+    {
+      annotations: { title: 'Get build status (start here)', readOnlyHint: true, idempotentHint: true },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          pluginConnected: { type: 'boolean' },
+          phase: { type: 'number', description: '0=idle, 1=discovery, 2=inventory, 3=build, 4=qa, 5=report.' },
+          phaseLabel: { type: 'string' },
+          hint: { type: 'string', description: 'What to call next.' },
+          toolCallCount: { type: 'number' },
+          cacheHits: { type: 'number' },
+          dsCache: {
+            type: 'object',
+            properties: {
+              textStyles: { type: 'number' },
+              variables: { type: 'number' },
+              components: { type: 'number' },
+              failedKeys: { type: 'number' },
+            },
+          },
+          knowledge: {
+            type: 'object',
+            properties: {
+              components: { type: 'number' },
+              patterns: { type: 'number' },
+              gaps: { type: 'number' },
+              rules: { type: 'number' },
+              buildCount: { type: 'number' },
+            },
+          },
+        },
+        required: ['pluginConnected', 'phase', 'hint'],
+      },
     }
   );
 
@@ -1342,6 +1376,22 @@ function register(server, context) {
         _stopBuild: true,
         hint: `Plugin discovery complete — ${variablesCached} variables, ${stylesCached} text styles, ${componentsCached} components cached. MANDATORY NEXT STEP: Call Figma MCP search_design_system with query "color", includeVariables: true, includeComponents: false, includeStyles: false on fileKey "${args.fileKey}". Collect all unique non-null libraryName values from the results, then re-call mimic_discover_ds with communitySearchResults set to that array. Build tools are BLOCKED until this check completes.`,
       };
+    },
+    {
+      annotations: { title: 'Discover the design system', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          phase: { type: 'number' },
+          phaseLabel: { type: 'string' },
+          hint: { type: 'string' },
+          enforcement: { type: 'object' },
+          _stopBuild: { type: 'boolean', description: 'True when the build must not proceed until the returned instructions are followed.' },
+          _userPrompt: { type: 'string', description: 'Present this to the user verbatim when a decision is required.' },
+          communityLibraryCheckRequired: { type: 'boolean' },
+          completenessWarnings: { type: 'array', items: { type: 'object' } },
+        },
+      },
     }
   );
 }

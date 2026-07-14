@@ -23,7 +23,7 @@ function register(server, context) {
 
   registerTool(
     'mimic_build_table',
-    'Builds an entire data table in one call. Creates column frames with DS Table header cell and Table cell components, configures all variants, text, and sizing. Requires table cell components in the DS — if missing, returns guidance on creating them. Reduces table builds from 200+ tool calls to 1.',
+    'Bulk table builder — creates an entire data table in ONE call: column frames, DS Table header cell + Table cell components, variants (cellVariants for per-value badge colors), text, and consistent row height. Use for ANY HTML data table instead of cell-by-cell insertion; reduces 200+ tool calls to 1. Requires table cell components in the DS (returns creation guidance if missing). Key params: parentId, columns (header/style/cellVariants), rows ("text|supporting" syntax), cellHeight. Phase 2+.',
     {
       type: 'object',
       properties: {
@@ -479,6 +479,9 @@ function register(server, context) {
           : `Table built successfully: ${results.headerCells} headers + ${results.dataCells} data cells = ${totalCells} components in ${results.totalOperations} bridge operations (vs ~${totalCells * 3} tool calls manually).`,
         _reportReminder: 'When the build is done, you MUST call mimic_generate_build_report before responding to the user.',
       };
+    },
+    {
+      annotations: { title: 'Bulk-build a data table', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     }
   );
 }

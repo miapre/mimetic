@@ -77,7 +77,7 @@ function createTestContext() {
 
 // ─── Basic Functionality ─────────────────────────────────────────
 
-describe('Text Batch — figma_batch_set_component_text', () => {
+describe('Text Batch — figma_component_text (batch overrides)', () => {
   let handlers, bridge, session;
 
   beforeEach(() => {
@@ -88,7 +88,7 @@ describe('Text Batch — figma_batch_set_component_text', () => {
   });
 
   it('sets multiple text nodes in a single call', async () => {
-    const result = await handlers.figma_batch_set_component_text({
+    const result = await handlers.figma_component_text({
       nodeId: 'comp:1',
       overrides: [
         { textNodeName: 'Heading', content: 'Dashboard' },
@@ -100,7 +100,7 @@ describe('Text Batch — figma_batch_set_component_text', () => {
     assert.strictEqual(result.succeeded, 3);
     assert.strictEqual(result.failed, 0);
     assert.strictEqual(result.total, 3);
-    assert.ok(result.hint.includes('3 text node(s) set in one call'));
+    assert.ok(result.hint.includes('3 text node(s) set'));
 
     // Should send ONE bridge call (not 3)
     const batchMsgs = bridge.getMessages('batch_set_component_text');
@@ -110,7 +110,7 @@ describe('Text Batch — figma_batch_set_component_text', () => {
 
   it('increments toolCallCount once (not per text node)', async () => {
     const before = session.toolCallCount;
-    await handlers.figma_batch_set_component_text({
+    await handlers.figma_component_text({
       nodeId: 'comp:1',
       overrides: [
         { textNodeName: 'A', content: 'a' },
@@ -132,7 +132,7 @@ describe('Text Batch — figma_batch_set_component_text', () => {
       overridden: new Set(),
     });
 
-    await handlers.figma_batch_set_component_text({
+    await handlers.figma_component_text({
       nodeId: 'comp:1',
       overrides: [
         { textNodeName: 'Heading', content: 'Dashboard' },
@@ -161,7 +161,7 @@ describe('Text Batch — figma_batch_set_component_text', () => {
       bindingFailures: false,
     });
 
-    const result = await handlers.figma_batch_set_component_text({
+    const result = await handlers.figma_component_text({
       nodeId: 'comp:1',
       overrides: [
         { textNodeName: 'Heading', content: 'Test' },
@@ -197,7 +197,7 @@ describe('Text Batch — text node structure learning', () => {
   });
 
   it('learns text node names from batch call', async () => {
-    await handlers.figma_batch_set_component_text({
+    await handlers.figma_component_text({
       nodeId: 'comp:1',
       overrides: [
         { textNodeName: 'Heading', content: 'Dashboard' },
@@ -215,7 +215,7 @@ describe('Text Batch — text node structure learning', () => {
   it('does not learn when no component key mapping exists', async () => {
     session._nodeComponentKeys = new Map(); // Empty
 
-    await handlers.figma_batch_set_component_text({
+    await handlers.figma_component_text({
       nodeId: 'comp:1',
       overrides: [
         { textNodeName: 'Heading', content: 'Test' },
@@ -330,7 +330,7 @@ describe('Text Batch — e2e insert + batch text + report', () => {
     });
 
     // Batch set text
-    await handlers.figma_batch_set_component_text({
+    await handlers.figma_component_text({
       nodeId: 'comp:e2e',
       overrides: [
         { textNodeName: 'Text', content: 'Sarah Chen' },
@@ -376,10 +376,10 @@ describe('Text Batch — efficiency', () => {
     session = setup.session;
   });
 
-  it('batch uses 1 tool call vs. N individual calls', async () => {
-    // Batch: 4 text nodes in 1 call
+  it('batch uses 1 tool call vs. N one-override calls', async () => {
+    // Batch: 4 text nodes in 1 call (one bridge round-trip)
     const before = session.toolCallCount;
-    await handlers.figma_batch_set_component_text({
+    await handlers.figma_component_text({
       nodeId: 'comp:1',
       overrides: [
         { textNodeName: 'A', content: '1' },
@@ -390,18 +390,19 @@ describe('Text Batch — efficiency', () => {
     });
     const batchCalls = session.toolCallCount - before;
 
-    // Individual: 4 separate calls
+    // Individual: 4 separate one-override calls (v3.0.0: the former
+    // standalone figma_set_component_text is now a one-item overrides
+    // array on the same merged tool).
     const beforeIndividual = session.toolCallCount;
     for (const name of ['A', 'B', 'C', 'D']) {
-      await handlers.figma_set_component_text({
+      await handlers.figma_component_text({
         nodeId: 'comp:2',
-        textNodeName: name,
-        content: 'x',
+        overrides: [{ textNodeName: name, content: 'x' }],
       });
     }
     const individualCalls = session.toolCallCount - beforeIndividual;
 
     assert.strictEqual(batchCalls, 1, 'batch should use 1 tool call');
-    assert.strictEqual(individualCalls, 4, 'individual should use 4 tool calls');
+    assert.strictEqual(individualCalls, 4, 'individual one-override calls should use 4 tool calls');
   });
 });

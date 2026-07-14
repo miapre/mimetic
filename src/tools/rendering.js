@@ -9,7 +9,7 @@ function register(server, context) {
   // ── mimic_pipeline_resolve ─────────────────────────────────────
   registerTool(
     'mimic_pipeline_resolve',
-    'Classifies input as a URL, file path, or raw HTML and returns the resolved content.',
+    'Classifies build input as a URL, local file path, or raw HTML string and returns the resolved content ready for building. Use FIRST when the user gives you a link, a file path, or ambiguous input instead of raw HTML — it tells you what you actually received. Params: input (string, required). Workflow position: before mimic_discover_ds, at the very start of a build.',
     {
       type: 'object',
       properties: {
@@ -45,29 +45,9 @@ function register(server, context) {
 
       // Default: treat as raw HTML
       return { type: 'html', content: input };
-    }
-  );
-
-  // ── mimic_render_url ───────────────────────────────────────────
-  registerTool(
-    'mimic_render_url',
-    'Placeholder for Puppeteer-based URL rendering. Currently returns instructions to provide HTML directly.',
-    {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: 'The URL to render.',
-        },
-      },
-      required: ['url'],
     },
-    async (args) => {
-      return {
-        status: 'not_implemented',
-        url: args.url,
-        message: 'Puppeteer rendering is not yet implemented. Please provide the HTML content directly using mimic_pipeline_resolve with raw HTML or a local file path.',
-      };
+    {
+      annotations: { title: 'Classify build input', readOnlyHint: true, idempotentHint: true },
     }
   );
 }

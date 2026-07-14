@@ -232,7 +232,6 @@ function createTestHarness() {
   require('../../src/tools/edit').register(null, context);
   require('../../src/tools/learning').register(null, context);
   require('../../src/tools/table').register(null, context);
-  require('../../src/tools/batch').register(null, context);
   require('../../src/tools/inspect').register(null, context);
   require('../../src/tools/chart').register(null, context);
 
@@ -356,33 +355,34 @@ describe('Block 1 — Discovery and mapping flow', () => {
     assert.ok(result.meta, 'Should have meta section');
   });
 
-  it('figma_read_variable_values returns all cached variables', async () => {
+  it('figma_list_ds (kind: variables) returns all cached variables', async () => {
     h.advancePhase(2);
-    const result = await h.call('figma_read_variable_values', {});
+    const result = await h.call('figma_list_ds', { kind: 'variables' });
     assert.equal(result.count, 10, 'Should return all 10 seeded variables');
   });
 
-  it('figma_read_variable_values filters by category', async () => {
+  it('figma_list_ds (kind: variables) filters by category', async () => {
     h.advancePhase(2);
-    const result = await h.call('figma_read_variable_values', { category: 'background' });
+    const result = await h.call('figma_list_ds', { kind: 'variables', category: 'background' });
     assert.equal(result.category, 'background');
     assert.equal(result.count, 2, 'Should return bg-primary and bg-secondary');
     assert.ok(result.variables.every(v => v.category === 'background'));
   });
 
-  it('figma_set_session_defaults rejects permissive mode when DS has tokens', async () => {
-    const result = await h.call('figma_set_session_defaults', { dsMode: 'permissive' });
+  it('mimic_ds_assets (set_defaults) rejects permissive mode when DS has tokens', async () => {
+    const result = await h.call('mimic_ds_assets', { action: 'set_defaults', dsMode: 'permissive' });
     assert.equal(result.error, 'DS_MODE_REJECTED');
   });
 
-  it('figma_set_session_defaults accepts strict mode and advances to phase 2', async () => {
-    const result = await h.call('figma_set_session_defaults', { dsMode: 'strict' });
+  it('mimic_ds_assets (set_defaults) accepts strict mode and advances to phase 2', async () => {
+    const result = await h.call('mimic_ds_assets', { action: 'set_defaults', dsMode: 'strict' });
     assert.equal(result.phase, 2);
     assert.equal(result.enforcement.dsMode, 'strict');
   });
 
-  it('figma_preload_variables stores variables in cache and sends to plugin', async () => {
-    const result = await h.call('figma_preload_variables', {
+  it('mimic_ds_assets (preload variables) stores variables in cache and sends to plugin', async () => {
+    const result = await h.call('mimic_ds_assets', {
+      action: 'preload', kind: 'variables',
       variables: [
         { path: 'test-var', key: 'k-test', collection: 'Colors', category: 'color' },
       ],
@@ -405,8 +405,9 @@ describe('Block 2 — Rectangle, ellipse, SVG category validation', () => {
     h.advancePhase(2);
   });
 
-  it('figma_create_rectangle with bg-* as strokeVariable warns category mismatch', async () => {
-    const result = await h.call('figma_create_rectangle', {
+  it('figma_create_shape (rectangle) with bg-* as strokeVariable warns category mismatch', async () => {
+    const result = await h.call('figma_create_shape', {
+      shape: 'rectangle',
       parentId: 'p-1',
       strokeVariable: 'bg-secondary',
     });
@@ -415,8 +416,9 @@ describe('Block 2 — Rectangle, ellipse, SVG category validation', () => {
     assert.ok(result._categoryWarnings[0].includes('bg-*'));
   });
 
-  it('figma_create_rectangle with correct variables has no warnings', async () => {
-    const result = await h.call('figma_create_rectangle', {
+  it('figma_create_shape (rectangle) with correct variables has no warnings', async () => {
+    const result = await h.call('figma_create_shape', {
+      shape: 'rectangle',
       parentId: 'p-1',
       fillVariable: 'bg-primary',
       strokeVariable: 'border-secondary',
@@ -425,9 +427,10 @@ describe('Block 2 — Rectangle, ellipse, SVG category validation', () => {
       'No category warnings for correct usage');
   });
 
-  it('figma_create_rectangle with raw cornerRadius does NOT trigger radius enforcement', async () => {
+  it('figma_create_shape (rectangle) with raw cornerRadius does NOT trigger radius enforcement', async () => {
     // Rectangles do NOT have radius enforcement (only frames do)
-    const result = await h.call('figma_create_rectangle', {
+    const result = await h.call('figma_create_shape', {
+      shape: 'rectangle',
       parentId: 'p-1',
       cornerRadius: 8,
     });
@@ -437,8 +440,9 @@ describe('Block 2 — Rectangle, ellipse, SVG category validation', () => {
     assert.ok(!radiusWarning, 'Rectangle should NOT enforce radius variables');
   });
 
-  it('figma_create_ellipse with correct fillVariable has no warnings', async () => {
-    const result = await h.call('figma_create_ellipse', {
+  it('figma_create_shape (ellipse) with correct fillVariable has no warnings', async () => {
+    const result = await h.call('figma_create_shape', {
+      shape: 'ellipse',
       parentId: 'p-1',
       fillVariable: 'bg-primary',
     });
@@ -447,8 +451,9 @@ describe('Block 2 — Rectangle, ellipse, SVG category validation', () => {
     assert.ok(!result.error);
   });
 
-  it('figma_create_ellipse with invalid variable path returns error', async () => {
-    const result = await h.call('figma_create_ellipse', {
+  it('figma_create_shape (ellipse) with invalid variable path returns error', async () => {
+    const result = await h.call('figma_create_shape', {
+      shape: 'ellipse',
       parentId: 'p-1',
       fillVariable: 'nonexistent-var',
     });
@@ -498,8 +503,9 @@ describe('Block 2 — Rectangle, ellipse, SVG category validation', () => {
     h.bridge.send = origSend;
   });
 
-  it('figma_create_rectangle with invalid variable path returns error', async () => {
-    const result = await h.call('figma_create_rectangle', {
+  it('figma_create_shape (rectangle) with invalid variable path returns error', async () => {
+    const result = await h.call('figma_create_shape', {
+      shape: 'rectangle',
       parentId: 'p-1',
       fillVariable: 'totally-wrong-var',
     });
@@ -509,9 +515,12 @@ describe('Block 2 — Rectangle, ellipse, SVG category validation', () => {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// BLOCK 3 — Batch Operations
+// BLOCK 3 — Component-first gate (formerly exercised via figma_batch)
+// v3.0.0: figma_batch was removed from the MCP surface. The gate logic it
+// shared with figma_create_frame (checkComponentFirstGate in build.js) is
+// still fully exercised here through the standalone tool.
 // ═══════════════════════════════════════════════════════════════════
-describe('Block 3 — Batch operations', () => {
+describe('Block 3 — Component-first gate on create_frame', () => {
   let h;
 
   beforeEach(() => {
@@ -520,20 +529,12 @@ describe('Block 3 — Batch operations', () => {
     h.advancePhase(2);
   });
 
-  it('figma_batch with create_frame for "Badge: Active" triggers component-first gate', async () => {
-    const result = await h.call('figma_batch', {
-      operations: [
-        { type: 'create_frame', payload: { name: 'Badge: Active', parentId: 'p-1' } },
-      ],
-    });
-    assert.equal(result.total, 1);
-    assert.equal(result.failed, 1);
-    const badgeOp = result.results[0];
-    assert.equal(badgeOp.ok, false);
-    assert.equal(badgeOp.error, 'COMPONENT_FIRST_REQUIRED');
+  it('create_frame for "Badge: Active" triggers component-first gate', async () => {
+    const result = await h.call('figma_create_frame', { name: 'Badge: Active', parentId: 'p-1' });
+    assert.equal(result.error, 'COMPONENT_FIRST_REQUIRED');
   });
 
-  it('figma_batch with create_frame matching a confirmed knowledge store recipe triggers KNOWN_COMPONENT_EXISTS', async () => {
+  it('create_frame matching a confirmed knowledge store recipe triggers KNOWN_COMPONENT_EXISTS', async () => {
     // Add confirmed recipe for "Metric Card"
     h.knowledgeStore.setComponent('ck-metric', {
       names: ['Metric Card'],
@@ -543,50 +544,25 @@ describe('Block 3 — Batch operations', () => {
     });
     h.knowledgeStore.save();
 
-    const result = await h.call('figma_batch', {
-      operations: [
-        { type: 'create_frame', payload: { name: 'Metric Card: Revenue', parentId: 'p-1' } },
-      ],
+    const result = await h.call('figma_create_frame', { name: 'Metric Card: Revenue', parentId: 'p-1' });
+    assert.equal(result.error, 'KNOWN_COMPONENT_EXISTS');
+  });
+
+  it('create_frame with a non-component-like name succeeds', async () => {
+    const result = await h.call('figma_create_frame', {
+      name: 'Content Row', parentId: 'p-1', direction: 'HORIZONTAL',
     });
-    assert.equal(result.failed, 1);
-    assert.equal(result.results[0].error, 'KNOWN_COMPONENT_EXISTS');
+    assert.ok(result.nodeId);
+    assert.ok(!result.error);
   });
 
-  it('figma_batch with valid operations succeeds', async () => {
-    const result = await h.call('figma_batch', {
-      operations: [
-        { type: 'create_frame', payload: { name: 'Content Row', parentId: 'p-1', direction: 'HORIZONTAL' } },
-        { type: 'create_text', payload: { parentId: 'p-1', content: 'Hello', name: 'Label' } },
-      ],
-    });
-    assert.equal(result.total, 2);
-    assert.equal(result.succeeded, 2);
-    assert.equal(result.failed, 0);
-  });
-
-  it('figma_batch rejects empty batch', async () => {
-    const result = await h.call('figma_batch', { operations: [] });
-    assert.equal(result.error, 'EMPTY_BATCH');
-  });
-
-  it('figma_batch rejects oversized batch (>6 ops)', async () => {
-    const ops = Array.from({ length: 7 }, (_, i) => ({
-      type: 'create_frame',
-      payload: { name: `Frame ${i}`, parentId: 'p-1' },
-    }));
-    const result = await h.call('figma_batch', { operations: ops });
-    assert.equal(result.error, 'BATCH_TOO_LARGE');
-  });
-
-  it('figma_batch requires phase 2', async () => {
+  it('create_frame requires phase 2', async () => {
     const h2 = createTestHarness();
     h2.seedCache();
     // Phase 0 — should fail
     await assert.rejects(
-      () => h2.call('figma_batch', {
-        operations: [{ type: 'create_frame', payload: { name: 'X', parentId: 'p-1' } }],
-      }),
-      /Phase 0 < 2/
+      () => h2.call('figma_create_frame', { name: 'X', parentId: 'p-1' }),
+      /Phase 0 < 2|PHASE_REQUIRED/
     );
   });
 });
@@ -604,45 +580,50 @@ describe('Block 4 — Edit and styling tools', () => {
     h.advancePhase(2);
   });
 
-  it('figma_restyle_artboard applies fill variable', async () => {
-    const result = await h.call('figma_restyle_artboard', {
+  it('figma_update_node (restyle) applies fill variable', async () => {
+    const result = await h.call('figma_update_node', {
+      op: 'restyle',
       nodeId: 'frame-1',
       fillVariable: 'bg-primary',
     });
     assert.ok(result.ok || !result.error, 'Should succeed');
   });
 
-  it('figma_restyle_artboard rejects invalid variable', async () => {
-    const result = await h.call('figma_restyle_artboard', {
+  it('figma_update_node (restyle) rejects invalid variable', async () => {
+    const result = await h.call('figma_update_node', {
+      op: 'restyle',
       nodeId: 'frame-1',
       fillVariable: 'nonexistent',
     });
     assert.equal(result.error, 'INVALID_VARIABLE_PATHS');
   });
 
-  it('figma_set_node_fill applies fill variable', async () => {
-    const result = await h.call('figma_set_node_fill', {
+  it('figma_update_node (fill) applies fill variable', async () => {
+    const result = await h.call('figma_update_node', {
+      op: 'fill',
       nodeId: 'node-1',
       fillVariable: 'bg-secondary',
     });
     assert.ok(!result.error, 'Should succeed with valid variable');
   });
 
-  it('figma_set_node_fill requires at least one color source', async () => {
-    const result = await h.call('figma_set_node_fill', { nodeId: 'node-1' });
+  it('figma_update_node (fill) requires at least one color source', async () => {
+    const result = await h.call('figma_update_node', { op: 'fill', nodeId: 'node-1' });
     assert.equal(result.error, 'MISSING_COLOR');
   });
 
-  it('figma_set_text_style applies text style', async () => {
-    const result = await h.call('figma_set_text_style', {
+  it('figma_update_node (text_style) applies text style', async () => {
+    const result = await h.call('figma_update_node', {
+      op: 'text_style',
       nodeId: 'text-1',
       textStyleId: 'ts-key-1',
     });
     assert.ok(!result.error, 'Should succeed');
   });
 
-  it('figma_set_layout_sizing applies sizing changes', async () => {
-    const result = await h.call('figma_set_layout_sizing', {
+  it('figma_update_node (layout) applies sizing changes', async () => {
+    const result = await h.call('figma_update_node', {
+      op: 'layout',
       nodeId: 'frame-1',
       layoutSizingHorizontal: 'FILL',
       gapVariable: 'spacing-xl',
@@ -650,8 +631,9 @@ describe('Block 4 — Edit and styling tools', () => {
     assert.ok(!result.error, 'Should succeed with valid variables');
   });
 
-  it('figma_set_text updates text content', async () => {
-    const result = await h.call('figma_set_text', {
+  it('figma_update_node (text) updates text content', async () => {
+    const result = await h.call('figma_update_node', {
+      op: 'text',
       nodeId: 'text-1',
       content: 'Updated content',
     });
@@ -775,21 +757,21 @@ describe('Block 6 — Build manifest and inspection', () => {
     h.advancePhase(2);
   });
 
-  it('mimic_find_node finds by name from build manifest', async () => {
+  it('figma_inspect (section) finds by name from build manifest', async () => {
     // Use non-component-like names to avoid component-first gate
     await h.call('figma_create_frame', { name: 'Content Area', parentId: 'artboard-1', direction: 'VERTICAL' });
     await h.call('figma_create_frame', { name: 'Metrics Row', parentId: 'artboard-1', direction: 'HORIZONTAL' });
 
-    const result = await h.call('mimic_find_node', { sectionName: 'Content' });
+    const result = await h.call('figma_inspect', { target: 'section', sectionName: 'Content' });
     assert.ok(result.found, 'Should find Content Area');
     assert.ok(result.figmaNodeId, 'Should have figmaNodeId');
     assert.ok(result.htmlSection.includes('Content'), 'Should match Content Area');
   });
 
-  it('mimic_find_node returns available sections when not found', async () => {
+  it('figma_inspect (section) returns available sections when not found', async () => {
     await h.call('figma_create_frame', { name: 'Details Panel', parentId: 'artboard-1', direction: 'VERTICAL' });
 
-    const result = await h.call('mimic_find_node', { sectionName: 'Nonexistent' });
+    const result = await h.call('figma_inspect', { target: 'section', sectionName: 'Nonexistent' });
     assert.equal(result.found, false);
     assert.ok(result.available, 'Should list available sections');
     assert.ok(result.available.includes('Details Panel'));
@@ -811,16 +793,16 @@ describe('Block 6 — Build manifest and inspection', () => {
     assert.ok(compSections.length >= 1, 'Should have component sections');
   });
 
-  it('mimic_generate_design_md returns DS reference content', async () => {
-    const result = await h.call('mimic_generate_design_md', {});
+  it('mimic_ai_knowledge_read (format: design_md) returns DS reference content', async () => {
+    const result = await h.call('mimic_ai_knowledge_read', { format: 'design_md' });
     assert.ok(result.content, 'Should have content');
     assert.ok(result.content.includes('Design System Reference'), 'Should have DS title');
     assert.ok(result.content.includes('Variables'), 'Should mention variables');
     assert.ok(result.content.includes('10'), 'Should show variable count');
   });
 
-  it('mimic_find_node with empty manifest returns empty available', async () => {
-    const result = await h.call('mimic_find_node', { sectionName: 'anything' });
+  it('figma_inspect (section) with empty manifest returns empty available', async () => {
+    const result = await h.call('figma_inspect', { target: 'section', sectionName: 'anything' });
     assert.equal(result.found, false);
     assert.ok(Array.isArray(result.available));
     assert.equal(result.available.length, 0);
@@ -1067,7 +1049,7 @@ describe('Block 8 — Component text tracking', () => {
     h.advancePhase(2);
   });
 
-  it('figma_set_component_text tracks override in componentTextTracker', async () => {
+  it('figma_component_text tracks override in componentTextTracker', async () => {
     // Insert component first (sets up tracker)
     const comp = await h.call('figma_insert_component', {
       componentKey: 'ck-card',
@@ -1076,10 +1058,9 @@ describe('Block 8 — Component text tracking', () => {
     });
 
     // Override text
-    await h.call('figma_set_component_text', {
+    await h.call('figma_component_text', {
       nodeId: comp.nodeId,
-      textNodeName: 'Text',
-      content: 'Revenue',
+      overrides: [{ textNodeName: 'Text', content: 'Revenue' }],
     });
 
     const tracker = h.session.componentTextTracker.get(comp.nodeId);
@@ -1087,17 +1068,16 @@ describe('Block 8 — Component text tracking', () => {
     assert.ok(tracker.overridden.has('Text'), 'Text node name should be tracked as overridden');
   });
 
-  it('figma_set_component_text_by_id tracks override by exact nodeId', async () => {
+  it('figma_component_text (textNodeId) tracks override by exact nodeId', async () => {
     const comp = await h.call('figma_insert_component', {
       componentKey: 'ck-card',
       parentId: 'p-1',
       name: 'Card',
     });
 
-    await h.call('figma_set_component_text_by_id', {
+    await h.call('figma_component_text', {
       nodeId: comp.nodeId,
-      textNodeId: 'tn-1',
-      content: 'Updated',
+      overrides: [{ textNodeId: 'tn-1', content: 'Updated' }],
     });
 
     const tracker = h.session.componentTextTracker.get(comp.nodeId);
@@ -1132,10 +1112,9 @@ describe('Block 8 — Component text tracking', () => {
     });
 
     // Override the text node
-    await h.call('figma_set_component_text', {
+    await h.call('figma_component_text', {
       nodeId: comp.nodeId,
-      textNodeName: 'Text',
-      content: 'Real content',
+      overrides: [{ textNodeName: 'Text', content: 'Real content' }],
     });
 
     const report = await h.call('mimic_generate_build_report', {
@@ -1147,7 +1126,7 @@ describe('Block 8 — Component text tracking', () => {
     assert.equal(report.unoverriddenTextCount, 0, 'Should have no unoverridden text');
   });
 
-  it('figma_batch_set_component_text with partial failure reports correctly', async () => {
+  it('figma_component_text with partial failure reports correctly', async () => {
     const comp = await h.call('figma_insert_component', {
       componentKey: 'ck-multi',
       parentId: 'p-1',
@@ -1171,7 +1150,7 @@ describe('Block 8 — Component text tracking', () => {
       return origSend.call(h.bridge, type, payload);
     };
 
-    const result = await h.call('figma_batch_set_component_text', {
+    const result = await h.call('figma_component_text', {
       nodeId: comp.nodeId,
       overrides: [
         { textNodeName: 'Title', content: 'Dashboard' },
@@ -1275,10 +1254,9 @@ describe('Block 9 — End-to-end pre-release scenario', () => {
         parentId: card.nodeId,
         name: `${cardName} Header`,
       });
-      await h.call('figma_set_component_text', {
+      await h.call('figma_component_text', {
         nodeId: ch.nodeId,
-        textNodeName: 'Text',
-        content: cardName.split(': ')[1],
+        overrides: [{ textNodeName: 'Text', content: cardName.split(': ')[1] }],
       });
 
       // Insert badge
@@ -1291,10 +1269,9 @@ describe('Block 9 — End-to-end pre-release scenario', () => {
         nodeId: badge.nodeId,
         properties: { Color: 'Success' },
       });
-      await h.call('figma_set_component_text', {
+      await h.call('figma_component_text', {
         nodeId: badge.nodeId,
-        textNodeName: 'Text',
-        content: '+12%',
+        overrides: [{ textNodeName: 'Text', content: '+12%' }],
       });
     }
 
@@ -1404,10 +1381,9 @@ describe('Block 9 — End-to-end pre-release scenario', () => {
         parentId: card.nodeId,
         name: `${cardName} Header`,
       });
-      await h.call('figma_set_component_text', {
+      await h.call('figma_component_text', {
         nodeId: ch.nodeId,
-        textNodeName: 'Text',
-        content: cardName.split(': ')[1],
+        overrides: [{ textNodeName: 'Text', content: cardName.split(': ')[1] }],
       });
 
       const badge = await h.call('figma_insert_component', {
@@ -1416,10 +1392,9 @@ describe('Block 9 — End-to-end pre-release scenario', () => {
         name: `${cardName} Badge`,
       });
       // Verified recipe should auto-apply variants if badge reached confirmed
-      await h.call('figma_set_component_text', {
+      await h.call('figma_component_text', {
         nodeId: badge.nodeId,
-        textNodeName: 'Text',
-        content: '+12%',
+        overrides: [{ textNodeName: 'Text', content: '+12%' }],
       });
     }
 

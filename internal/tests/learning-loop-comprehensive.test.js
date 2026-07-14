@@ -1459,7 +1459,7 @@ describe('Tier 5 — Edge cases + guards', () => {
       assert.ok(!comp._autoApplied, 'Should NOT auto-apply when applyRecipe=false');
     });
 
-    it('Text node structure learned from figma_batch_set_component_text persists', async () => {
+    it('Text node structure learned from figma_component_text persists', async () => {
       h.advancePhase(2);
       const comp = await h.call('figma_insert_component', {
         componentKey: 'ck-card-header',
@@ -1467,7 +1467,7 @@ describe('Tier 5 — Edge cases + guards', () => {
         name: 'Card Header',
       });
 
-      await h.call('figma_batch_set_component_text', {
+      await h.call('figma_component_text', {
         nodeId: comp.nodeId,
         overrides: [
           { textNodeName: 'Text', content: 'Revenue' },

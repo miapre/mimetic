@@ -130,7 +130,7 @@ function register(server, context) {
 
   registerTool(
     'mimic_build_chart',
-    'Builds an entire chart in one tool call. Creates chart container, visualization (SVG or native rectangles), axis labels, grid lines, and legend — all bound to DS variables. Supports line, bar, donut, and radar charts. Reduces chart builds from 30-50 tool calls to 1.',
+    'Bulk chart builder — creates an entire chart in ONE call: container, visualization (native rectangles or stroke-free SVG), axis labels, grid lines, and legend, all bound to DS variables and text styles. Use for ANY HTML chart instead of hand-building; reduces 30-50 tool calls to 1. chartType: bar, line, donut, radar. Key params: parentId, chartType, title, data, dimensions, colors (neutral DS data palette — never Brand/Success/Warning/Error). Use mimic_compute_chart for geometry-only. Phase 2+.',
     {
       type: 'object',
       properties: {
@@ -354,13 +354,16 @@ function register(server, context) {
         ...(Object.values(theme.tokens).some(t => t.usedFallback) ? {
           _spacingRadiusFallbackNote: 'The DS cache had no exact match for: ' +
             Object.entries(theme.tokens).filter(([, t]) => t.usedFallback).map(([name, t]) => `${name} (used ${t.raw}px raw, no variable bound)`).join(', ') +
-            '. This chart\'s layout still renders correctly, but those gaps/corners aren\'t bound to a DS variable. Check figma_read_variable_values for your DS\'s actual spacing/radius variable names.',
+            '. This chart\'s layout still renders correctly, but those gaps/corners aren\'t bound to a DS variable. Check figma_list_ds (kind: "variables") for your DS\'s actual spacing/radius variable names.',
         } : {}),
         hint: results.failures.length > 0
           ? `Chart "${title}" built with ${totalElements} elements (${results.failures.length} warnings). Check failures.`
           : `Chart "${title}" built successfully: ${totalElements} elements in ${results.totalOperations} bridge operations.`,
         _reportReminder: 'When the build is done, you MUST call mimic_generate_build_report before responding to the user.',
       };
+    },
+    {
+      annotations: { title: 'Bulk-build a chart', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     }
   );
 }

@@ -31,8 +31,8 @@ Learns from every build.
 - **Start every build with `mimic_status`.** It returns the
   current phase and tells you what to do next.
 - **Don't guess variable paths.** Discovery populates the
-  cache. Use `figma_read_variable_values` or
-  `figma_list_text_styles` to see what's available.
+  cache. Use `figma_list_ds` (kind: `"variables"` or
+  `"text_styles"`) to see what's available.
 
 ## Component-First Principle
 
@@ -138,10 +138,11 @@ components.
 After mapping, missing types are **confirmed gaps** —
 build as primitives with `confirmedNoComponent: true`.
 
-The individual tools (`figma_discover_library_styles`,
-`figma_discover_library_variables`, etc.) still exist for
-manual use if needed, but `mimic_discover_ds` replaces the
-5-step sequence.
+The manual escape hatch, `mimic_ds_assets` (with
+`action: "discover" | "preload" | "set_defaults"` and
+`kind: "styles" | "variables" | "components" | "fill_styles"`),
+still exists for targeted redos, but `mimic_discover_ds`
+replaces the whole manual sequence.
 
 ## Core Rules
 
@@ -203,15 +204,16 @@ manual use if needed, but `mimic_discover_ds` replaces the
       **Labels are booleans too.** If the HTML shows a label
       adjacent to an input/select/textarea, check if the
       component has a Label boolean — enable it and set the
-      label text via `figma_set_component_text` instead of
+      label text via `figma_component_text` instead of
       creating a separate text node. Same for hint text,
       icons, and any other boolean-controlled slot.
    c. Set the correct variant properties via
       `figma_set_variant`. Always check what the current
       values are and change any that don't match the HTML.
-   d. Override ALL text via `figma_set_component_text`. Use
-      the `textNodes` list — every node listed must get real
-      content from the HTML. No placeholder text ever.
+   d. Override ALL text via `figma_component_text` (pass the
+      full `overrides` array in ONE call). Use the `textNodes`
+      list — every node listed must get real content from the
+      HTML. No placeholder text ever.
    e. **Set layoutSizingHorizontal to FILL.** This is the
       default for every component inside an auto-layout
       container. Only use HUG/FIXED when the HTML explicitly
@@ -238,13 +240,13 @@ manual use if needed, but `mimic_discover_ds` replaces the
     literal `\n` or `\r\n` reach a Figma text node — container
     width controls wrapping, and a hardcoded break fights
     auto-layout instead of letting it reflow. `figma_create_text`
-    and `figma_set_text` strip embedded line breaks automatically
-    (replaced with a single space, doubled spaces collapsed) and
-    return `_textNote` in the response when they do. This does
-    NOT apply to component text overrides (`figma_set_component_text`
-    and friends) — those are a separate path. Source line breaks
-    in the HTML (including `<br>`) never dictate where a line
-    wraps in Figma.
+    and `figma_update_node` (op: `"text"`) strip embedded line
+    breaks automatically (replaced with a single space, doubled
+    spaces collapsed) and return `_textNote` in the response when
+    they do. This does NOT apply to component text overrides
+    (`figma_component_text`) — those are a separate path. Source
+    line breaks in the HTML (including `<br>`) never dictate
+    where a line wraps in Figma.
 13. Feedback means iterate the existing artboard.
     Never delete artboards.
 14. Every build MUST end with `mimic_generate_build_report`.
@@ -269,7 +271,7 @@ manual use if needed, but `mimic_discover_ds` replaces the
 18. INSERT_TIMEOUT recovery. When `figma_insert_component`
     returns INSERT_TIMEOUT, the component MAY have been created.
     Before doing anything else: wait 3 seconds, then call
-    `figma_get_node_children` on the parent. If the component
+    `figma_inspect` (target: `"children"`) on the parent. If the component
     appears — do NOT retry, proceed with configuration. If it
     doesn't appear, check once more after 3 seconds. Only retry
     the insert if the component is confirmed absent after both
@@ -318,9 +320,8 @@ instance needs different variants), pass `applyRecipe: false`
 to `figma_insert_component`.
 
 Template replay only applies variant configs — text overrides
-still require `figma_batch_set_component_text` or individual
-`figma_set_component_text` for every instance (text content
-varies).
+still require a `figma_component_text` call for every instance
+(text content varies).
 
 ## Layout Structure Replay
 
@@ -345,14 +346,14 @@ pattern prefix per build session. Subsequent builds with the
 same prefix reuse the stored config once promoted to
 confirmed/verified.
 
-## Text Batch Optimization
+## Component Text Overrides
 
-Use `figma_batch_set_component_text` to set ALL text nodes
-on a component instance in a single call instead of multiple
-`figma_set_component_text` calls.
+Use `figma_component_text` to set ALL text nodes on a
+component instance in a single call — pass the full
+`overrides` array. A single override is just an array of one.
 
 ```
-figma_batch_set_component_text({
+figma_component_text({
   nodeId: "component-instance-id",
   overrides: [
     { textNodeName: "Heading", content: "Dashboard" },
@@ -366,12 +367,16 @@ Key rules:
 - Use after `figma_insert_component` — the
   `configurationHints.textNodes` in the response tells you
   which text nodes exist.
+- When `configurationHints.textNodes` includes node IDs and
+  the component has repeated text node names, use
+  `textNodeId` instead of `textNodeName` in the override —
+  it targets the exact node.
 - Saves N-1 tool calls per component (where N = text node
   count). A component with 4 text nodes saves 3 tool calls.
 - Text node structure is learned per componentKey and
   persisted in the knowledge store after the build report.
 - Partial failures are reported per override — fix the
-  textNodeName and retry only the failed ones.
+  textNodeName/textNodeId and retry only the failed ones.
 - Tracks overrides in componentTextTracker for the build
   report's unoverridden text audit.
 
@@ -452,8 +457,8 @@ mimic_build_chart({
     "Colors/Data/series-purple-500"
   ]
   // Use real variable paths from YOUR discovered DS
-  // (figma_read_variable_values) — neutral data colors only,
-  // never Brand/Success/Warning/Error (see rule 6)
+  // (figma_list_ds, kind: "variables") — neutral data colors
+  // only, never Brand/Success/Warning/Error (see rule 6)
 })
 ```
 
@@ -539,7 +544,7 @@ call. The build CANNOT proceed until the user decides.
   (what failed). If `bindingFailures: true`, the node has
   missing DS bindings. Check `_bindingWarning` for specifics.
   DO NOT continue building if bindings are failing — fix the
-  variable paths first using `figma_read_variable_values`.
+  variable paths first using `figma_list_ds` (kind: `"variables"`).
 - **Variable validation**: All `*Variable` params are checked
   against the DS cache before reaching the plugin. Wrong paths
   return suggestions, not silent failures.
@@ -568,10 +573,10 @@ call. The build CANNOT proceed until the user decides.
 
 1. Create the artboard with x/y position. Query page nodes
    first, place at rightmost artboard x + width + 80px.
-2. Call `figma_set_all_variable_modes` with the artboard
-   nodeId. This sets default modes on ALL variable collections
-   (including library collections). Without it, DS variables
-   render as black.
+2. Call `figma_variable_modes` with the artboard nodeId and
+   modeIndex (omit collectionName to set ALL variable
+   collections at once, including library collections). Without
+   it, DS variables render as black.
 3. Use modeIndex=0 for light, modeIndex=1 for dark.
 
 ## Tool Guidance
@@ -585,7 +590,7 @@ Each tool response includes:
 
 **If you see `bindingFailures: true` — STOP and fix before continuing.**
 The most common cause is wrong variable paths. Call
-`figma_read_variable_values` to see the actual cached paths.
+`figma_list_ds` (kind: `"variables"`) to see the actual cached paths.
 
 ## Chart Computation
 

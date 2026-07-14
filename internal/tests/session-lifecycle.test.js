@@ -28,9 +28,20 @@
  * B21 — every tool in src/tools/edit.js had no phase gate of its own, so
  *       all 11 were usable at Phase 0, before DS discovery — inconsistent
  *       with every other build/edit tool's "blocked until Phase 2"
- *       contract. Fix: mcp.js's tool-call wrapper now gates all 11 edit.js
+ *       contract. Fix: mcp.js's tool-call wrapper gated all 11 edit.js
  *       tool names centrally (EDIT_TOOLS_REQUIRE_PHASE_2), without editing
  *       edit.js itself.
+ *
+ *       v3.0.0 update: the tool-surface consolidation merged those edit.js
+ *       tools into figma_update_node (op-dispatched) and figma_variable_
+ *       modes. Since mcp.js's centralized name-based Set can no longer
+ *       express "gate some ops of this tool but not others" (figma_update_
+ *       node's 'select'/'page' ops were never gated — they used to be
+ *       figma_select_node/figma_change_page in inspect.js), the gate now
+ *       lives inside edit.js's own op handlers (matching the pattern
+ *       components.js already used). Only figma_delete_node (unchanged,
+ *       still has no self-gate) remains in mcp.js's
+ *       EDIT_TOOLS_REQUIRE_PHASE_2 Set.
  *
  * These tests drive the REAL mcp.js request wrapper — the actual
  * 'tools/call' handler registered on the MCP `Server` instance — instead
@@ -338,28 +349,19 @@ describe('mimic_generate_build_report — B7: post-report reset to Phase 2 with 
 
 // ── B21: edit.js phase gating ────────────────────────────────────────────
 
-describe('edit.js tools — B21: central Phase 2 gate in the mcp.js wrapper', () => {
-  const EDIT_TOOLS = [
-    'figma_set_text',
-    'figma_set_node_fill',
-    'figma_set_layout_sizing',
-    'figma_set_visibility',
-    'figma_set_variable_mode',
-    'figma_set_all_variable_modes',
-    'figma_set_text_style',
-    'figma_set_node_position',
-    'figma_move_node',
-    'figma_delete_node',
-    'figma_restyle_artboard',
-  ];
+describe('edit.js tools — B21: Phase 2 gate (now self-gated per figma_update_node op)', () => {
+  // Every op that used to be its own standalone gated tool.
+  const GATED_UPDATE_NODE_OPS = ['text', 'text_style', 'fill', 'layout', 'visibility', 'position', 'move', 'restyle'];
+  // These two ops were NEVER gated pre-v3.0.0 (figma_select_node / figma_change_page).
+  const UNGATED_UPDATE_NODE_OPS = ['select', 'page'];
 
-  for (const toolName of EDIT_TOOLS) {
-    it(`${toolName} is blocked at Phase 0 with a helpful PHASE_REQUIRED error`, async () => {
+  for (const op of GATED_UPDATE_NODE_OPS) {
+    it(`figma_update_node op="${op}" is blocked at Phase 0 with a helpful PHASE_REQUIRED error`, async () => {
       const mod = freshMcp();
       try {
         assert.equal(mod.context.session.phase, 0);
-        const result = await callTool(mod, toolName, { nodeId: 'n1', content: 'x', visible: true, x: 0, y: 0, parentId: 'p1', collectionName: 'c', modeIndex: 0, textStyleId: 't1' });
-        assert.equal(result.error, 'PHASE_REQUIRED', `${toolName} must be blocked before DS discovery`);
+        const result = await callTool(mod, 'figma_update_node', { op, nodeId: 'n1', content: 'x', visible: true, x: 0, y: 0, parentId: 'p1', textStyleId: 't1' });
+        assert.equal(result.error, 'PHASE_REQUIRED', `op="${op}" must be blocked before DS discovery`);
         assert.equal(result.currentPhase, 0);
         assert.equal(result.requiredPhase, 2);
         assert.match(result.message, /discover_ds|Phase 2|discovery/i, 'the error must tell the caller how to unblock it');
@@ -369,11 +371,50 @@ describe('edit.js tools — B21: central Phase 2 gate in the mcp.js wrapper', ()
     });
   }
 
-  it('does not block edit tools once Phase 2 is reached (fails later, for an unrelated bridge/plugin reason, not PHASE_REQUIRED)', async () => {
+  for (const op of UNGATED_UPDATE_NODE_OPS) {
+    it(`figma_update_node op="${op}" is NOT blocked at Phase 0 (was never gated pre-consolidation)`, async () => {
+      const mod = freshMcp();
+      try {
+        assert.equal(mod.context.session.phase, 0);
+        const result = await callTool(mod, 'figma_update_node', { op, nodeId: 'n1', pageName: 'Page 1' });
+        assert.notEqual(result.error, 'PHASE_REQUIRED', `op="${op}" must not require Phase 2`);
+      } finally {
+        cleanup(mod);
+      }
+    });
+  }
+
+  it('figma_variable_modes is blocked at Phase 0 with a helpful PHASE_REQUIRED error', async () => {
+    const mod = freshMcp();
+    try {
+      assert.equal(mod.context.session.phase, 0);
+      const result = await callTool(mod, 'figma_variable_modes', { nodeId: 'n1', modeIndex: 0 });
+      assert.equal(result.error, 'PHASE_REQUIRED');
+      assert.equal(result.currentPhase, 0);
+      assert.equal(result.requiredPhase, 2);
+    } finally {
+      cleanup(mod);
+    }
+  });
+
+  it('figma_delete_node is blocked at Phase 0 with a helpful PHASE_REQUIRED error (still centrally gated in mcp.js)', async () => {
+    const mod = freshMcp();
+    try {
+      assert.equal(mod.context.session.phase, 0);
+      const result = await callTool(mod, 'figma_delete_node', { nodeId: 'n1' });
+      assert.equal(result.error, 'PHASE_REQUIRED');
+      assert.equal(result.currentPhase, 0);
+      assert.equal(result.requiredPhase, 2);
+    } finally {
+      cleanup(mod);
+    }
+  });
+
+  it('does not block figma_update_node once Phase 2 is reached (fails later, for an unrelated bridge/plugin reason, not PHASE_REQUIRED)', async () => {
     const mod = freshMcp();
     try {
       mod.context.session.phase = 2;
-      const result = await callTool(mod, 'figma_set_text', { nodeId: 'n1', content: 'hello' });
+      const result = await callTool(mod, 'figma_update_node', { op: 'text', nodeId: 'n1', content: 'hello' });
       assert.notEqual(result.error, 'PHASE_REQUIRED', 'at Phase 2, the gate itself must not block the call');
     } finally {
       cleanup(mod);
