@@ -4,13 +4,20 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { MockBridge } = require('../helpers/mock-bridge');
 const { DsCache } = require('../../../src/ds/cache');
 const { DsResolver } = require('../../../src/ds/resolver');
 const { KnowledgeStore } = require('../../../src/knowledge/store');
 const { BuildManifest } = require('../../../src/knowledge/manifest');
 
-const STORE_PATH = path.join(__dirname, '.test-layout-replay.json');
+// Fixture-path redirection only (test hygiene): write to a throwaway temp
+// dir instead of the tracked internal/tests/knowledge/.test-layout-replay.json
+// fixture — this suite's beforeEach hooks already unlink+recreate the store
+// per test (nothing here reads pre-existing seed content), so the tracked
+// file only ever accumulated timestamp-only diffs across test runs.
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mimic-ai-layout-replay-'));
+const STORE_PATH = path.join(TMP_DIR, '.test-layout-replay.json');
 
 function createTestContext() {
   const bridge = new MockBridge();

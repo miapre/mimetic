@@ -1216,12 +1216,38 @@ handlers.insert_component = function (payload) {
     });
   }
 
-  return Promise.race([
-    importComponent(payload.componentKey),
-    new Promise(function (_, reject) {
-      setTimeout(function () { reject({ error: 'INSERT_TIMEOUT', message: 'Component import timed out after 15s for key: ' + payload.componentKey }); }, 15000);
-    })
-  ]).then(function (imported) {
+  // ── B13 guard: timeout vs. late-import race ──────────────────────────
+  // A slow importComponentByKeyAsync/importComponentSetByKeyAsync call
+  // keeps running in the background even after the 15s timeout below has
+  // already rejected and surfaced INSERT_TIMEOUT to the caller (per
+  // CLAUDE.md's INSERT_TIMEOUT recovery protocol, the caller checks
+  // figma_get_node_children and may retry). If that late import then
+  // resolved and this code unconditionally called imported.createInstance()
+  // on it, a retry could end up racing its own late-resolving predecessor —
+  // two instances for one insert. `timedOut` tracks whether the timeout
+  // already fired; the "create instance" branch below is gated on it, so
+  // a late resolution after timeout is a no-op instead of a duplicate
+  // instance. clearTimeout stops the pending rejection once the import
+  // wins normally, so it never fires after a successful fast import.
+  var timedOut = false;
+  var timeoutHandle = null;
+
+  var timeoutPromise = new Promise(function (_, reject) {
+    timeoutHandle = setTimeout(function () {
+      timedOut = true;
+      reject({ error: 'INSERT_TIMEOUT', message: 'Component import timed out after 15s for key: ' + payload.componentKey });
+    }, 15000);
+  });
+
+  var importAndBuild = importComponent(payload.componentKey).then(function (imported) {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (timedOut) {
+      // The timeout already fired and INSERT_TIMEOUT was already surfaced
+      // to the caller for this call — do not create an instance from this
+      // late resolution (prevents the duplicate-instance race, audit B13).
+      return null;
+    }
+
     var instance = imported.createInstance();
     instance.name = payload.name || imported.name;
 
@@ -1279,6 +1305,8 @@ handlers.insert_component = function (payload) {
       disabledBooleans: disabledBooleans,
     };
   });
+
+  return Promise.race([importAndBuild, timeoutPromise]);
 };
 
 // ── Stubs for Task 9 — Shape creation ──────────────────────────────────────────
@@ -3055,17 +3083,27 @@ handlers.figma_batch = function (payload) {
 };
 
 // ── Message Dispatcher ─────────────────────────────────────────────────────────
+//
+// Everything below this point is runtime bootstrap: it calls the global
+// `figma` API at load time (not just inside a handler body), so it must be
+// guarded for the module to be require()-able in Node with no `figma`
+// global at all (e.g. from a test that only wants the static exports, or
+// from tooling that inspects this file without a plugin sandbox). When a
+// test DOES provide a stubbed `global.figma` before requiring this file,
+// this block runs exactly as it does in the real plugin sandbox — that's
+// intentional, it exercises the same startup path.
 
-// ── UI Position test: hardcoded bottom-right ──
-figma.showUI(__html__, { width: 120, height: 28 });
+if (typeof figma !== 'undefined') {
+  // ── UI Position test: hardcoded bottom-right ──
+  figma.showUI(__html__, { width: 120, height: 28 });
 
-// Pre-warm font cache on startup — prevents cold-start font loading failures
-figma.loadFontAsync({ family: 'Inter', style: 'Regular' }).catch(function () {});
-figma.loadFontAsync({ family: 'Inter', style: 'Bold' }).catch(function () {});
-figma.loadFontAsync({ family: 'Inter', style: 'Semi Bold' }).catch(function () {});
-figma.loadFontAsync({ family: 'Inter', style: 'Medium' }).catch(function () {});
+  // Pre-warm font cache on startup — prevents cold-start font loading failures
+  figma.loadFontAsync({ family: 'Inter', style: 'Regular' }).catch(function () {});
+  figma.loadFontAsync({ family: 'Inter', style: 'Bold' }).catch(function () {});
+  figma.loadFontAsync({ family: 'Inter', style: 'Semi Bold' }).catch(function () {});
+  figma.loadFontAsync({ family: 'Inter', style: 'Medium' }).catch(function () {});
 
-figma.ui.onmessage = function (msg) {
+  figma.ui.onmessage = function (msg) {
   // Ignore internal bridge status messages
   if (msg.type === '__bridge_connected' || msg.type === '__bridge_disconnected') return;
 
@@ -3142,4 +3180,56 @@ figma.ui.onmessage = function (msg) {
       error: errObj,
     });
   }
-};
+  };
+}
+
+// ── Node/test exports ───────────────────────────────────────────────────────
+//
+// This file has no bundler and no module system at runtime — Figma loads it
+// as a single sandboxed script with a global `figma`. The block below is the
+// only concession to that: a UMD-style footer so internal/tests/*.test.js
+// can `require('plugin/code.js')` in Node (with a stubbed global.figma set
+// beforehand — see internal/tests/helpers/figma-stub.js) and exercise the
+// REAL handlers, instead of a parallel reimplementation.
+//
+// `typeof module !== 'undefined'` is false inside Figma's plugin sandbox, so
+// this never executes there — it's a Node-only code path. Nothing above this
+// footer depends on `module`/`require`/`exports` existing, so this is purely
+// additive and does not change plugin sandbox behavior.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    handlers: handlers,
+    // Pure/near-pure helpers, exported for direct unit testing.
+    fontKey: fontKey,
+    loadFont: loadFont,
+    ensureFontLoaded: ensureFontLoaded,
+    coerceBool: coerceBool,
+    coerceArray: coerceArray,
+    enforceText: enforceText,
+    enforceColorFill: enforceColorFill,
+    createBindingTracker: createBindingTracker,
+    getVariableByPath: getVariableByPath,
+    getVariableByKey: getVariableByKey,
+    bindVariable: bindVariable,
+    bindFillVariable: bindFillVariable,
+    bindStrokeVariable: bindStrokeVariable,
+    hexToRgb: hexToRgb,
+    normalizeColor: normalizeColor,
+    normalizeNodeId: normalizeNodeId,
+    getParent: getParent,
+    collectConfigurationHints: collectConfigurationHints,
+    // Module-scoped state, exposed BY REFERENCE so tests can inspect and
+    // reset it between cases (e.g. `_state.styleCache.clear()`,
+    // `_state.enforcementProfile.enforceTextStyles = true`). Every test that
+    // requires this module gets a fresh copy of this state anyway, because
+    // tests load the module via a fresh `require.cache` delete per stub
+    // (see loadPlugin() in figma-stub.js) — `_state` is for within-file
+    // resets between individual test cases, not cross-file isolation.
+    _state: {
+      enforcementProfile: enforcementProfile,
+      styleCache: styleCache,
+      variableCache: variableCache,
+      loadedFontKeys: loadedFontKeys,
+    },
+  };
+}

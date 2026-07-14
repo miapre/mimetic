@@ -3,6 +3,8 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs');
 const { DsDiscovery } = require('../../src/ds/discovery');
 const { DsCache } = require('../../src/ds/cache');
 const { KnowledgeStore } = require('../../src/knowledge/store');
@@ -10,11 +12,18 @@ const { MockBridge } = require('./helpers/mock-bridge');
 const { DsResolver } = require('../../src/ds/resolver');
 const { BuildManifest } = require('../../src/knowledge/manifest');
 
+// Write to a throwaway temp dir instead of a tracked fixture file — this
+// test never reads pre-existing content (KnowledgeStore.load() is never
+// called here), it only saves fresh state, so there is nothing to seed.
+// Writing into the repo just left perpetual timestamp-only git diffs on
+// internal/tests/.test-knowledge.json every run.
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mimic-ai-component-first-'));
+
 function createToolContext() {
   const bridge = new MockBridge();
   const dsCache = new DsCache();
   const dsResolver = new DsResolver(dsCache);
-  const knowledgeStore = new KnowledgeStore(path.join(__dirname, '.test-knowledge.json'));
+  const knowledgeStore = new KnowledgeStore(path.join(TMP_DIR, '.test-knowledge.json'));
   const buildManifest = new BuildManifest();
   const session = { phase: 2, toolCallCount: 0, cacheHits: 0 };
   const handlers = {};
