@@ -15,15 +15,18 @@ const { ChartCalculator } = require('../charts/calculator');
 // ── Hardcoded defaults (LayerLens Theme) ─────────────────────
 // These are used ONLY when the DS cache doesn't have matches
 // and the caller doesn't provide overrides.
+// Brand, Success, Warning, and Error are semantic colors — colorRules ban
+// them from chart data (see mimic_compute_chart's _chartColorHint). This
+// fallback only ever uses neutral/categorical utility hues.
 const FALLBACK_COLORS = [
-  'Component colors/Utility/Brand/utility-brand-500',
-  'Component colors/Utility/Success/utility-success-500',
-  'Component colors/Utility/Warning/utility-warning-500',
-  'Component colors/Utility/Error/utility-error-500',
   'Component colors/Utility/Indigo/utility-indigo-500',
   'Component colors/Utility/Purple/utility-purple-500',
   'Component colors/Utility/Blue/utility-blue-500',
+  'Component colors/Utility/Cyan/utility-cyan-500',
+  'Component colors/Utility/Pink/utility-pink-500',
   'Component colors/Utility/Orange/utility-orange-500',
+  'Component colors/Utility/Blue light/utility-blue-light-500',
+  'Component colors/Utility/Fuchsia/utility-fuchsia-500',
 ];
 // Chart builds use generous timeouts: large libraries (5000+ components)
 // cause slow plugin processing that exceeds the default 120s bridge timeout.
@@ -43,13 +46,14 @@ const FALLBACK_TITLE_COLOR = 'Colors/Text/text-primary (900)';
  */
 function resolveChartTheme(dsCache, overrides = {}) {
   // Try to find DS-appropriate values from the cache
+  const dsPalette = dsCache.findPalette?.();
   const cached = {
     gridColor: dsCache.findVariable?.('border', 'STROKE', 'secondary') || FALLBACK_GRID_COLOR,
     labelColor: dsCache.findVariable?.('text', 'TEXT_FILL', 'tertiary') || FALLBACK_LABEL_COLOR,
     labelStyle: dsCache.findTextStyle?.('xs', 'Medium') || FALLBACK_LABEL_STYLE,
     titleStyle: dsCache.findTextStyle?.('sm', 'Semibold') || FALLBACK_TITLE_STYLE,
     titleColor: dsCache.findVariable?.('text', 'TEXT_FILL', 'primary') || FALLBACK_TITLE_COLOR,
-    palette: dsCache.findPalette?.() || FALLBACK_COLORS,
+    palette: dsPalette || FALLBACK_COLORS,
   };
 
   // Explicit overrides win
@@ -60,6 +64,9 @@ function resolveChartTheme(dsCache, overrides = {}) {
     titleStyle: overrides.titleStyle || cached.titleStyle,
     titleColor: overrides.titleColor || cached.titleColor,
     palette: overrides.colors || cached.palette,
+    // True only when the caller passed no colors AND the DS cache had no
+    // palette match — i.e. FALLBACK_COLORS is what's actually in use.
+    usedFallbackPalette: !overrides.colors && !dsPalette,
   };
 }
 
@@ -283,6 +290,9 @@ function register(server, context) {
         ...(results.failures.length > 0 ? {
           failures: results.failures,
           _failureNote: 'Some elements had errors. Check failures array for details.',
+        } : {}),
+        ...(theme.usedFallbackPalette ? {
+          _fallbackPaletteNote: 'No colors were passed and the DS cache had no categorical palette match, so built-in neutral fallback colors were used (never Brand/Success/Warning/Error — those are reserved semantic colors banned from chart data).',
         } : {}),
         hint: results.failures.length > 0
           ? `Chart "${title}" built with ${totalElements} elements (${results.failures.length} warnings). Check failures.`
@@ -616,7 +626,7 @@ async function buildDonutChart(collector, bridge, cardId, geometry, palette, ser
           width: 8,
           height: 8,
           fillVariable: color,
-          radiusVariable: 'radius-full',
+          cornerRadiusVariable: 'radius-full',
         });
         op();
         results.elements.rectangles++;
@@ -656,16 +666,24 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
   // This avoids NONE frames and absolute positioning issues entirely.
   // Auto-layout handles Y-axis labels, X-axis labels, and legend natively.
   // Pad SVG by dot radius so edge dots aren't clipped.
+  // All elements use placeholder fills only — we bind to DS variables after
+  // creation (below), same as buildDonutChart/buildRadarChart. NEVER use
+  // stroke here: Figma renders SVG strokes as thick filled blobs, not lines.
 
   const pad = 5; // padding for dot radius (4) + 1px breathing room
   const svgW = plotWidth + pad * 2;
   const svgH = plotHeight + pad * 2;
   const svgParts = [];
+  const gridCount = yAxis.ticks.length;
 
-  // Grid lines (offset by pad)
+  // Grid lines: thin filled polygons (not <line stroke>, which Figma
+  // renders as a thick blob), offset by pad.
+  const gridThickness = 1;
   for (const tick of yAxis.ticks) {
     const y = tick.py + pad;
-    svgParts.push(`<line x1="${pad}" y1="${y}" x2="${plotWidth + pad}" y2="${y}" stroke="#e4e6ee" stroke-width="1"/>`);
+    const yTop = (y - gridThickness / 2).toFixed(1);
+    const yBottom = (y + gridThickness / 2).toFixed(1);
+    svgParts.push(`<polygon points="${pad},${yTop} ${plotWidth + pad},${yTop} ${plotWidth + pad},${yBottom} ${pad},${yBottom}" fill="#e4e6ee"/>`);
   }
 
   if (points.length >= 2) {
@@ -674,7 +692,7 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
     areaPathParts.push(`L${(points[points.length - 1].px + pad).toFixed(1)},${plotHeight + pad}`);
     areaPathParts.push(`L${(points[0].px + pad).toFixed(1)},${plotHeight + pad}`);
     areaPathParts.push('Z');
-    svgParts.push(`<path d="${areaPathParts.join(' ')}" fill="#3b82f6" opacity="0.1"/>`);
+    svgParts.push(`<path d="${areaPathParts.join(' ')}" fill="#3b82f6"/>`);
 
     // Data line ribbon (filled polygon, 1.5px above/below)
     const ribbonThickness = 1.5;
@@ -756,8 +774,9 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
   const realCardIdLine = collector.getRealNodeId(cardId);
 
   // Insert the single combined SVG
+  let svgResult;
   try {
-    await bridge.send('create_svg', {
+    svgResult = await bridge.send('create_svg', {
       parentId: realChartAreaId,
       name: 'Plot',
       svgString: fullSvg,
@@ -766,6 +785,35 @@ async function buildLineChart(collector, bridge, cardId, geometry, palette, seri
     results.elements.svgs++;
   } catch (err) {
     fail('plot-svg', err);
+  }
+
+  // Bind each vector child to a DS color variable — same post-import pass
+  // buildDonutChart/buildRadarChart use. Grid lines → theme.gridColor,
+  // area fill/ribbon/dots → palette[0] (line charts are single-series).
+  if (svgResult) {
+    const unboundChildren = svgResult.unboundChildren || [];
+    const vectorChildren = unboundChildren.filter(c => c.type !== 'TEXT');
+    for (let i = 0; i < vectorChildren.length; i++) {
+      const isGrid = i < gridCount;
+      const color = isGrid ? theme.gridColor : palette[0];
+      try {
+        await bridge.send('set_node_fill', {
+          nodeId: vectorChildren[i].nodeId,
+          fillVariable: color,
+        });
+        op();
+        results.elements.bindings++;
+      } catch (err) {
+        fail('line-bind', err);
+      }
+    }
+
+    // Safety net: confirm every element we drew actually made it into the
+    // binding pass. If not, some nodes still carry the hardcoded hex above.
+    const expectedVectorCount = gridCount + (points.length >= 2 ? 2 + points.length : 0);
+    if (vectorChildren.length < expectedVectorCount) {
+      fail('line-bind', `Expected ${expectedVectorCount} chart elements to bind but the SVG result only reported ${vectorChildren.length} — some elements may still carry hardcoded colors.`);
+    }
   }
 
   // ── X-axis labels ──
@@ -1048,7 +1096,7 @@ async function buildLegend(collector, bridge, parentId, labels, palette, results
         width: 8,
         height: 8,
         fillVariable: color,
-        radiusVariable: 'radius-full',
+        cornerRadiusVariable: 'radius-full',
       });
       op();
       results.elements.rectangles++;
