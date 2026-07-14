@@ -2,6 +2,23 @@
 
 const { surfaceBindingFeedback } = require('../utils/binding-feedback');
 
+// v1 rule, restored: container width controls wrapping in Figma, so a
+// hardcoded \n / \r\n in text content fights auto-layout instead of letting
+// it wrap. Strip line breaks before the content ever reaches the bridge —
+// this is MCP-side, not a plugin/bridge concern. Scoped strictly to
+// figma_set_text; component text overrides (set_component_text) are a
+// different tool in a different file and are NOT touched by this helper.
+function stripLineBreaks(content) {
+  if (typeof content !== 'string' || !/[\r\n]/.test(content)) {
+    return { content, stripped: false };
+  }
+  const normalized = content
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  return { content: normalized, stripped: true };
+}
+
 function register(server, context) {
   const { bridge, dsCache, session, registerTool } = context;
 
@@ -18,9 +35,16 @@ function register(server, context) {
       required: ['nodeId', 'content'],
     },
     async (args) => {
+      const { content: strippedContent, stripped: linebreaksStripped } = stripLineBreaks(args.content);
+      args.content = strippedContent;
       const result = await bridge.send('set_text', args);
       session.toolCallCount++;
-      return { ...result };
+      return {
+        ...result,
+        _textNote: linebreaksStripped
+          ? 'Line breaks removed — container width controls wrapping.'
+          : undefined,
+      };
     }
   );
 

@@ -234,28 +234,39 @@ manual use if needed, but `mimic_discover_ds` replaces the
    the Figma text must say "Total Revenue", not "Revenue" or
    "Total Rev." or anything else. This is a critical bug when
    violated.
-12. Feedback means iterate the existing artboard.
+12. No hardcoded line breaks in text content. Never let a
+    literal `\n` or `\r\n` reach a Figma text node — container
+    width controls wrapping, and a hardcoded break fights
+    auto-layout instead of letting it reflow. `figma_create_text`
+    and `figma_set_text` strip embedded line breaks automatically
+    (replaced with a single space, doubled spaces collapsed) and
+    return `_textNote` in the response when they do. This does
+    NOT apply to component text overrides (`figma_set_component_text`
+    and friends) — those are a separate path. Source line breaks
+    in the HTML (including `<br>`) never dictate where a line
+    wraps in Figma.
+13. Feedback means iterate the existing artboard.
     Never delete artboards.
-13. Every build MUST end with `mimic_generate_build_report`.
+14. Every build MUST end with `mimic_generate_build_report`.
     This is NOT optional — it is the tool's key differentiator.
     The report teaches users about DS usage, gaps, patterns,
     and efficiency. A build without a report is incomplete.
     Call it BEFORE responding to the user with build results.
-14. Name every node after its HTML role. "Header Section" not
+15. Name every node after its HTML role. "Header Section" not
     "Frame". "Card: Total Users" not "Frame". This enables
     iteration — finding nodes by name instead of traversing.
-15. Section-level elements (header, footer, sidebar) should use
+16. Section-level elements (header, footer, sidebar) should use
     DS components if they exist. The two-call `mimic_map_components`
     workflow handles this: first call identifies gaps, you search
     once via Figma MCP, second call with `librarySearchResults`
     confirms matches or gaps. After the second call, any remaining
     missing types are confirmed — build as primitives.
-16. When `mimic_map_components` returns a component for header,
+17. When `mimic_map_components` returns a component for header,
     footer, or sidebar — use it. The DS component is the
     authoritative layout. Override text content to match the
     HTML, but don't build a custom frame when a DS component
     was found. Intent over pixel-matching.
-17. INSERT_TIMEOUT recovery. When `figma_insert_component`
+18. INSERT_TIMEOUT recovery. When `figma_insert_component`
     returns INSERT_TIMEOUT, the component MAY have been created.
     Before doing anything else: wait 3 seconds, then call
     `figma_get_node_children` on the parent. If the component
@@ -264,7 +275,7 @@ manual use if needed, but `mimic_discover_ds` replaces the
     the insert if the component is confirmed absent after both
     checks. NEVER retry without checking — duplicates are hard
     to detect and fix.
-18. Build report presentation. After calling
+19. Build report presentation. After calling
     `mimic_generate_build_report`, ALWAYS present a formatted
     summary to the user. The report has multiple sections and
     ALL must be shown:

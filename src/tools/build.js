@@ -19,6 +19,23 @@ function getComponentFirstMatch(name) {
   return COMPONENT_FIRST_PATTERNS.find(p => lower.includes(p));
 }
 
+// v1 rule, restored: container width controls wrapping in Figma, so a
+// hardcoded \n / \r\n in text content fights auto-layout instead of letting
+// it wrap. Strip line breaks before the content ever reaches the bridge —
+// this is MCP-side, not a plugin/bridge concern. Scoped strictly to
+// figma_create_text; component text overrides (set_component_text) are a
+// different tool in a different file and are NOT touched by this helper.
+function stripLineBreaks(content) {
+  if (typeof content !== 'string' || !/[\r\n]/.test(content)) {
+    return { content, stripped: false };
+  }
+  const normalized = content
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  return { content: normalized, stripped: true };
+}
+
 // Shell components — structural chrome that defines the app layout.
 // These are NON-NEGOTIABLE: if the DS has them, use them. No primitive
 // override allowed. The HTML layout for these is irrelevant — the DS
@@ -498,6 +515,9 @@ function register(server, context) {
     },
     async (args) => {
       requirePhase(2, PHASE_HINT);
+      // Strip hardcoded line breaks — container width controls wrapping.
+      const { content: strippedContent, stripped: linebreaksStripped } = stripLineBreaks(args.content);
+      args.content = strippedContent;
       // Resolve text style name → key (accepts both "Text sm/Semibold" and raw key)
       if (args.textStyleId) {
         const resolvedKey = dsCache.resolveTextStyleKey(args.textStyleId);
@@ -525,6 +545,9 @@ function register(server, context) {
         nodeId: result?.nodeId || result?.id,
         ...result,
         _categoryWarnings: catWarnings.length > 0 ? catWarnings : undefined,
+        _textNote: linebreaksStripped
+          ? 'Line breaks removed — container width controls wrapping.'
+          : undefined,
         hint: result?.bindingFailures
           ? 'Text node created but some DS bindings FAILED — check warnings. Text style or color variable may not be applied.'
           : catWarnings.length > 0

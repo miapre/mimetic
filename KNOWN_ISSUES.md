@@ -55,7 +55,7 @@ If the Figma plugin is not running, bridge operations fail silently
 or timeout. Always verify via `mimic_status` before starting a build.
 
 ### Keepalive interval
-Bridge sends keepalive pings every 30 seconds. If the plugin UI
+Bridge sends keepalive pings every 15 seconds. If the plugin UI
 is closed in Figma, the connection drops and auto-reconnects when
 the plugin is reopened.
 
@@ -71,10 +71,19 @@ After 20 Phase 3 tool calls, a checkpoint message appears. This is
 informational — the build continues. The 300-call hard limit is
 the actual stop.
 
-### ds-knowledge.json must be reset before validation sprints
-Stale component recipes from previous DS sessions pollute learning
-metrics. Always reset (`{"version":2,...}`) before starting a
-validation sprint with a different DS.
+### Knowledge store isn't scoped per design system yet
+The knowledge store lives at `~/.mimic-ai/ds-knowledge.json`
+(override with the `MIMIC_KNOWLEDGE_PATH` env var). It is not yet
+scoped per library, so component recipes and patterns learned from
+one design system can influence builds against a different design
+system on the same machine. Per-library scoping is in progress
+(knowledge schema v3). Until then, reset the store — or point
+`MIMIC_KNOWLEDGE_PATH` at a fresh file — before switching to a
+different design system:
+`{"version":2,"dsFingerprint":null,"components":{},"patterns":{},"gaps":{},"rules":{},"libraryFileKeys":{},"buildHistory":[],"signals":[],"meta":{"buildCount":0,"lastBuild":null,"created":"<iso-timestamp>"}}`.
+A corrupt or unreadable store no longer blocks the server from
+starting — it's backed up alongside the original file and replaced
+with a fresh one automatically.
 
 ## Chart Building
 

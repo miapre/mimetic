@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Mimic AI" width="120">
+  <img src="https://raw.githubusercontent.com/miapre/mimic-ai/main/assets/logo.svg" alt="Mimic AI" width="120">
 </p>
 
 # Mimic AI
@@ -22,7 +22,7 @@ Give Mimic any HTML, a prompt, or a description. It builds production-ready Figm
 ---
 
 <p align="center">
-  <img src="assets/demo.gif" alt="Mimic AI building a full page in Figma using a design system" width="100%">
+  <img src="https://raw.githubusercontent.com/miapre/mimic-ai/main/assets/demo.gif" alt="Mimic AI building a full page in Figma using a design system" width="100%">
 </p>
 
 ---
@@ -50,7 +50,7 @@ The first build scans the design system. By the third, recurring components auto
 
 **Correct it once.** Tell Mimic "That's not the right Badge, use Tag/Neutral." The mapping updates permanently. Every future build uses the correction without you having to repeat yourself.
 
-**Your DS evolves. Mimic keeps up.** New components, renamed tokens, updated variants, all detected at the start of every build. You never have to tell Mimic your DS changed.
+**Your DS evolves. Mimic keeps up.** Component additions, removals, and variant changes are detected at the start of every build by comparing against what was cached last time — no manual re-sync. Deeper variable-level change detection (e.g. a renamed color token) is coming in a future release.
 
 **Every build is a DS review.** After each build, Mimic generates a report: what components it used, what it built from primitives and why, what patterns it learned, and what your DS is missing. Recommendations come as questions, not commands: "Should your DS include a Status Badge? 4 elements across 3 builds were built as primitives."
 
@@ -103,13 +103,27 @@ Mimic works with any Figma library: your team's, a community kit, or a client's 
 
 ## Get started
 
-> [Node.js](https://nodejs.org/) v20.6+, [Figma desktop](https://www.figma.com/downloads/), Professional plan or above.
+> **Requires:** [Node.js](https://nodejs.org/) v20.6+ &middot; the **Figma desktop app** (browser Figma isn't supported — [download](https://www.figma.com/downloads/)) &middot; a **Figma Professional plan or above** (needed to publish and use team libraries).
 
 ### 1. Install
+
+**One-line installer:**
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/miapre/mimic-ai/main/install.sh)
 ```
+
+This clones the repo to `~/mimic-ai`, runs `npm install`, prompts for your Figma personal access token, and offers to register `mimic-ai` in Claude Code's `settings.json` automatically.
+
+**Manual install:**
+
+```bash
+git clone https://github.com/miapre/mimic-ai.git
+cd mimic-ai
+npm install
+```
+
+Then set `FIGMA_TOKEN` in your MCP client's server config (or in `~/.mimic-ai.json` — see "Figma setup details" further down for how to generate the token), and point your client's `mimic-ai` entry at the cloned `mcp.js` (`{ "command": "node", "args": ["/path/to/mimic-ai/mcp.js"] }`).
 
 ### 2. Add the Figma plugin
 
@@ -156,7 +170,7 @@ One call discovers the entire DS (variables, styles, components), preloads every
 
 ## What gets checked automatically
 
-Every build enforces 18 quality rules across 6 sequential phases.
+Every build enforces 19 quality rules across 6 sequential phases.
 
 - Text uses DS text styles, not raw font properties
 - Colors bound to DS variables, not hardcoded
@@ -307,7 +321,7 @@ Intelligence flows down. Binding feedback flows up. The MCP layer validates vari
 
 **Status and learning:** `mimic_status`, `mimic_discover_ds`, `mimic_ai_knowledge_read`, `mimic_ai_knowledge_write`, `mimic_generate_build_report`, `mimic_generate_design_md`
 
-**DS setup:** `figma_preload_styles`, `figma_preload_variables`, `figma_discover_library_styles`, `figma_discover_library_variables`, `figma_discover_library_components`, `figma_set_session_defaults`, `figma_list_text_styles`, `figma_read_variable_values`, `mimic_map_components`
+**DS setup:** `figma_preload_styles`, `figma_preload_fill_styles`, `figma_preload_variables`, `figma_discover_library_styles`, `figma_discover_library_variables`, `figma_discover_library_components`, `figma_set_session_defaults`, `figma_list_text_styles`, `figma_list_fill_styles`, `figma_read_variable_values`, `mimic_map_components`
 
 **Build:** `figma_create_frame`, `figma_create_text`, `figma_create_rectangle`, `figma_create_ellipse`, `figma_create_svg`, `figma_insert_component`, `figma_batch`, `mimic_build_table`, `mimic_build_chart`
 
@@ -367,7 +381,7 @@ Screenshot tools capture pixels, not structure. The result is a flat image you c
 <details>
 <summary><strong>What happens when my design system changes?</strong></summary>
 
-Mimic detects DS changes at the start of every build. New components surface automatically. Renamed tokens re-map. Removed components fall back gracefully with an explanation in the build report.
+Mimic detects component and variant changes at the start of every build by comparing against what was cached from your last session. New components surface automatically. Removed components fall back gracefully with an explanation in the build report. Variable-level changes (e.g. a renamed color token) aren't detected yet — that's coming in a future release.
 
 </details>
 
