@@ -3,31 +3,70 @@
 const COMPILE_THRESHOLD = 3;
 const AUTO_PROMOTE_THRESHOLD = 6;
 
+// Categories actually emitted by DsCache.validateVariables' category-mismatch
+// detection (src/ds/cache.js expectedCategory values), plus the DS-variable
+// naming prefix each one conventionally corresponds to. This replaces the old
+// map, which checked for a category value ('stroke') that validateVariables
+// never actually emits (it emits 'border') — the branch could never fire, so
+// no-good rules for category mismatches always fell back to the generic
+// "check available variables" message instead of naming a concrete fix.
+const CATEGORY_PREFIX_HINT = {
+  border: 'border',
+  background: 'bg',
+  text: 'text',
+  spacing: 'spacing',
+  radius: 'radius',
+};
+
 function sanitizeKey(key) {
   return key.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase();
 }
 
-function generateRule(type, key, buildNumbers) {
+/**
+ * @param {'category_mismatch'|'binding_failure'|'gate_hit'|string} type
+ * @param {string} key
+ * @param {number[]} buildNumbers
+ * @param {{ suggestVariable?: (path: string, category: string|null) => (string[]|string|null) }} [opts]
+ *   `suggestVariable` is injected rather than imported (cache.js belongs to a
+ *   different worker) so the compiler can propose a variable that actually
+ *   exists in the active DS cache (spec §5.4) instead of guessing a prefix
+ *   via string surgery. Optional — when absent, or when it returns no match,
+ *   the rule says so explicitly rather than fabricating a suggestion.
+ */
+function generateRule(type, key, buildNumbers, opts = {}) {
+  const { suggestVariable } = opts;
   const id = `auto-${type}-${sanitizeKey(key)}`;
   const buildList = buildNumbers.sort((a, b) => a - b).join(', ');
 
   switch (type) {
     case 'category_mismatch': {
+      // key shape: "<variable>-><expectedCategory>" (the variable that was
+      // WRONGLY used, and the category the property actually expected).
       const parts = key.split('->');
       const variable = parts[0] || key;
-      const wrongCategory = parts[1] || 'unknown';
-      const suffix = variable.replace(/^[^-]+-/, '');
-      const suggestedPrefix = wrongCategory === 'stroke' ? 'border'
-        : wrongCategory === 'text' ? 'text'
-        : wrongCategory === 'background' ? 'bg'
-        : null;
-      const suggestion = suggestedPrefix ? `${suggestedPrefix}-${suffix}` : null;
+      const expectedCategory = parts[1] || 'unknown';
+      const prefixHint = CATEGORY_PREFIX_HINT[expectedCategory] || null;
+
+      let suggestion = null;
+      if (typeof suggestVariable === 'function') {
+        const stripped = variable.replace(/^[^-/]+-/, '');
+        let results = suggestVariable(stripped, expectedCategory);
+        if ((!results || (Array.isArray(results) && results.length === 0)) && stripped !== variable) {
+          results = suggestVariable(variable, expectedCategory);
+        }
+        suggestion = Array.isArray(results) ? (results[0] || null) : (results || null);
+      }
+
+      const rule = suggestion
+        ? `Never use ${variable} as a ${expectedCategory} variable. Use ${suggestion} instead.`
+        : prefixHint
+          ? `Never use ${variable} as a ${expectedCategory} variable. Use a ${prefixHint}-* variable instead — no existing variable could be automatically matched; check available ${prefixHint}-* variables after discovery.`
+          : `Never use ${variable} as a ${expectedCategory} variable. Check available variables after discovery.`;
+
       return {
         id,
         category: 'variable',
-        rule: suggestion
-          ? `Never use ${variable} as a ${wrongCategory} variable. Use ${suggestion} instead.`
-          : `Never use ${variable} as a ${wrongCategory} variable. Check available variables after discovery.`,
+        rule,
         reason: `Auto-compiled: failed in builds #${buildList}`,
       };
     }
@@ -55,7 +94,13 @@ function generateRule(type, key, buildNumbers) {
   }
 }
 
-function compileNoGoods(signals, existingRules) {
+/**
+ * @param {Array<{type: string, key: string, buildNumber: number}>} signals
+ * @param {Object} existingRules
+ * @param {{ suggestVariable?: Function }} [opts] - see generateRule; optional,
+ *   backward compatible with the existing 2-arg call site in learning.js.
+ */
+function compileNoGoods(signals, existingRules, opts = {}) {
   const groups = new Map();
   for (const s of signals) {
     const groupKey = `${s.type}:${s.key}`;
@@ -88,7 +133,7 @@ function compileNoGoods(signals, existingRules) {
     if (coveredKeys.has(group.key)) continue;
 
     if (distinctBuilds >= COMPILE_THRESHOLD) {
-      const rule = generateRule(group.type, group.key, [...group.buildNumbers]);
+      const rule = generateRule(group.type, group.key, [...group.buildNumbers], opts);
       candidates.push({
         ...rule,
         source: 'auto_compiled',

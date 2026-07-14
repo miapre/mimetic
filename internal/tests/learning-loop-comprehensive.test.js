@@ -1695,8 +1695,9 @@ describe('Tier 5 — Edge cases + guards', () => {
       assert.ok(result._chartColorHint.colorRules.some(r => r.includes('NEVER use Brand')));
     });
 
-    it('Build history capped at 20: push 25 builds, only last 20 remain', async () => {
-      for (let i = 0; i < 25; i++) {
+    it('Build history capped at 50/library: push 55 builds, only last 50 remain', async () => {
+      // Cap raised from 20 (v2) to 50/library per schema v3 spec §3.5.
+      for (let i = 0; i < 55; i++) {
         h.knowledgeStore.recordBuild({
           screenName: `Build ${i}`,
           toolCalls: 10,
@@ -1705,7 +1706,7 @@ describe('Tier 5 — Edge cases + guards', () => {
         });
       }
       const history = h.knowledgeStore.getBuildHistory();
-      assert.equal(history.length, 20, 'Should cap at 20');
+      assert.equal(history.length, 50, 'Should cap at 50');
       assert.ok(history[0].screenName.includes('5'), 'First 5 should be dropped');
     });
 
@@ -1806,7 +1807,14 @@ describe('Tier 5 — Edge cases + guards', () => {
       assert.equal(Object.keys(store2.getGaps()).length, 1);
     });
 
-    it('Reset: new store at same path clears everything', () => {
+    it('a fresh, un-loaded store instance no longer clobbers existing data on save (merge-on-save, spec §3.1)', () => {
+      // Pre-v3 behavior: save() was a blind full-file overwrite, so a brand
+      // new KnowledgeStore instance saving without ever loading would wipe
+      // out anything already on disk — this was defect J (two concurrent
+      // sessions silently destroying each other's learning). v3 save()
+      // re-reads disk and merges at the library-bucket level first, so this
+      // scenario no longer loses data. To genuinely reset the store, delete
+      // the file (or load() first, then explicitly clear what you intend to).
       const { KnowledgeStore } = require('../../src/knowledge/store');
       const storePath = path.join(h.tmpDir, 'reset-store.json');
 
@@ -1815,23 +1823,24 @@ describe('Tier 5 — Edge cases + guards', () => {
       store1.save();
 
       const store2 = new KnowledgeStore(storePath);
-      // Don't load — just save empty state
+      // Don't load — save an otherwise-empty in-memory store.
       store2.save();
       store2.load();
-      assert.equal(Object.keys(store2.data.components).length, 0);
+      assert.equal(Object.keys(store2.data.components).length, 1, 'merge-on-save must preserve ck-1 instead of wiping it');
+      assert.ok(store2.data.components['ck-1']);
     });
 
     it('Schema version mismatch recovers instead of bricking the server', () => {
       // A bad/unsupported-version knowledge file must never throw and prevent
       // the MCP server from starting — it should back up the bad file, reset
-      // to a fresh v2 store, and surface a loud warning instead.
+      // to a fresh v3 store, and surface a loud warning instead.
       const storePath = path.join(h.tmpDir, 'bad-version.json');
       fs.writeFileSync(storePath, JSON.stringify({ version: 999, components: {} }));
 
       const { KnowledgeStore } = require('../../src/knowledge/store');
       const store = new KnowledgeStore(storePath);
       assert.doesNotThrow(() => store.load());
-      assert.equal(store.data.version, 2);
+      assert.equal(store.data.version, 3);
       assert.equal(Object.keys(store.data.components).length, 0);
       assert.ok(store.loadWarning, 'should surface a loadWarning');
       assert.match(store.loadWarning.message, /unsupported schema version/i);
@@ -1858,16 +1867,17 @@ describe('Tier 5 — Edge cases + guards', () => {
       assert.equal(Object.keys(store.data.rules).length, 0);
     });
 
-    it('buildHistory: recordBuild 25 times capped at 20, first 5 dropped', () => {
+    it('buildHistory: recordBuild 55 times capped at 50 per library, first 5 dropped', () => {
+      // Cap raised from 20 (v2) to 50/library per schema v3 spec §3.5.
       const { KnowledgeStore } = require('../../src/knowledge/store');
       const storePath = path.join(h.tmpDir, 'history-cap.json');
       const store = new KnowledgeStore(storePath);
 
-      for (let i = 0; i < 25; i++) {
+      for (let i = 0; i < 55; i++) {
         store.recordBuild({ screenName: `Screen ${i}`, toolCalls: i });
       }
       const history = store.getBuildHistory();
-      assert.equal(history.length, 20);
+      assert.equal(history.length, 50);
       assert.ok(history[0].screenName === 'Screen 5', 'First 5 should be dropped');
     });
 

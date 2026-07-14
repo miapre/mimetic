@@ -57,4 +57,47 @@ describe('PatternMatcher', () => {
     const promoted = matcher.maybePromote(pattern);
     assert.equal(promoted.confidence, 'verified');
   });
+
+  // ── Pattern demotion (spec §4.6 / §5.4 item 8) ──────────────────────
+  describe('demote', () => {
+    it('demotes verified to confirmed and re-captures layoutConfig from the corrected build', () => {
+      const matcher = new PatternMatcher();
+      const pattern = { confidence: 'verified', buildCount: 10, layoutConfig: { gap: 8, padding: 16 } };
+      const corrected = { gap: 16, padding: 24 };
+      const demoted = matcher.demote(pattern, corrected, 12);
+
+      assert.equal(demoted.confidence, 'confirmed');
+      assert.deepEqual(demoted.layoutConfig, corrected);
+    });
+
+    it('keeps the previous layoutConfig in layoutConfigHistory, capped at 3', () => {
+      const matcher = new PatternMatcher();
+      let pattern = { confidence: 'verified', layoutConfig: { gap: 1 } };
+      pattern = matcher.demote(pattern, { gap: 2 }, 1);
+      pattern = matcher.demote(pattern, { gap: 3 }, 2);
+      pattern = matcher.demote(pattern, { gap: 4 }, 3);
+      pattern = matcher.demote(pattern, { gap: 5 }, 4);
+
+      assert.equal(pattern.layoutConfig.gap, 5);
+      assert.equal(pattern.layoutConfigHistory.length, 3, 'capped at 3 per spec §3.3/§3.5');
+      // Oldest entry (gap: 1, from build null since it predates any demotion) should have been evicted.
+      const gaps = pattern.layoutConfigHistory.map(h => h.config.gap);
+      assert.deepEqual(gaps, [2, 3, 4]);
+    });
+
+    it('does not mutate the original pattern object', () => {
+      const matcher = new PatternMatcher();
+      const pattern = { confidence: 'verified', layoutConfig: { gap: 1 } };
+      matcher.demote(pattern, { gap: 2 }, 1);
+      assert.equal(pattern.confidence, 'verified', 'original object must be untouched');
+      assert.equal(pattern.layoutConfig.gap, 1);
+    });
+
+    it('a confirmed (never-verified) pattern stays confirmed after demotion', () => {
+      const matcher = new PatternMatcher();
+      const pattern = { confidence: 'confirmed', layoutConfig: { gap: 1 } };
+      const demoted = matcher.demote(pattern, { gap: 2 }, 1);
+      assert.equal(demoted.confidence, 'confirmed');
+    });
+  });
 });

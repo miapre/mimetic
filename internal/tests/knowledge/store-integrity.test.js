@@ -10,7 +10,7 @@
  *   auto-compiled rules must never be injected into build tool responses.
  * - save(): atomic write (temp file + rename), no partial/corrupt writes.
  * - load(): corrupt JSON / unsupported schema version recovers instead of
- *   throwing — backs up the bad file, resets to a fresh v2 store, and
+ *   throwing — backs up the bad file, resets to a fresh v3 store, and
  *   surfaces a loud loadWarning instead of bricking the MCP server.
  */
 
@@ -171,7 +171,9 @@ describe('KnowledgeStore — atomic save', () => {
 
     const raw = fs.readFileSync(tmpPath, 'utf-8');
     const parsed = JSON.parse(raw); // must not throw — file is complete, valid JSON
-    assert.equal(parsed.components['button-primary'].componentKey, 'k1');
+    // v3 shape: recipes live under libraries.<activeLibraryId>.components,
+    // not at the top level (see schema-v3-spec.md §3.3).
+    assert.equal(parsed.libraries.__default__.components['button-primary'].componentKey, 'k1');
 
     const dirEntries = fs.readdirSync(tmpDir);
     const tempLeftovers = dirEntries.filter(f => f.includes('.tmp-'));
@@ -184,7 +186,7 @@ describe('KnowledgeStore — atomic save', () => {
       store.setComponent(`comp-${i}`, { componentKey: `k${i}`, buildCount: i, confidence: 'new' });
       store.save();
       const parsed = JSON.parse(fs.readFileSync(tmpPath, 'utf-8'));
-      assert.equal(Object.keys(parsed.components).length, i + 1);
+      assert.equal(Object.keys(parsed.libraries.__default__.components).length, i + 1);
     }
   });
 });
@@ -200,12 +202,12 @@ describe('KnowledgeStore — corrupt file recovery', () => {
 
   afterEach(() => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {} });
 
-  it('invalid JSON: backs up the bad file, resets to a fresh v2 store, surfaces a loadWarning', () => {
+  it('invalid JSON: backs up the bad file, resets to a fresh v3 store, surfaces a loadWarning', () => {
     fs.writeFileSync(tmpPath, '{ this is not valid json !!!', 'utf-8');
     const store = new KnowledgeStore(tmpPath);
 
     assert.doesNotThrow(() => store.load());
-    assert.equal(store.data.version, 2);
+    assert.equal(store.data.version, 3);
     assert.deepEqual(store.data.components, {});
     assert.ok(store.loadWarning, 'loadWarning should be set');
     assert.equal(store.loadWarning.code, 'KNOWLEDGE_STORE_CORRUPT');
@@ -217,13 +219,13 @@ describe('KnowledgeStore — corrupt file recovery', () => {
     assert.equal(backupContent, '{ this is not valid json !!!');
   });
 
-  it('unsupported schema version: backs up the bad file, resets to a fresh v2 store, surfaces a loadWarning', () => {
+  it('unsupported schema version: backs up the bad file, resets to a fresh v3 store, surfaces a loadWarning', () => {
     const badData = { version: 999, components: { keep: 'me' } };
     fs.writeFileSync(tmpPath, JSON.stringify(badData), 'utf-8');
     const store = new KnowledgeStore(tmpPath);
 
     assert.doesNotThrow(() => store.load());
-    assert.equal(store.data.version, 2);
+    assert.equal(store.data.version, 3);
     assert.deepEqual(store.data.components, {});
     assert.ok(store.loadWarning);
     assert.match(store.loadWarning.message, /unsupported schema version/i);
@@ -253,7 +255,7 @@ describe('KnowledgeStore — corrupt file recovery', () => {
   it('a missing file (ENOENT) still creates a fresh store with no warning (not a corruption case)', () => {
     const store = new KnowledgeStore(tmpPath); // never written
     assert.doesNotThrow(() => store.load());
-    assert.equal(store.data.version, 2);
+    assert.equal(store.data.version, 3);
     assert.equal(store.loadWarning, null);
   });
 });

@@ -62,6 +62,32 @@ class PatternMatcher {
       lastUsed: new Date().toISOString(),
     };
   }
+
+  /**
+   * Demote a layout pattern in reaction to a user correction (spec §4.6):
+   * a correction is detected when the same build later explicitly re-sets a
+   * replayed property on >=2 instances of the prefix. verified demotes to
+   * confirmed. The pattern re-captures `layoutConfig` from the corrected
+   * build, keeping the previous config in `layoutConfigHistory` (cap 3) so
+   * the reconciliation can be inspected/reverted.
+   *
+   * @param {object} pattern - The existing stored pattern
+   * @param {object} correctedConfig - The layout config observed in the
+   *   build that corrected the replayed value (becomes the new layoutConfig)
+   * @param {number} [buildNumber] - Build number the correction happened in
+   */
+  demote(pattern, correctedConfig, buildNumber) {
+    const result = { ...pattern };
+    const history = Array.isArray(result.layoutConfigHistory) ? [...result.layoutConfigHistory] : [];
+    if (result.layoutConfig) {
+      history.push({ config: result.layoutConfig, buildNumber: buildNumber ?? null });
+    }
+    result.layoutConfigHistory = history.slice(-3);
+    if (correctedConfig) result.layoutConfig = correctedConfig;
+    if (result.confidence === 'verified') result.confidence = 'confirmed';
+    result.demotedAt = new Date().toISOString();
+    return result;
+  }
 }
 
 module.exports = { PatternMatcher, CONFIRMED_THRESHOLD, VERIFIED_THRESHOLD };
