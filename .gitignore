@@ -7,3 +7,6 @@ docs/superpowers/
 research/
 *.log
 .DS_Store
+
+# MCP Registry publisher credentials — never commit
+.mcpregistry_*
