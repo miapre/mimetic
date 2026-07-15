@@ -1,6 +1,6 @@
 {
   "name": "@miapre/mimic-ai",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Mimic AI: MCP server that builds production-ready Figma using your design system",
   "main": "mcp.js",
   "bin": {
@@ -42,5 +42,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ws": "^8.0.0"
-  }
+  },
+  "mcpName": "io.github.miapre/mimic-ai"
 }

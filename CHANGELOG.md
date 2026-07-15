@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.0.1 (2026-07-15)
+
+- Added the `mcpName` field required by the official MCP Registry;
+  shortened the registry description to its 100-character limit.
+  No code changes.
+
+---
+
 ## 3.0.0 (2026-07-14)
 
 **BREAKING — tool-surface consolidation: 58 registered tools → 26.**
